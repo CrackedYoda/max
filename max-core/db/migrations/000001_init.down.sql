@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS max_id_destinations;
+DROP TABLE IF EXISTS reserved_names;
+DROP TABLE IF EXISTS max_id_ownership_events;
+DROP TABLE IF EXISTS max_id_history;
+DROP TABLE IF EXISTS max_ids;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS wallet_challenges;
+DROP TABLE IF EXISTS wallets;
+DROP TABLE IF EXISTS accounts;

@@ -1,0 +1,16 @@
+# Secrets and local config (each part's .env.example is committed instead)
+.env
+.env.*
+!.env.example
+*.local.json
+
+# Dependencies and build output
+node_modules/
+dist/
+build-test/
+.next/
+/max-core/bin/
+*.tsbuildinfo
+coverage.out
+
+.DS_Store

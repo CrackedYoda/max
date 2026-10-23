@@ -1,0 +1,102 @@
+package maxids
+
+import (
+	"time"
+
+	"github.com/max/max-core/internal/chains"
+)
+
+type claimRequest struct {
+	Name        string `json:"name" binding:"required,max=64"`
+	Type        string `json:"type" binding:"omitempty,oneof=human agent"`
+	DisplayName string `json:"displayName" binding:"max=64"`
+}
+
+type profileRequest struct {
+	DisplayName string `json:"displayName" binding:"max=64"`
+	Description string `json:"description" binding:"max=280"`
+	AvatarURL   string `json:"avatarUrl" binding:"max=512"`
+}
+
+type destinationRequest struct {
+	WalletID string `json:"walletId" binding:"required,uuid"`
+}
+
+type settlementRequest struct {
+	Chain   string `json:"chain" binding:"required,max=32"`
+	Asset   string `json:"asset" binding:"max=128"`
+	Enabled *bool  `json:"enabled"`
+}
+
+type settlementResponse struct {
+	Chain     string    `json:"chain"`
+	Asset     string    `json:"asset"`
+	Enabled   bool      `json:"enabled"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type availabilityResponse struct {
+	Name        string `json:"name"`
+	Handle      string `json:"handle"`
+	Available   bool   `json:"available"`
+	Reason      string `json:"reason,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	ClaimPolicy string `json:"claimPolicy,omitempty"`
+	XHandle     string `json:"xHandle,omitempty"`
+}
+
+type destinationResponse struct {
+	Namespace string    `json:"namespace"`
+	WalletID  string    `json:"walletId"`
+	Address   string    `json:"address"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type maxIDResponse struct {
+	ID                string                `json:"id"`
+	Name              string                `json:"name"`
+	Handle            string                `json:"handle"`
+	Type              string                `json:"type"`
+	Status            string                `json:"status"`
+	DisplayName       string                `json:"displayName"`
+	Description       string                `json:"description"`
+	AvatarURL         string                `json:"avatarUrl"`
+	ResolutionVersion int64                 `json:"resolutionVersion"`
+	RenameAvailableAt time.Time             `json:"renameAvailableAt"`
+	CreatedAt         time.Time             `json:"createdAt"`
+	Destinations      []destinationResponse `json:"destinations"`
+	Settlement        *settlementResponse   `json:"settlement"`
+}
+
+func toAvailabilityResponse(a Availability) availabilityResponse {
+	return availabilityResponse{
+		Name: a.CanonicalName, Handle: a.Handle, Available: a.Available,
+		Reason: a.Reason, Detail: a.Detail, ClaimPolicy: string(a.ClaimPolicy), XHandle: a.XHandle,
+	}
+}
+
+func toMaxIDResponse(m MaxID) maxIDResponse {
+	dests := make([]destinationResponse, 0, len(m.Destinations))
+	for _, d := range m.Destinations {
+		dests = append(dests, destinationResponse{
+			Namespace: string(d.Namespace), WalletID: d.WalletID.String(),
+			Address: chains.DisplayAddress(d.Namespace, d.Address), UpdatedAt: d.UpdatedAt,
+		})
+	}
+	var settlement *settlementResponse
+	if st := m.Settlement; st != nil {
+		asset := "native"
+		if st.Asset != "" {
+			c, _ := chains.Lookup(st.Chain)
+			asset = chains.DisplayAddress(c.Namespace, st.Asset)
+		}
+		settlement = &settlementResponse{Chain: st.Chain, Asset: asset, Enabled: st.Enabled, UpdatedAt: st.UpdatedAt}
+	}
+	return maxIDResponse{
+		Settlement: settlement,
+		ID:         m.ID.String(), Name: m.CanonicalName, Handle: m.Handle(), Type: string(m.Type),
+		Status: m.Status, DisplayName: m.DisplayName, Description: m.Description,
+		AvatarURL: m.AvatarURL, ResolutionVersion: m.ResolutionVersion,
+		RenameAvailableAt: m.RenameAvailableAt, CreatedAt: m.CreatedAt, Destinations: dests,
+	}
+}
