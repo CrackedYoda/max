@@ -49,7 +49,9 @@ type Repository interface {
 }
 
 type Service interface {
-	StartX(ctx context.Context, account uuid.UUID, session uuid.UUID) (authorizeURL string, expires time.Time, err error)
+	// StartX begins X OAuth. native flows hand the callback back to the app
+	// (NativeResultRedirect), which completes them with its own session.
+	StartX(ctx context.Context, account uuid.UUID, session uuid.UUID, native bool) (authorizeURL string, expires time.Time, err error)
 	CompleteX(ctx context.Context, account, session *uuid.UUID, state, code, oauthError string) (Verification, []Claim, error)
 	ListVerifications(ctx context.Context, account uuid.UUID) ([]Verification, error)
 	RevokeMine(ctx context.Context, account, id uuid.UUID) error
@@ -65,4 +67,5 @@ type Service interface {
 
 	Sweep(ctx context.Context) (int, error)
 	ResultRedirect() string
+	NativeResultRedirect() string
 }

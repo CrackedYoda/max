@@ -11,6 +11,17 @@ type claimRequest struct {
 	DisplayName string `json:"displayName" binding:"max=64"`
 }
 
+type startXRequest struct {
+	// Client is "native" for the mobile app; anything else is the web flow.
+	Client string `json:"client" binding:"omitempty,oneof=web native"`
+}
+
+type completeXRequest struct {
+	State string `json:"state" binding:"required,max=256"`
+	Code  string `json:"code" binding:"max=1024"`
+	Error string `json:"error" binding:"max=128"`
+}
+
 type noteRequest struct {
 	Note string `json:"note" binding:"max=280"`
 }

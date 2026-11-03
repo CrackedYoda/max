@@ -130,7 +130,7 @@ func TestCompleteX(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, repo, x := newTest()
-			u, _, err := svc.StartX(ctx, acct, sess)
+			u, _, err := svc.StartX(ctx, acct, sess, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +154,7 @@ func TestCompleteX(t *testing.T) {
 
 func TestStartX_RequiresSession(t *testing.T) {
 	svc, _, _ := newTest()
-	if _, _, err := svc.StartX(context.Background(), uuid.New(), uuid.Nil); !errors.Is(err, ErrSessionRequired) {
+	if _, _, err := svc.StartX(context.Background(), uuid.New(), uuid.Nil, false); !errors.Is(err, ErrSessionRequired) {
 		t.Fatalf("err = %v", err)
 	}
 }

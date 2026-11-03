@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/* MAX design tokens, from the "MAX Web Frontend" canvas. Components use these
+   names only; no hex values outside this file and src/theme. */
+:root {
+  --ivory: #faf9f5;
+  --surface: #ffffff;
+  --sunken: #f0eee6;
+  --ink: #141413;
+  --body: #4a4943;
+  --muted: #6b6a63;
+  --placeholder: #8a897f;
+  --line: #e8e6dc;
+  --line-strong: #c9c6b9;
+  --clay: #b95a37;
+  --clay-hover: #a9502f;
+  --accent: #d97757;
+  --clay-text: #9a4728;
+  --clay-text-hover: #7e3a20;
+  --clay-soft: #f5e6df;
+  --success: #23614a;
+  --success-strong: #2f7d5b;
+  --success-soft: #e3f0e9;
+  --danger: #b33a3a;
+  --danger-text: #8a2a2a;
+  --danger-soft: #f6e3e3;
+  --night: #141413;
+  --night-text: #f5f4ee;
+}
+
+@theme inline {
+  --color-ivory: var(--ivory);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-placeholder: var(--placeholder);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-clay: var(--clay);
+  --color-clay-hover: var(--clay-hover);
+  --color-accent: var(--accent);
+  --color-clay-text: var(--clay-text);
+  --color-clay-soft: var(--clay-soft);
+  --color-success: var(--success);
+  --color-success-strong: var(--success-strong);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-text: var(--danger-text);
+  --color-danger-soft: var(--danger-soft);
+  --color-night: var(--night);
+  --color-night-text: var(--night-text);
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --shadow-card: 0 8px 24px rgba(20, 20, 19, 0.04);
+  --shadow-pop: 0 8px 24px rgba(20, 20, 19, 0.08);
+}
+
+html, body { background: var(--ivory); color: var(--ink); }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--clay-text); }
+a:hover { color: var(--clay-text-hover); }
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Inputs inside a bordered field show focus on the field, not the bare input. */
+.field input:focus-visible, .field textarea:focus-visible { outline: none; }
+.field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+::placeholder { color: var(--placeholder); }
+.tabular { font-variant-numeric: tabular-nums; }

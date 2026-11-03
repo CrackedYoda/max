@@ -23,7 +23,14 @@ func NewHandler(svc Service) *Handler {
 
 func (h *Handler) StartX(c *gin.Context) {
 	p := shared.MustPrincipal(c)
-	u, exp, err := h.svc.StartX(c.Request.Context(), p.AccountID, p.SessionID)
+	var req startXRequest
+	if c.Request.ContentLength != 0 {
+		if err := shared.BindJSON(c, &req); err != nil {
+			shared.Fail(c, err)
+			return
+		}
+	}
+	u, exp, err := h.svc.StartX(c.Request.Context(), p.AccountID, p.SessionID, req.Client == "native")
 	if err != nil {
 		shared.Fail(c, err)
 		return
@@ -36,6 +43,22 @@ func (h *Handler) StartX(c *gin.Context) {
 // the configured frontend URL (never one taken from the request), carrying
 // only a status and a machine-readable code.
 func (h *Handler) CallbackX(c *gin.Context) {
+	// The app's auth session can't carry its Bearer token, so a mobile flow is
+	// handed back to the app untouched; the app finishes it with CompleteX.
+	// Forwarding the code is safe: completing still needs the starting session.
+	if state := c.Query("state"); IsNativeState(state) && h.svc.NativeResultRedirect() != "" {
+		q := url.Values{}
+		q.Set("state", state)
+		if v := c.Query("code"); v != "" {
+			q.Set("code", v)
+		}
+		if v := c.Query("error"); v != "" {
+			q.Set("error", v)
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Redirect(http.StatusFound, h.svc.NativeResultRedirect()+"?"+q.Encode())
+		return
+	}
 	var account, session *uuid.UUID
 	if p, ok := shared.GetPrincipal(c); ok && !p.IsAgentCredential() {
 		account, session = &p.AccountID, &p.SessionID
@@ -68,6 +91,28 @@ func (h *Handler) CallbackX(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	c.Redirect(http.StatusFound, target+"?"+q.Encode())
+}
+
+// CompleteX finishes a mobile flow with the app's own session, which must be
+// the one that started it.
+func (h *Handler) CompleteX(c *gin.Context) {
+	var req completeXRequest
+	if err := shared.BindJSON(c, &req); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	if !IsNativeState(req.State) {
+		shared.Fail(c, ErrOAuthStateInvalid)
+		return
+	}
+	p := shared.MustPrincipal(c)
+	v, renewed, err := h.svc.CompleteX(c.Request.Context(), &p.AccountID, &p.SessionID, req.State, req.Code, req.Error)
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, gin.H{"verification": toVerificationResponse(v), "renewedClaims": len(renewed)})
 }
 
 func (h *Handler) ListVerifications(c *gin.Context) {

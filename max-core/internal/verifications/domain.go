@@ -71,14 +71,18 @@ type Config struct {
 	ReverifyGrace    time.Duration
 	// ResultRedirect is the fixed frontend URL the OAuth callback redirects to.
 	ResultRedirect string
+	// NativeResultRedirect is the app deep link a mobile flow's callback
+	// forwards state and code to; the app then calls POST /x/complete.
+	NativeResultRedirect string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		StateTTL:         10 * time.Minute,
-		ClaimFreshness:   15 * time.Minute,
-		ReverifyInterval: 180 * 24 * time.Hour,
-		ReverifyGrace:    14 * 24 * time.Hour,
+		StateTTL:             10 * time.Minute,
+		NativeResultRedirect: "max://verify/x",
+		ClaimFreshness:       15 * time.Minute,
+		ReverifyInterval:     180 * 24 * time.Hour,
+		ReverifyGrace:        14 * 24 * time.Hour,
 	}
 }
 

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "max-api",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/yoda/Desktop/max/max-core && go run ./cmd/api"],
+      "port": 8080
+    },
+    {
+      "name": "max-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/yoda/Desktop/max/max-frontend && npm run dev -- --port 3000"],
+      "port": 3000
+    }
+  ]
+}

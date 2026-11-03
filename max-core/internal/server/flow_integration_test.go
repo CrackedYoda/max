@@ -1351,3 +1351,64 @@ func TestFlow_NativeSessionTokenDelivery(t *testing.T) {
 		t.Fatalf("bearer session: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The mobile app's auth session has no MAX cookie or token, so a native flow's
+// callback hands state and code back to the app, which completes it itself.
+func TestFlow_NativeXVerification(t *testing.T) {
+	env := newTestEnv(t)
+	h := env.handler
+	alice := &client{t: t, h: h}
+	alice.prove(newSol(), "login")
+	mallory := &client{t: t, h: h}
+	mallory.prove(newSol(), "login")
+
+	start := func(c *client) string {
+		t.Helper()
+		_, body := c.do("POST", "/v1/verifications/x/start", map[string]any{"client": "native"})
+		u, err := url.Parse(data(t, body)["authorizeUrl"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.Query().Get("state")
+	}
+	callback := func(state, code string) url.Values {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/v1/verifications/x/callback?state="+url.QueryEscape(state)+"&code="+code, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		loc, _ := url.Parse(rec.Header().Get("Location"))
+		if rec.Code != http.StatusFound || loc.Scheme != "max" || loc.Host != "verify" || loc.Path != "/x" {
+			t.Fatalf("native callback: %d %s", rec.Code, loc)
+		}
+		return loc.Query()
+	}
+
+	// The callback only forwards: nothing is verified until the app completes.
+	state := start(alice)
+	q := callback(state, "code-solana")
+	if q.Get("state") != state || q.Get("code") != "code-solana" {
+		t.Fatalf("forwarded params: %v", q)
+	}
+	// Another session that intercepts the deep link can't finish it.
+	if _, body := mallory.do("POST", "/v1/verifications/x/complete", map[string]any{"state": state, "code": "code-solana"}); errCode(body) != "OAUTH_SESSION_MISMATCH" {
+		t.Fatalf("intercepted completion: %v", body)
+	}
+
+	// The mismatch consumed the state; Alice starts over and completes it.
+	state = start(alice)
+	callback(state, "code-solana")
+	code, body := alice.do("POST", "/v1/verifications/x/complete", map[string]any{"state": state, "code": "code-solana"})
+	if code != http.StatusOK || data(t, body)["verification"].(map[string]any)["username"] != "Solana" {
+		t.Fatalf("complete: %d %v", code, body)
+	}
+	if _, body = alice.do("POST", "/v1/verifications/x/complete", map[string]any{"state": state, "code": "code-solana"}); errCode(body) != "OAUTH_STATE_INVALID" {
+		t.Fatalf("replayed completion: %v", body)
+	}
+
+	// Web flows can't be completed through the native endpoint.
+	_, body = alice.do("POST", "/v1/verifications/x/start", nil)
+	u, _ := url.Parse(data(t, body)["authorizeUrl"].(string))
+	if _, body = alice.do("POST", "/v1/verifications/x/complete", map[string]any{"state": u.Query().Get("state"), "code": "code-solana"}); errCode(body) != "OAUTH_STATE_INVALID" {
+		t.Fatalf("web state on native endpoint: %v", body)
+	}
+}

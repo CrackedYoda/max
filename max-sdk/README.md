@@ -116,6 +116,7 @@ Administrators handle held proposals with `max.agents.transfers(agentId, { decis
 - **Renames:** `max.renames.eligibility(id)`, `request(id, {...})`, `waitFor(id, requestId)`. Paid, with a 72h cooldown.
 - **Reserved names:**
   - `max.verifications.startX()`: redirect the full page to `authorizeUrl`; never use a popup.
+  - Native apps: `max.verifications.startX({ client: "native" })`, open `authorizeUrl` in an auth session, then pass the deep link's `state`/`code`/`error` to `max.verifications.completeX(...)`.
   - `max.reservedClaims.claim({ name })`: claim once verified.
 - **Recipient settings:** `max.ids.setDestination`, `setSettlement` (cross-chain preference) and `updateProfile`.
 - **Platform admin:** `max.admin.reservedClaims()`, `approveClaim`, `revokeClaim`.

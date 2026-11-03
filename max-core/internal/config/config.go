@@ -34,10 +34,12 @@ type XConfig struct {
 	// RedirectURI is MAX's callback (…/v1/verifications/x/callback), registered with X.
 	RedirectURI string
 	// ResultRedirect is the frontend page the callback sends the browser to.
-	ResultRedirect   string
-	ClaimFreshness   time.Duration
-	ReverifyInterval time.Duration
-	ReverifyGrace    time.Duration
+	ResultRedirect string
+	// NativeResultRedirect is the mobile app's deep link for X verification.
+	NativeResultRedirect string
+	ClaimFreshness       time.Duration
+	ReverifyInterval     time.Duration
+	ReverifyGrace        time.Duration
 }
 
 // RenamesConfig holds administrator-configured rename pricing. Values are
@@ -185,13 +187,14 @@ func Load() (Config, error) {
 	}
 
 	cfg.X = XConfig{
-		ClientID:         get("X_CLIENT_ID", ""),
-		ClientSecret:     get("X_CLIENT_SECRET", ""),
-		RedirectURI:      get("X_REDIRECT_URI", ""),
-		ResultRedirect:   get("X_RESULT_REDIRECT", ""),
-		ClaimFreshness:   duration("X_CLAIM_FRESHNESS", "15m"),
-		ReverifyInterval: duration("X_REVERIFY_INTERVAL", "4320h"),
-		ReverifyGrace:    duration("X_REVERIFY_GRACE", "336h"),
+		ClientID:             get("X_CLIENT_ID", ""),
+		ClientSecret:         get("X_CLIENT_SECRET", ""),
+		RedirectURI:          get("X_REDIRECT_URI", ""),
+		ResultRedirect:       get("X_RESULT_REDIRECT", ""),
+		NativeResultRedirect: get("X_NATIVE_RESULT_REDIRECT", "max://verify/x"),
+		ClaimFreshness:       duration("X_CLAIM_FRESHNESS", "15m"),
+		ReverifyInterval:     duration("X_REVERIFY_INTERVAL", "4320h"),
+		ReverifyGrace:        duration("X_REVERIFY_GRACE", "336h"),
 	}
 	if cfg.X.ClientID != "" && (cfg.X.RedirectURI == "" || cfg.X.ResultRedirect == "") {
 		errs = append(errs, errors.New("X_REDIRECT_URI and X_RESULT_REDIRECT are required when X_CLIENT_ID is set"))

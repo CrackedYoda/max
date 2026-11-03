@@ -31,7 +31,16 @@ func NewService(repo Repository, x XClient, cfg Config, log *zap.Logger) Service
 
 func (s *service) ResultRedirect() string { return s.cfg.ResultRedirect }
 
-func (s *service) StartX(ctx context.Context, account, session uuid.UUID) (string, time.Time, error) {
+func (s *service) NativeResultRedirect() string { return s.cfg.NativeResultRedirect }
+
+// nativeStatePrefix marks a flow started by the mobile app. The prefix is part
+// of the (hashed) state, so it can't be added to or stripped from a web flow.
+const nativeStatePrefix = "n."
+
+// IsNativeState reports whether the OAuth state belongs to a mobile-app flow.
+func IsNativeState(state string) bool { return strings.HasPrefix(state, nativeStatePrefix) }
+
+func (s *service) StartX(ctx context.Context, account, session uuid.UUID, native bool) (string, time.Time, error) {
 	if !s.x.Enabled() {
 		return "", time.Time{}, ErrXDisabled
 	}
@@ -43,6 +52,12 @@ func (s *service) StartX(ctx context.Context, account, session uuid.UUID) (strin
 		return "", time.Time{}, shared.ErrInternal.WithError(err)
 	}
 	state := base64.RawURLEncoding.EncodeToString(raw)
+	if native {
+		if s.cfg.NativeResultRedirect == "" {
+			return "", time.Time{}, ErrXDisabled
+		}
+		state = nativeStatePrefix + state
+	}
 	verifier, challenge, err := newPKCE()
 	if err != nil {
 		return "", time.Time{}, shared.ErrInternal.WithError(err)

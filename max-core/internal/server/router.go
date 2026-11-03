@@ -147,6 +147,7 @@ func NewRouter(d Deps) *gin.Engine {
 	// X verification and reserved-name claims (signed-in humans).
 	v1.POST("/verifications/x/start", authLimit, required, sessionOnly, d.Verifications.StartX)
 	v1.GET("/verifications/x/callback", authLimit, optional, d.Verifications.CallbackX)
+	v1.POST("/verifications/x/complete", authLimit, required, sessionOnly, d.Verifications.CompleteX)
 	admin.GET("/verifications", d.Verifications.ListVerifications)
 	admin.DELETE("/verifications/:id", d.Verifications.RevokeVerification)
 	admin.POST("/reserved-claims", d.Verifications.Claim)

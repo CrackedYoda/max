@@ -225,6 +225,8 @@ OAuth proves control of the X account **at verification time only**; it is not a
 
 1. `POST /v1/verifications/x/start` (signed-in session) → `{authorizeUrl}`. Send the browser there.
 2. X redirects to `GET /v1/verifications/x/callback`. The callback then redirects to `X_RESULT_REDIRECT?x=verified&username=…&renewed=N`, or to `?x=error&code=…`.
+
+Native apps can't send their Bearer token from the OAuth browser sheet, so they use a two-step variant. Start with `POST /v1/verifications/x/start {"client":"native"}`. The callback then completes nothing: it forwards `state`, `code` and `error` to `X_NATIVE_RESULT_REDIRECT` (default `max://verify/x`). The app finishes with `POST /v1/verifications/x/complete {"state","code","error"}` from the session that started the flow. That call returns `{verification, renewedClaims}`. Native states carry an `n.` prefix, which is covered by the stored hash. Web flows can't be completed through `/complete`, and native flows never complete on the callback.
 3. `POST /v1/reserved-claims` `{name, displayName?}` → `201 {status:"active"}`, or `202 {status:"pending_review"}` for `manual_review`.
 
 | Method | Path | Notes |
@@ -244,7 +246,7 @@ OAuth proves control of the X account **at verification time only**; it is not a
   - An X account backs at most one MAX account at a time (`X_ACCOUNT_LINKED_ELSEWHERE`).
 - **Re-verification:** a claim is valid for `X_REVERIFY_INTERVAL` (180 days). After a further `X_REVERIFY_GRACE` (14 days), the claim lapses and the ID is locked: it stops resolving and can't be configured. Verifying again with the same X user id renews every claim it backs and unlocks them.
 
-Set `X_CLIENT_ID`, `X_CLIENT_SECRET`, `X_REDIRECT_URI` (register it on your X app) and `X_RESULT_REDIRECT`.
+Set `X_CLIENT_ID`, `X_CLIENT_SECRET`, `X_REDIRECT_URI` (register it on your X app) and `X_RESULT_REDIRECT`. Set `X_NATIVE_RESULT_REDIRECT` to change the app's deep link.
 
 ### Error codes worth handling in UI
 

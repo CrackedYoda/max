@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "MAX",
+    "slug": "max-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "xyz.max.wallet",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FAF9F5",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "xyz.max.wallet",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Allow MAX to use Face ID to unlock your wallet."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow MAX to use Face ID to unlock your wallet and approve payments."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow MAX to scan payment QR codes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FAF9F5",
+          "image": "./assets/icon.png",
+          "imageWidth": 96
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "scheme": "max",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

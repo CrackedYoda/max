@@ -112,6 +112,7 @@ func run() error {
 	}
 	vcfg := verifications.DefaultConfig()
 	vcfg.ResultRedirect, vcfg.ClaimFreshness = cfg.X.ResultRedirect, cfg.X.ClaimFreshness
+	vcfg.NativeResultRedirect = cfg.X.NativeResultRedirect
 	vcfg.ReverifyInterval, vcfg.ReverifyGrace = cfg.X.ReverifyInterval, cfg.X.ReverifyGrace
 	verifySvc := verifications.NewService(verifications.NewRepository(pool), xc, vcfg, log.Named("verifications"))
 	go verifications.RunWorker(ctx, verifySvc, log.Named("verifications"))

@@ -251,9 +251,16 @@ class VerificationsApi {
   /**
    * Start X verification. Send the browser to `authorizeUrl` with a full-page
    * redirect in the same session; MAX's callback redirects back to your app.
+   *
+   * Native apps pass `{ client: "native" }`: the callback then hands `state`
+   * and `code` to the app's deep link, and the app finishes with `completeX`.
    */
-  startX(): Promise<{ authorizeUrl: string; expiresAt: string }> {
-    return this.http.post("/v1/verifications/x/start");
+  startX(opts: { client?: "web" | "native" } = {}): Promise<{ authorizeUrl: string; expiresAt: string }> {
+    return this.http.post("/v1/verifications/x/start", opts.client ? { body: { client: opts.client } } : undefined);
+  }
+  /** Finish a native X flow with the query from the deep link (same session that started it). */
+  completeX(input: { state: string; code?: string; error?: string }): Promise<{ verification: XVerification; renewedClaims: number }> {
+    return this.http.post("/v1/verifications/x/complete", { body: input });
   }
   list(): Promise<XVerification[]> {
     return this.http.get("/v1/verifications");
