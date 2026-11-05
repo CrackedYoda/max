@@ -21,15 +21,18 @@ const (
 	seller   = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"
 	treasury = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 	rent     = 2039280
+	zeroRent = 890880
 )
 
 type fakeRPC struct {
-	tx       *solanarpc.Transaction
-	status   string
-	existing map[string]bool
-	asset    uint64
-	native   uint64
-	rent     uint64
+	tx         *solanarpc.Transaction
+	status     string
+	existing   map[string]bool
+	asset      uint64
+	noBuyerATA bool // buyer's ATA does not exist
+	buyerATA   string
+	native     uint64
+	rent       uint64
 }
 
 func (f *fakeRPC) Transaction(context.Context, string) (*solanarpc.Transaction, error) {
@@ -37,6 +40,14 @@ func (f *fakeRPC) Transaction(context.Context, string) (*solanarpc.Transaction, 
 }
 func (f *fakeRPC) ConfirmationStatus(context.Context, string) (string, error) { return f.status, nil }
 func (f *fakeRPC) AccountInfo(_ context.Context, a string) (*solanarpc.AccountInfo, error) {
+	if a == f.buyerATA && !f.noBuyerATA {
+		var ai solanarpc.AccountInfo
+		raw := fmt.Sprintf(`{"type":"account","info":{"tokenAmount":{"amount":"%d"}}}`, f.asset)
+		if err := json.Unmarshal([]byte(`{"data":{"parsed":`+raw+`}}`), &ai); err != nil {
+			panic(err)
+		}
+		return &ai, nil
+	}
 	if f.existing[a] {
 		return &solanarpc.AccountInfo{}, nil
 	}
@@ -47,10 +58,13 @@ func (f *fakeRPC) TokenAccountsByOwner(context.Context, string, string) (uint64,
 	return f.asset, nil
 }
 func (f *fakeRPC) MinimumBalanceForRentExemption(_ context.Context, size int) (uint64, error) {
-	if size != 165 {
-		return 0, fmt.Errorf("unexpected size %d", size)
+	switch size {
+	case 165:
+		return f.rent, nil
+	case 0:
+		return zeroRent, nil
 	}
-	return f.rent, nil
+	return 0, fmt.Errorf("unexpected size %d", size)
 }
 
 func order(t *testing.T) Order {
@@ -104,35 +118,58 @@ func quote() Quote {
 	return Quote{NetworkFee: big.NewInt(7000), RentPerATA: big.NewInt(rent)}
 }
 
+func fundsRPC(t *testing.T, asset, native uint64) *fakeRPC {
+	return &fakeRPC{asset: asset, native: native, buyerATA: ata(t, buyer)}
+}
+
 func TestCheckFunds_OK(t *testing.T) {
-	f := &fakeRPC{asset: 10_000_000, native: 7000}
+	f := fundsRPC(t, 10_000_000, 7000+zeroRent)
 	if err := adapter(f).CheckFunds(context.Background(), order(t), quote()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCheckFunds_ShortAsset(t *testing.T) {
-	f := &fakeRPC{asset: 9_999_999, native: 9000}
+	f := fundsRPC(t, 9_999_999, 9000+zeroRent)
 	err := adapter(f).CheckFunds(context.Background(), order(t), quote())
 	var s *FundsShortfall
 	if !errors.As(err, &s) {
 		t.Fatalf("err = %v", err)
 	}
 	if s.NeedAsset.Int64() != 10_000_000 || s.HaveAsset.Int64() != 9_999_999 ||
-		s.NeedNative.Int64() != 7000 || s.HaveNative.Int64() != 9000 {
+		s.NeedNative.Int64() != 7000+zeroRent || s.HaveNative.Int64() != 9000+zeroRent {
 		t.Fatalf("%+v", s)
 	}
 }
 
 func TestCheckFunds_ShortNative(t *testing.T) {
-	f := &fakeRPC{asset: 20_000_000, native: 6999}
+	f := fundsRPC(t, 20_000_000, 7000+zeroRent-1)
 	err := adapter(f).CheckFunds(context.Background(), order(t), quote())
 	var s *FundsShortfall
 	if !errors.As(err, &s) {
 		t.Fatalf("err = %v", err)
 	}
-	if s.NeedNative.Int64() != 7000 || s.HaveNative.Int64() != 6999 || s.HaveAsset.Int64() != 20_000_000 {
+	if s.NeedNative.Int64() != 7000+zeroRent || s.HaveNative.Int64() != 7000+zeroRent-1 || s.HaveAsset.Int64() != 20_000_000 {
 		t.Fatalf("%+v", s)
+	}
+}
+
+// Fee alone is covered, but paying it would leave the buyer below rent exemption.
+func TestCheckFunds_NativeMustStayRentExempt(t *testing.T) {
+	f := fundsRPC(t, 20_000_000, 7000)
+	var s *FundsShortfall
+	if err := adapter(f).CheckFunds(context.Background(), order(t), quote()); !errors.As(err, &s) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCheckFunds_MissingBuyerATAIsZero(t *testing.T) {
+	f := fundsRPC(t, 99_000_000, 1_000_000_000)
+	f.noBuyerATA = true
+	var s *FundsShortfall
+	err := adapter(f).CheckFunds(context.Background(), order(t), quote())
+	if !errors.As(err, &s) || s.HaveAsset.Sign() != 0 {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -287,6 +324,14 @@ func TestObserve_Mismatches(t *testing.T) {
 		"WrongSellerAmount": {buyer, []ixSpec{
 			transferChecked(usdc, b, tr, buyer, "1000000"),
 			transferChecked(usdc, b, se, buyer, "8999999"), memoOK}},
+		"WrongSourceTreasury": {buyer, []ixSpec{
+			transferChecked(usdc, ata(t, seller), tr, buyer, "1000000"),
+			transferChecked(usdc, b, se, buyer, "9000000"), memoOK}},
+		"WrongSourceSeller": {buyer, []ixSpec{
+			transferChecked(usdc, b, tr, buyer, "1000000"),
+			transferChecked(usdc, ata(t, seller), se, buyer, "9000000"), memoOK}},
+		"TransferCheckedFromBuyerATAToOther": {buyer, append(goodIxs(t),
+			transferChecked(usdc, b, ata(t, otherMnt), seller, "1"))},
 		"WrongMint": {buyer, []ixSpec{
 			transferChecked(otherMnt, b, tr, buyer, "1000000"),
 			transferChecked(usdc, b, se, buyer, "9000000"), memoOK}},
@@ -319,7 +364,7 @@ func TestObserve_Mismatches(t *testing.T) {
 	}
 	// Distinct reasons for the headline cases.
 	seen := map[string]string{}
-	for _, n := range []string{"WrongSender", "WrongSplit", "WrongSellerAmount", "WrongMint", "MissingMemo", "ExtraTransferFromBuyer", "WrongAuthority"} {
+	for _, n := range []string{"WrongSender", "WrongSplit", "WrongSellerAmount", "WrongSourceTreasury", "WrongSourceSeller", "WrongMint", "MissingMemo", "ExtraTransferFromBuyer", "WrongAuthority"} {
 		if prev, dup := seen[reasons[n]]; dup {
 			t.Errorf("%s and %s share reason %q", n, prev, reasons[n])
 		}

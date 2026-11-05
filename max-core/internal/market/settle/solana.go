@@ -110,7 +110,23 @@ func (s *solana) CheckFunds(ctx context.Context, o Order, q Quote) error {
 	if q.NetworkFee == nil {
 		return fmt.Errorf("settle: quote has no network fee")
 	}
-	haveAsset, err := c.TokenAccountsByOwner(ctx, o.Buyer, o.Mint)
+	a, err := o.atas()
+	if err != nil {
+		return err
+	}
+	// The transfers spend from the buyer's ATA, so only its balance counts.
+	haveAsset := new(big.Int)
+	info, err := c.AccountInfo(ctx, a.buyer)
+	if err != nil {
+		return err
+	}
+	if info != nil {
+		if haveAsset, err = tokenAccountAmount(info); err != nil {
+			return err
+		}
+	}
+	// The fee payer must stay rent-exempt after paying the network fee.
+	floor, err := c.MinimumBalanceForRentExemption(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -118,14 +134,34 @@ func (s *solana) CheckFunds(ctx context.Context, o Order, q Quote) error {
 	if err != nil {
 		return err
 	}
-	ha, hn := new(big.Int).SetUint64(haveAsset), new(big.Int).SetUint64(haveNative)
-	if ha.Cmp(o.Price) < 0 || hn.Cmp(q.NetworkFee) < 0 {
+	needNative := new(big.Int).Add(q.NetworkFee, new(big.Int).SetUint64(floor))
+	hn := new(big.Int).SetUint64(haveNative)
+	if haveAsset.Cmp(o.Price) < 0 || hn.Cmp(needNative) < 0 {
 		return &FundsShortfall{
-			NeedAsset: new(big.Int).Set(o.Price), HaveAsset: ha,
-			NeedNative: new(big.Int).Set(q.NetworkFee), HaveNative: hn,
+			NeedAsset: new(big.Int).Set(o.Price), HaveAsset: haveAsset,
+			NeedNative: needNative, HaveNative: hn,
 		}
 	}
 	return nil
+}
+
+func tokenAccountAmount(info *solanarpc.AccountInfo) (*big.Int, error) {
+	if info.Data.Parsed == nil {
+		return nil, fmt.Errorf("settle: buyer token account is not parsed")
+	}
+	var v struct {
+		TokenAmount struct {
+			Amount string `json:"amount"`
+		} `json:"tokenAmount"`
+	}
+	if err := json.Unmarshal(info.Data.Parsed.Info, &v); err != nil {
+		return nil, err
+	}
+	n, ok := new(big.Int).SetString(v.TokenAmount.Amount, 10)
+	if !ok {
+		return nil, fmt.Errorf("settle: bad token amount %q", v.TokenAmount.Amount)
+	}
+	return n, nil
 }
 
 func (s *solana) BuildTx(o Order, q Quote) (Instructions, error) {
@@ -167,6 +203,8 @@ const (
 	reasonNoSeller      = "no transferChecked of the mint to the seller account"
 	reasonManySeller    = "more than one transferChecked of the mint to the seller account"
 	reasonWrongSplit    = "seller transfer amount does not equal the seller amount"
+	reasonSrcTreasury   = "treasury transfer source is not the buyer token account"
+	reasonSrcSeller     = "seller transfer source is not the buyer token account"
 	reasonWrongAuth     = "transfer authority is not the buyer"
 	reasonExtraTransfer = "buyer authorizes another transfer of the mint"
 	reasonNoMemo        = "sale memo is missing"
@@ -262,7 +300,7 @@ func matchSale(tx *solanarpc.Transaction, o Order, a atas) string {
 			case a.seller:
 				toSeller = append(toSeller, p)
 			default:
-				if byBuyer {
+				if byBuyer || p.Info.Source == a.buyer || p.Info.Source == o.Buyer {
 					extra = true
 				}
 			}
@@ -279,6 +317,8 @@ func matchSale(tx *solanarpc.Transaction, o Order, a atas) string {
 			wrongAuth = true
 		}
 	}
+	srcTreasury := len(toTreasury) == 1 && toTreasury[0].Info.Source != a.buyer
+	srcSeller := len(toSeller) == 1 && toSeller[0].Info.Source != a.buyer
 
 	switch {
 	case len(toTreasury) == 0:
@@ -293,6 +333,10 @@ func matchSale(tx *solanarpc.Transaction, o Order, a atas) string {
 		return reasonWrongFee
 	case !amountIs(toSeller[0].Info.TokenAmount.Amount, o.SellerAmount):
 		return reasonWrongSplit
+	case srcTreasury:
+		return reasonSrcTreasury
+	case srcSeller:
+		return reasonSrcSeller
 	case wrongAuth:
 		return reasonWrongAuth
 	case extra:
