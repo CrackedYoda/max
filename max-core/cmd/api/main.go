@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/max/max-core/internal/agents"
@@ -17,6 +18,7 @@ import (
 	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
 	"github.com/max/max-core/internal/evmrpc"
+	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
@@ -142,6 +144,11 @@ func run() error {
 	})
 	log.Info("agent authorization key", zap.String("key_id", attestor.KeyID()))
 
+	marketSvc, err := newMarket(cfg, pool, log.Named("market"))
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
 	router := server.NewRouter(server.Deps{
 		Logger:         log,
 		Pool:           pool,
@@ -158,6 +165,7 @@ func run() error {
 		MaxIDs:         maxids.NewHandler(maxidSvc),
 		Resolver:       resolver.NewHandler(resolverSvc),
 		Payments:       payments.NewHandler(paymentSvc),
+		Market:         market.NewHandler(marketSvc),
 	})
 
 	return server.Run(cfg.HTTP.Addr, router, log)
@@ -169,6 +177,28 @@ func adminSet(ids []uuid.UUID) func(uuid.UUID) bool {
 		set[id] = true
 	}
 	return func(id uuid.UUID) bool { return set[id] }
+}
+
+// newMarket validates the market settings (startup fails when an enabled
+// market lacks a treasury or RPC for an asset) and builds the service with a
+// Solana settlement adapter over the configured RPC URLs.
+func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.Service, error) {
+	mcfg, err := market.NewConfig(cfg.Market, cfg.Payments.RPCURLs)
+	if err != nil {
+		return nil, err
+	}
+	sol := map[string]settle.SolanaRPC{}
+	for _, a := range mcfg.Assets {
+		if url, ok := cfg.Payments.RPCURLs[a.Chain.Key]; ok && a.Chain.Namespace == chains.NamespaceSolana {
+			sol[a.Chain.Key] = solanarpc.New(url)
+		}
+	}
+	adapters := map[chains.Namespace]settle.Adapter{chains.NamespaceSolana: settle.NewSolana(sol)}
+	if !mcfg.Enabled {
+		log.Info("MARKET_ENABLED=false: marketplace routes return 404")
+	}
+	// TODO(Task 10): replace AllowAll with the agent market policy.
+	return market.NewService(market.NewRepository(pool), adapters, mcfg, market.AllowAll{}, log), nil
 }
 
 // newRegistrationGate builds the MAX ID claim balance gate. It counts wallets

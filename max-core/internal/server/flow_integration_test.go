@@ -34,6 +34,7 @@ import (
 	"github.com/max/max-core/internal/auth"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
 	"github.com/max/max-core/internal/renames"
@@ -61,6 +62,8 @@ type testEnv struct {
 	payRepo  payments.Repository
 	gateway  *stubGateway
 	provider *stubProvider
+	market   *market.Service
+	settle   *fakeSettle
 }
 
 // stubProvider stands in for NEAR Intents; adapter behaviour is covered by
@@ -107,8 +110,12 @@ func (s *stubGateway) Observe(context.Context, payments.Payment) (payments.Obser
 	return s.obs, nil
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 	t.Helper()
+	ec := envConfig{}
+	for _, o := range opts {
+		o(&ec)
+	}
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
@@ -154,7 +161,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	vcfg.ResultRedirect = "http://localhost:3000/verify/x"
 	verifySvc := verifications.NewService(verifications.NewRepository(pool), xc, vcfg, zap.NewNop())
 	admins := map[uuid.UUID]bool{}
+	marketSvc, fs := newTestMarket(t, pool, ec)
 	h := server.NewRouter(server.Deps{
+		Market:         market.NewHandler(marketSvc),
 		Verifications:  verifications.NewHandler(verifySvc),
 		IsAdmin:        func(id uuid.UUID) bool { return admins[id] },
 		Renames:        renames.NewHandler(renameSvc),
@@ -168,7 +177,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Resolver:    resolver.NewHandler(resolverSvc),
 		Payments:    payments.NewHandler(paySvc),
 	})
-	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov}
+	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov, market: marketSvc, settle: fs}
 }
 
 type client struct {

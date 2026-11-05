@@ -12,6 +12,7 @@ import (
 
 	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/auth"
+	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/middleware"
 	"github.com/max/max-core/internal/payments"
@@ -39,6 +40,7 @@ type Deps struct {
 	MaxIDs         *maxids.Handler
 	Resolver       *resolver.Handler
 	Payments       *payments.Handler
+	Market         *market.Handler
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -160,6 +162,27 @@ func NewRouter(d Deps) *gin.Engine {
 	ops.POST("/reserved-claims/:id/deny", d.Verifications.AdminDeny)
 	ops.POST("/reserved-claims/:id/revoke", d.Verifications.AdminRevokeClaim)
 	ops.POST("/verifications/:id/revoke", d.Verifications.AdminRevokeVerification)
+
+	// Marketplace (spec §9). Every route 404s while the market is disabled;
+	// Trading() refuses new activity while paused, but reads and submit stay
+	// open so in-flight sales can finish.
+	listLimit := middleware.RateLimit(30, time.Minute)
+	mkt := v1.Group("/market", d.Market.Gate())
+	mkt.GET("/listings", lookupLimit, d.Market.Search)
+	mkt.GET("/names/:name", lookupLimit, d.Market.Name)
+	// TODO(Task 10): accept agent keys here with scope(agents.ScopeMarketRead),
+	// scope(agents.ScopeMarketSell) and scope(agents.ScopeMarketBuy) per route
+	// (spec §9) instead of sessionOnly, and wire the agent policy.
+	mine := mkt.Group("", required, sessionOnly)
+	trade := d.Market.Trading()
+	mine.GET("/eligibility/:maxId", d.Market.Eligibility)
+	mine.POST("/listings", listLimit, trade, d.Market.CreateListing)
+	mine.PATCH("/listings/:id", listLimit, trade, d.Market.UpdateListing)
+	mine.DELETE("/listings/:id", listLimit, trade, d.Market.DeleteListing)
+	mine.POST("/listings/:id/buy", payLimit, trade, d.Market.Buy)
+	mine.POST("/sales/:id/submit", payLimit, d.Market.Submit)
+	mine.GET("/sales/:id", d.Market.GetSale)
+	mine.GET("/me", d.Market.Me)
 
 	// Agent runtime: API keys only.
 	agent := v1.Group("/agent", required, agentOnly)
