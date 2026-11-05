@@ -333,9 +333,18 @@ func (r *repository) ExpireOffers(ctx context.Context, limit int) (int, error) {
 }
 
 func (r *repository) LapseOffer(ctx context.Context, offerID uuid.UUID, strikesSince time.Time, rule SuspendRule) (LapseResult, error) {
+	head, err := r.q.GetMarketOffer(ctx, offerID)
+	if err != nil {
+		return LapseResult{}, mapErr(err, ErrOfferNotFound)
+	}
 	var res LapseResult
-	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+	err = database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
+		// The per-buyer lock serialises concurrent lapses, so the strike count
+		// and the suspension check below see each other's writes.
+		if err := q.LockMarketOfferBuyer(ctx, head.BuyerAccountID.String()); err != nil {
+			return err
+		}
 		o, err := q.GetMarketOfferForUpdate(ctx, offerID)
 		if err != nil {
 			return err
@@ -348,10 +357,17 @@ func (r *repository) LapseOffer(ctx context.Context, offerID uuid.UUID, strikesS
 		default:
 			return errOfferNotLive.WithMessage("only an accepted offer can lapse; this one is " + o.Status)
 		}
-		if s, err := q.GetMarketSaleByOfferID(ctx, &offerID); err == nil && IsOpenSale(s.Status) {
-			return shared.ErrConflict.WithMessage("the offer's sale is still open")
-		} else if err != nil && !database.IsNoRows(err) {
+		// Only the buyer's own failure to pay earns a strike: the sale expired
+		// with no transaction submitted.
+		sale, err := q.GetMarketSaleByOfferID(ctx, &offerID)
+		if database.IsNoRows(err) {
+			return errNotLapsable.WithMessage("the offer has no sale")
+		}
+		if err != nil {
 			return err
+		}
+		if !SaleLapsesOffer(sale.Status, sale.TxHash != nil) {
+			return errNotLapsable.WithMessage("the offer's sale is " + sale.Status + "; only an unpaid expired sale lapses the offer")
 		}
 		row, err := q.TransitionMarketOffer(ctx, generated.TransitionMarketOfferParams{
 			ID: offerID, FromStatuses: []string{OfferAccepted}, ToStatus: OfferLapsed,

@@ -34,7 +34,15 @@ var (
 	errOfferDuplicate   = ErrOfferLimit.WithMessage("you already have an open offer on this name")
 	errPayoutRequired   = shared.ErrValidation.WithMessage("payoutAddress is required when the name is not listed")
 	errBuyerRestricted  = ErrMarketRestricted.WithMessage("the buyer is restricted from the marketplace")
+	errNotLapsable      = shared.ErrConflict.WithMessage("this offer cannot lapse")
 )
+
+// SaleLapsesOffer reports whether an accepted offer's sale ended through the
+// buyer's failure to pay: expired with no transaction submitted. Paid,
+// cancelled, denied and manual-review sales never earn the buyer a strike.
+func SaleLapsesOffer(saleStatus string, hasTx bool) bool {
+	return saleStatus == SaleExpired && !hasTx
+}
 
 // MakeOffer places a live offer on a name, listed or not (spec §6 Offer 1).
 func (s *Service) MakeOffer(ctx context.Context, p shared.Principal, in OfferInput) (Offer, error) {

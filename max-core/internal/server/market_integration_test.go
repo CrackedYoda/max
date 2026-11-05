@@ -1030,7 +1030,7 @@ func TestMarket_OfferAcceptPay(t *testing.T) {
 	if owner != bob.account || dest != bob.walletID {
 		t.Fatalf("after completion: owner %v dest %v", owner, dest)
 	}
-	if offerStatus(t, env, bobOffer) != "completed" || offerStatus(t, env, carolOffer) != "superseded" || listingStatus != "cancelled" {
+	if offerStatus(t, env, bobOffer) != "completed" || offerStatus(t, env, carolOffer) != "superseded" || listingStatus != "sold" {
 		t.Fatalf("after completion: bob %s carol %s listing %s", offerStatus(t, env, bobOffer), offerStatus(t, env, carolOffer), listingStatus)
 	}
 	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1`, saleID); n != 3 {
@@ -1258,5 +1258,62 @@ func TestMarket_OfferFundingRecheck(t *testing.T) {
 	}
 	if offerStatus(t, env, bobOffer) != "unfunded" {
 		t.Fatalf("accept did not flip the offer: %s", offerStatus(t, env, bobOffer))
+	}
+}
+
+func TestMarket_OfferLapseRefusedUnlessUnpaidExpiry(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	ctx := context.Background()
+	alice, bob := newParty(t, env), newParty(t, env)
+	cases := []struct {
+		name, status string
+		tx           bool
+		lapses       bool
+	}{
+		{"expired-no-tx", "expired", false, true},
+		{"expired-with-tx", "expired", true, false},
+		{"manual-review", "manual_review", true, false},
+		{"cancelled", "cancelled", false, false},
+	}
+	for i, c := range cases {
+		id := claimID(t, alice, []string{"yoda", "luke", "leia", "hans"}[i])
+		offerID, saleID := seedOfferSale(t, env, id, alice, bob)
+		if c.tx {
+			if _, err := env.pool.Exec(ctx, `UPDATE market_sales SET tx_hash = $2, submitted_at = now() WHERE id = $1`, saleID, solSigFor(byte(40+i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := env.pool.Exec(ctx, `UPDATE market_sales SET status = $2 WHERE id = $1`, saleID, c.status); err != nil {
+			t.Fatal(err)
+		}
+		err := env.market.LapseAcceptedOffer(ctx, offerID)
+		want := map[bool]string{true: "lapsed", false: "accepted"}[c.lapses]
+		if (err == nil) != c.lapses || offerStatus(t, env, offerID.String()) != want {
+			t.Fatalf("%s: err %v, offer %s", c.name, err, offerStatus(t, env, offerID.String()))
+		}
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_strikes WHERE account_id = $1`, bob.account); n != 1 {
+		t.Fatalf("strikes = %d, want only the unpaid expiry", n)
+	}
+}
+
+func TestMarket_LiveOfferCountExcludesExpired(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	makeOffer(bob, "yoda", "30")
+	_, body := makeOffer(carol, "yoda", "20")
+	carolOffer := data(t, body)["id"].(string)
+	anon := &client{t: t, h: env.handler}
+	if _, body = anon.do("GET", "/v1/market/names/yoda", nil); data(t, body)["liveOfferCount"] != float64(2) {
+		t.Fatalf("before expiry: %v", body)
+	}
+	// Past expiry but not yet swept: no longer counted.
+	if _, err := env.pool.Exec(context.Background(), `UPDATE market_offers SET expires_at = now() - interval '1 minute' WHERE id = $1`, carolOffer); err != nil {
+		t.Fatal(err)
+	}
+	if _, body = anon.do("GET", "/v1/market/names/yoda", nil); data(t, body)["liveOfferCount"] != float64(1) {
+		t.Fatalf("after expiry: %v", body)
 	}
 }

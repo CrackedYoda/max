@@ -233,7 +233,7 @@ func (q *Queries) CompleteMarketSale(ctx context.Context, arg CompleteMarketSale
 }
 
 const countLiveMarketOffers = `-- name: CountLiveMarketOffers :one
-SELECT count(*) FROM market_offers WHERE max_id = $1 AND status = 'live'
+SELECT count(*) FROM market_offers WHERE max_id = $1 AND status = 'live' AND expires_at > now()
 `
 
 func (q *Queries) CountLiveMarketOffers(ctx context.Context, maxID uuid.UUID) (int64, error) {

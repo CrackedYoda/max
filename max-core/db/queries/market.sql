@@ -241,7 +241,7 @@ ORDER BY completed_at DESC
 LIMIT 1;
 
 -- name: CountLiveMarketOffers :one
-SELECT count(*) FROM market_offers WHERE max_id = $1 AND status = 'live';
+SELECT count(*) FROM market_offers WHERE max_id = $1 AND status = 'live' AND expires_at > now();
 
 -- name: ListMarketListingsBySellerWithName :many
 SELECT sqlc.embed(l), m.canonical_name

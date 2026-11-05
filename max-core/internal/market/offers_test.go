@@ -137,6 +137,10 @@ func (f *fakeRepo) LapseOffer(_ context.Context, offerID uuid.UUID, since time.T
 	if o.Status != OfferAccepted {
 		return LapseResult{}, errOfferNotLive
 	}
+	sale, err := f.SaleByOffer(context.Background(), offerID)
+	if err != nil || !SaleLapsesOffer(sale.Status, sale.TxHash != nil) {
+		return LapseResult{}, errNotLapsable
+	}
 	f.setOffer(offerID, OfferLapsed)
 	f.strikes[o.BuyerAccountID] = append(f.strikes[o.BuyerAccountID], time.Now())
 	n := 0
@@ -490,6 +494,7 @@ func TestLapse_ThirdStrikeSuspends(t *testing.T) {
 	key := h.buyer.String() + "|" + RestrictionOfferSuspension
 	for i := 1; i <= 3; i++ {
 		o := h.seedOffer(h.buyer, h.payer, OfferAccepted)
+		h.seedOfferSale(o, SaleExpired, nil)
 		if err := h.svc.LapseAcceptedOffer(context.Background(), o.ID); err != nil {
 			t.Fatal(err)
 		}
@@ -540,5 +545,56 @@ func TestWithdrawAndDecline(t *testing.T) {
 	o2 := h.seedOffer(h.buyer, h.payer, OfferLive)
 	if err := h.svc.WithdrawOffer(context.Background(), human(h.buyer), o2.ID); err != nil || h.repo.offers[o2.ID].Status != OfferWithdrawn {
 		t.Fatalf("withdraw: %v %s", err, h.repo.offers[o2.ID].Status)
+	}
+}
+
+// seedOfferSale stores the sale of an accepted offer in the given state.
+func (h *harness) seedOfferSale(o Offer, status string, tx *string) {
+	id := o.ID
+	s := Sale{ID: uuid.New(), MaxID: o.MaxID, OfferID: &id, SellerAccountID: h.seller, BuyerAccountID: o.BuyerAccountID, Status: status, TxHash: tx}
+	h.repo.sales[s.ID] = s
+}
+
+func TestSaleLapsesOffer(t *testing.T) {
+	for _, c := range []struct {
+		status string
+		hasTx  bool
+		want   bool
+	}{
+		{SaleExpired, false, true},
+		{SaleExpired, true, false},
+		{SaleManualReview, false, false},
+		{SaleManualReview, true, false},
+		{SaleCancelled, false, false},
+		{SalePendingReview, false, false},
+		{SaleLocked, false, false},
+		{SaleCompleted, true, false},
+	} {
+		if got := SaleLapsesOffer(c.status, c.hasTx); got != c.want {
+			t.Errorf("%s tx=%v: %v, want %v", c.status, c.hasTx, got, c.want)
+		}
+	}
+}
+
+func TestLapse_RefusedWhenBuyerNotAtFault(t *testing.T) {
+	tx := validSig()
+	for name, c := range map[string]struct {
+		status string
+		tx     *string
+	}{
+		"expired with tx": {SaleExpired, &tx},
+		"manual review":   {SaleManualReview, &tx},
+		"cancelled":       {SaleCancelled, nil},
+		"still locked":    {SaleLocked, nil},
+	} {
+		h := newHarness(t, nil)
+		o := h.seedOffer(h.buyer, h.payer, OfferAccepted)
+		h.seedOfferSale(o, c.status, c.tx)
+		if err := h.svc.LapseAcceptedOffer(context.Background(), o.ID); !errors.Is(err, errNotLapsable) {
+			t.Errorf("%s: got %v", name, err)
+		}
+		if h.repo.offers[o.ID].Status != OfferAccepted || len(h.repo.strikes[h.buyer]) != 0 {
+			t.Errorf("%s: offer %s, strikes %d", name, h.repo.offers[o.ID].Status, len(h.repo.strikes[h.buyer]))
+		}
 	}
 }

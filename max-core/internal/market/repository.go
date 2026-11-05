@@ -429,10 +429,10 @@ func (r *repository) CompleteSale(ctx context.Context, saleID uuid.UUID, hold ti
 				return err
 			}
 		} else if l, err := q.GetLiveMarketListingByMaxIDForUpdate(ctx, sale.MaxID); err == nil {
-			// An accepted offer locked the seller's listing; the name has
-			// changed hands, so the listing closes.
+			// An accepted offer locked the seller's listing; the name sold,
+			// so the listing is sold too (spec §6 Complete 2).
 			if _, err := q.TransitionMarketListing(ctx, generated.TransitionMarketListingParams{
-				ID: l.ID, FromStatus: l.Status, ToStatus: ListingCancelled, Reason: "sold through an accepted offer, sale " + sale.ID.String(),
+				ID: l.ID, FromStatus: ListingLocked, ToStatus: ListingSold, Reason: "sold through an accepted offer, sale " + sale.ID.String(),
 			}); err != nil {
 				return err
 			}
