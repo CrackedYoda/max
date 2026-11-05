@@ -166,7 +166,7 @@ func (r *repository) ClaimActive(ctx context.Context, p ClaimParams) (Claim, err
 			}
 			return err
 		}
-		m, err := maxids.CreateInTx(ctx, q, p.AccountID, res.CanonicalName, maxids.TypeHuman, p.DisplayName, "maxid.reserved_claimed")
+		m, err := maxids.CreateInTx(ctx, q, p.AccountID, res.CanonicalName, maxids.TypeHuman, p.DisplayName, "maxid.reserved_claimed", 0)
 		if err != nil {
 			return err
 		}
@@ -237,7 +237,7 @@ func (r *repository) ApproveClaim(ctx context.Context, id, admin uuid.UUID, veri
 		if ClaimStatus(c.Status) != ClaimPendingReview {
 			return ErrClaimState
 		}
-		m, err := maxids.CreateInTx(ctx, q, c.AccountID, c.CanonicalName, maxids.TypeHuman, c.CanonicalName, "maxid.reserved_claimed")
+		m, err := maxids.CreateInTx(ctx, q, c.AccountID, c.CanonicalName, maxids.TypeHuman, c.CanonicalName, "maxid.reserved_claimed", 0)
 		if err != nil {
 			return err
 		}

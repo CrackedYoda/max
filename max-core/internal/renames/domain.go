@@ -46,6 +46,9 @@ type FeeOption struct {
 type Config struct {
 	Cooldown   time.Duration
 	Quarantine time.Duration
+	// HoldPeriod is the market hold started by a rename (MARKET_HOLD_PERIOD);
+	// zero means maxids.DefaultHoldPeriod.
+	HoldPeriod time.Duration
 	Fees       []FeeOption
 	// Treasury is MAX's fee-receiving address per namespace (canonical form).
 	Treasury map[chains.Namespace]string

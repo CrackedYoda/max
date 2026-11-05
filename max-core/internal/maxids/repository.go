@@ -3,6 +3,7 @@ package maxids
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,12 +19,26 @@ import (
 type repository struct {
 	pool *pgxpool.Pool
 	q    *generated.Queries
+	hold time.Duration
+}
+
+// RepoOption tunes optional repository behaviour.
+type RepoOption func(*repository)
+
+// WithHoldPeriod sets how long a newly claimed ID is held before it can be
+// listed on the market. Zero or unset means DefaultHoldPeriod.
+func WithHoldPeriod(d time.Duration) RepoOption {
+	return func(r *repository) { r.hold = d }
 }
 
 var _ Repository = (*repository)(nil)
 
-func NewRepository(pool *pgxpool.Pool) Repository {
-	return &repository{pool: pool, q: generated.New(pool)}
+func NewRepository(pool *pgxpool.Pool, opts ...RepoOption) Repository {
+	r := &repository{pool: pool, q: generated.New(pool)}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 func (r *repository) GetReserved(ctx context.Context, canonical string) (*Reserved, error) {
@@ -95,7 +110,7 @@ func (r *repository) Create(ctx context.Context, owner uuid.UUID, canonical stri
 	var out MaxID
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, err := CreateInTx(ctx, q, owner, canonical, typ, displayName, "maxid.claimed")
+		row, err := CreateInTx(ctx, q, owner, canonical, typ, displayName, "maxid.claimed", r.hold)
 		if err != nil {
 			return err
 		}
@@ -110,9 +125,10 @@ func (r *repository) Create(ctx context.Context, owner uuid.UUID, canonical stri
 
 // CreateInTx registers a MAX ID inside the caller's transaction: it takes the
 // name lock, re-checks availability, inserts the ID and its ownership event,
+// starts the market hold (holdPeriod; zero means DefaultHoldPeriod),
 // points it at the owner's first wallet per namespace, and audits. Reserved
 // name claims call this after their own policy checks.
-func CreateInTx(ctx context.Context, q *generated.Queries, owner uuid.UUID, canonical string, typ Type, displayName, auditAction string) (generated.MaxID, error) {
+func CreateInTx(ctx context.Context, q *generated.Queries, owner uuid.UUID, canonical string, typ Type, displayName, auditAction string, holdPeriod time.Duration) (generated.MaxID, error) {
 	// Serialize with rename reservations and finalizations on this name.
 	if err := q.LockName(ctx, canonical); err != nil {
 		return generated.MaxID{}, err
@@ -137,6 +153,9 @@ func CreateInTx(ctx context.Context, q *generated.Queries, owner uuid.UUID, cano
 	if err := q.CreateOwnershipEvent(ctx, generated.CreateOwnershipEventParams{
 		MaxID: row.ID, NextOwner: owner, EventType: "claimed",
 	}); err != nil {
+		return generated.MaxID{}, err
+	}
+	if err := q.SetListableAfter(ctx, generated.SetListableAfterParams{ID: row.ID, HoldSeconds: holdSeconds(holdPeriod)}); err != nil {
 		return generated.MaxID{}, err
 	}
 
@@ -213,6 +232,9 @@ func (r *repository) UpdateProfile(ctx context.Context, id, owner uuid.UUID, in 
 		if _, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner}); err != nil {
 			return err
 		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
 		row, err := q.UpdateMaxIDProfile(ctx, generated.UpdateMaxIDProfileParams{
 			ID: id, DisplayName: in.DisplayName, Description: in.Description, AvatarUrl: in.AvatarURL,
 		})
@@ -242,6 +264,9 @@ func (r *repository) SetDestination(ctx context.Context, id, owner uuid.UUID, ns
 		q := r.q.WithTx(tx)
 		locked, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner})
 		if err != nil {
+			return err
+		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
 			return err
 		}
 		if locked.Status != "active" {
@@ -275,6 +300,9 @@ func (r *repository) RemoveDestination(ctx context.Context, id, owner uuid.UUID,
 		if _, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner}); err != nil {
 			return err
 		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
 		n, err := q.DeleteDestination(ctx, generated.DeleteDestinationParams{MaxID: id, ChainNamespace: string(ns)})
 		if err != nil {
 			return err
@@ -305,6 +333,9 @@ func (r *repository) SetSettlement(ctx context.Context, id, owner uuid.UUID, st 
 		if _, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner}); err != nil {
 			return err
 		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
 		if _, err := q.UpsertSettlementPreference(ctx, generated.UpsertSettlementPreferenceParams{
 			MaxID: id, DestinationChain: st.Chain, DestinationAsset: st.Asset, Enabled: st.Enabled,
 		}); err != nil {
@@ -331,6 +362,9 @@ func (r *repository) RemoveSettlement(ctx context.Context, id, owner uuid.UUID) 
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		if _, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner}); err != nil {
+			return err
+		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
 			return err
 		}
 		n, err := q.DeleteSettlementPreference(ctx, id)
@@ -396,4 +430,35 @@ func (r *repository) mapOwnedErr(err error) error {
 		return err
 	}
 	return shared.ErrInternal.WithError(err)
+}
+
+// ensureNoOpenSale refuses with ErrNameLocked while the ID has a sale in
+// pending_review, locked, submitted or confirming. Call it after taking the
+// max_ids row lock, which sale creation also takes, so the check cannot race.
+func ensureNoOpenSale(ctx context.Context, q *generated.Queries, id uuid.UUID) error {
+	if _, err := q.GetOpenMarketSaleByMaxID(ctx, id); err != nil {
+		if database.IsNoRows(err) {
+			return nil
+		}
+		return err
+	}
+	return ErrNameLocked
+}
+
+// EnsureNotListed refuses with ErrNameListed while the ID has an active or
+// locked listing. Same locking contract as ensureNoOpenSale.
+func EnsureNotListed(ctx context.Context, q *generated.Queries, id uuid.UUID) error {
+	if _, err := q.GetLiveMarketListingByMaxID(ctx, id); err != nil {
+		if database.IsNoRows(err) {
+			return nil
+		}
+		return err
+	}
+	return ErrNameListed
+}
+
+// EnsureNoOpenSale is the exported form of ensureNoOpenSale for other packages
+// that edit a name's identity (renames).
+func EnsureNoOpenSale(ctx context.Context, q *generated.Queries, id uuid.UUID) error {
+	return ensureNoOpenSale(ctx, q, id)
 }

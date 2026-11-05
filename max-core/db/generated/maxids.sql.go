@@ -114,6 +114,37 @@ func (q *Queries) CreateOwnershipEvent(ctx context.Context, arg CreateOwnershipE
 	return err
 }
 
+const createTransferEvent = `-- name: CreateTransferEvent :exec
+INSERT INTO max_id_ownership_events (max_id, previous_owner, next_owner, event_type, sale_id)
+VALUES ($1, $2, $3, 'transferred', $4)
+`
+
+type CreateTransferEventParams struct {
+	MaxID         uuid.UUID
+	PreviousOwner *uuid.UUID
+	NextOwner     uuid.UUID
+	SaleID        *uuid.UUID
+}
+
+func (q *Queries) CreateTransferEvent(ctx context.Context, arg CreateTransferEventParams) error {
+	_, err := q.db.Exec(ctx, createTransferEvent,
+		arg.MaxID,
+		arg.PreviousOwner,
+		arg.NextOwner,
+		arg.SaleID,
+	)
+	return err
+}
+
+const deleteAllDestinations = `-- name: DeleteAllDestinations :exec
+DELETE FROM max_id_destinations WHERE max_id = $1
+`
+
+func (q *Queries) DeleteAllDestinations(ctx context.Context, maxID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAllDestinations, maxID)
+	return err
+}
+
 const deleteDestination = `-- name: DeleteDestination :execrows
 DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = $2
 `
@@ -285,6 +316,32 @@ func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUI
 	return items, nil
 }
 
+const lockMaxIDByID = `-- name: LockMaxIDByID :one
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockMaxIDByID(ctx context.Context, id uuid.UUID) (MaxID, error) {
+	row := q.db.QueryRow(ctx, lockMaxIDByID, id)
+	var i MaxID
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalName,
+		&i.OwnerAccountID,
+		&i.Type,
+		&i.Status,
+		&i.DisplayName,
+		&i.Description,
+		&i.AvatarUrl,
+		&i.ResolutionVersion,
+		&i.RenameAvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
+	)
+	return i, err
+}
+
 const lockMaxIDForOwner = `-- name: LockMaxIDForOwner :one
 SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 AND owner_account_id = $2 FOR UPDATE
 `
@@ -325,6 +382,71 @@ func (q *Queries) MaxIDNameExists(ctx context.Context, canonicalName string) (bo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const setListableAfter = `-- name: SetListableAfter :exec
+UPDATE max_ids SET listable_at = now() + make_interval(secs => $1::int) WHERE id = $2
+`
+
+type SetListableAfterParams struct {
+	HoldSeconds int32
+	ID          uuid.UUID
+}
+
+func (q *Queries) SetListableAfter(ctx context.Context, arg SetListableAfterParams) error {
+	_, err := q.db.Exec(ctx, setListableAfter, arg.HoldSeconds, arg.ID)
+	return err
+}
+
+const transferMaxIDOwner = `-- name: TransferMaxIDOwner :one
+UPDATE max_ids
+SET owner_account_id = $1,
+    display_name = '',
+    description = '',
+    avatar_url = '',
+    resolution_version = resolution_version + 1,
+    owner_changed_at = now(),
+    listable_at = now() + make_interval(secs => $2::int),
+    rename_available_at = greatest(rename_available_at, now() + make_interval(secs => $2::int)),
+    updated_at = now()
+WHERE id = $3 AND owner_account_id = $4
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
+`
+
+type TransferMaxIDOwnerParams struct {
+	ToOwner     uuid.UUID
+	HoldSeconds int32
+	ID          uuid.UUID
+	FromOwner   uuid.UUID
+}
+
+// Moves the ID to a new owner and resets its public identity. The WHERE clause
+// pins the previous owner so a stale caller cannot transfer twice.
+func (q *Queries) TransferMaxIDOwner(ctx context.Context, arg TransferMaxIDOwnerParams) (MaxID, error) {
+	row := q.db.QueryRow(ctx, transferMaxIDOwner,
+		arg.ToOwner,
+		arg.HoldSeconds,
+		arg.ID,
+		arg.FromOwner,
+	)
+	var i MaxID
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalName,
+		&i.OwnerAccountID,
+		&i.Type,
+		&i.Status,
+		&i.DisplayName,
+		&i.Description,
+		&i.AvatarUrl,
+		&i.ResolutionVersion,
+		&i.RenameAvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
+	)
+	return i, err
 }
 
 const updateMaxIDProfile = `-- name: UpdateMaxIDProfile :one

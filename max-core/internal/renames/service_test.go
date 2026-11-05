@@ -85,7 +85,7 @@ func (f *fakeRepo) ListPending(context.Context, int32) ([]Request, error) {
 	return out, nil
 }
 
-func (f *fakeRepo) Finalize(_ context.Context, id uuid.UUID, cooldown, _ time.Duration) (Request, error) {
+func (f *fakeRepo) Finalize(_ context.Context, id uuid.UUID, cooldown, _, _ time.Duration) (Request, error) {
 	r := f.requests[id]
 	if r.Status != StatusAwaitingPayment {
 		return *r, nil

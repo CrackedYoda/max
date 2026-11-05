@@ -16,7 +16,9 @@ type Profile struct {
 	Description       string
 	AvatarURL         string
 	ResolutionVersion int64
-	Destinations      map[chains.Namespace]string
+	// OwnerChangedAt is the raw timestamp; the service drops it once stale.
+	OwnerChangedAt *time.Time
+	Destinations   map[chains.Namespace]string
 	// Settlement is set only when the owner has an enabled conversion preference.
 	Settlement *Settlement
 }
@@ -51,7 +53,9 @@ type Resolution struct {
 	Address           string
 	ResolutionVersion int64
 	ResolvedAt        time.Time
-	Notes             []string
+	// OwnerChangedAt is set only when ownership changed in the last 30 days.
+	OwnerChangedAt *time.Time
+	Notes          []string
 }
 
 type ChainReach struct {

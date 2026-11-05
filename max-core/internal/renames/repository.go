@@ -78,6 +78,12 @@ func (r *repository) Reserve(ctx context.Context, p ReserveParams) (Request, err
 		if m.CanonicalName != p.OldName {
 			return ErrIDChanged
 		}
+		if err := maxids.EnsureNotListed(ctx, q, p.MaxID); err != nil {
+			return err
+		}
+		if err := maxids.EnsureNoOpenSale(ctx, q, p.MaxID); err != nil {
+			return err
+		}
 		if time.Now().Before(m.RenameAvailableAt) {
 			return ErrCooldown.WithMessage("next rename available at " + m.RenameAvailableAt.UTC().Format(time.RFC3339))
 		}
@@ -144,7 +150,7 @@ func (r *repository) ListPending(ctx context.Context, limit int32) ([]Request, e
 	return out, nil
 }
 
-func (r *repository) Finalize(ctx context.Context, requestID uuid.UUID, cooldown, quarantine time.Duration) (Request, error) {
+func (r *repository) Finalize(ctx context.Context, requestID uuid.UUID, cooldown, quarantine, hold time.Duration) (Request, error) {
 	var out Request
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
@@ -161,7 +167,7 @@ func (r *repository) Finalize(ctx context.Context, requestID uuid.UUID, cooldown
 		}
 
 		m, err := q.ApplyRename(ctx, generated.ApplyRenameParams{
-			ID: req.MaxID, OldName: req.OldName, NewName: req.NewName, CooldownSeconds: int32(cooldown.Seconds()),
+			ID: req.MaxID, OldName: req.OldName, NewName: req.NewName, CooldownSeconds: int32(cooldown.Seconds()), HoldSeconds: holdSeconds(hold),
 		})
 		if database.IsNoRows(err) {
 			closed, cerr := q.CloseRenameRequest(ctx, generated.CloseRenameRequestParams{
@@ -252,4 +258,11 @@ func mapErr(err error) error {
 		return err
 	}
 	return shared.ErrInternal.WithError(err)
+}
+
+func holdSeconds(d time.Duration) int32 {
+	if d <= 0 {
+		d = maxids.DefaultHoldPeriod
+	}
+	return int32(d.Seconds())
 }

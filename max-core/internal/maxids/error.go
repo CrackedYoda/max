@@ -30,3 +30,10 @@ var (
 	ErrInsufficientRegistrationBalance = shared.NewAppError("INSUFFICIENT_REGISTRATION_BALANCE", http.StatusForbidden, "linked wallets do not hold enough value to register a MAX ID")
 	ErrPriceUnavailable                = shared.NewAppError("PRICE_UNAVAILABLE", http.StatusServiceUnavailable, "wallet balances could not be priced right now; try again shortly")
 )
+
+var (
+	// ErrNameListed refuses renames while the name has a live listing.
+	ErrNameListed = shared.NewAppError("NAME_LISTED", http.StatusConflict, "this MAX ID is listed for sale; delist it before renaming")
+	// ErrNameLocked refuses edits while the name has an open sale.
+	ErrNameLocked = shared.NewAppError("NAME_LOCKED", http.StatusConflict, "this MAX ID has a sale in progress and cannot be changed")
+)

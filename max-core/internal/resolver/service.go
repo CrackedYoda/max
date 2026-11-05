@@ -9,6 +9,18 @@ import (
 	"github.com/max/max-core/internal/maxids"
 )
 
+// OwnerChangeWindow is how long a recent ownership change is advertised.
+const OwnerChangeWindow = 30 * 24 * time.Hour
+
+// recentOwnerChange returns t only when ownership changed within the window.
+func recentOwnerChange(t *time.Time, now time.Time) *time.Time {
+	if t == nil || now.Sub(*t) > OwnerChangeWindow {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
 type service struct {
 	repo Repository
 	now  func() time.Time
@@ -29,6 +41,7 @@ func (s *service) Profile(ctx context.Context, name string) (Profile, []ChainRea
 	if err != nil {
 		return Profile{}, nil, err
 	}
+	p.OwnerChangedAt = recentOwnerChange(p.OwnerChangedAt, s.now())
 	reach := make([]ChainReach, 0, len(chains.Supported))
 	for _, c := range chains.Supported {
 		_, ok := p.Destinations[c.Namespace]
@@ -67,6 +80,7 @@ func (s *service) Resolve(ctx context.Context, name, chainKey, assetParam string
 		DisplayName: p.DisplayName, Chain: chain, Asset: asset,
 		Address:           chains.DisplayAddress(chain.Namespace, addr),
 		ResolutionVersion: p.ResolutionVersion, ResolvedAt: s.now().UTC(),
+		OwnerChangedAt: recentOwnerChange(p.OwnerChangedAt, s.now()),
 	}
 	if chain.Namespace == chains.NamespaceSolana && asset.Kind == AssetToken {
 		res.Notes = append(res.Notes, "SPL tokens are sent to the recipient's associated token account; the sender's transaction creates it if missing and pays its rent.")

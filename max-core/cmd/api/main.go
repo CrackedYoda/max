@@ -66,7 +66,7 @@ func run() error {
 		SessionSecret: cfg.Auth.SessionSecret,
 	})
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
-	maxidRepo := maxids.NewRepository(pool)
+	maxidRepo := maxids.NewRepository(pool, maxids.WithHoldPeriod(cfg.Market.HoldPeriod))
 	maxidSvc := maxids.NewService(maxidRepo, newRegistrationGate(cfg, maxidRepo))
 	resolverSvc := resolver.NewService(resolver.NewRepository(pool))
 
@@ -108,7 +108,7 @@ func run() error {
 		log.Warn("RENAME_FEES not set: renames are disabled")
 	}
 	renameSvc := renames.NewService(renames.NewRepository(pool), paymentSvc, renames.Config{
-		Quarantine: cfg.Renames.Quarantine, Fees: renameFees, Treasury: treasury,
+		Quarantine: cfg.Renames.Quarantine, HoldPeriod: cfg.Market.HoldPeriod, Fees: renameFees, Treasury: treasury,
 		LateSubmitGrace: paymentsCfg.LateSubmitGrace,
 	}, log.Named("renames"))
 	go renames.RunWorker(ctx, renameSvc, log.Named("renames"))

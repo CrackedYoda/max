@@ -1028,6 +1028,15 @@ func TestFlow_PaidRename(t *testing.T) {
 		t.Fatalf("stale version after rename: %v", body)
 	}
 
+	// The rename restarts the market hold.
+	var listable time.Time
+	if err := env.pool.QueryRow(ctx, `SELECT listable_at FROM max_ids WHERE id = $1`, maxID).Scan(&listable); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(listable); d < 71*time.Hour || d > 73*time.Hour {
+		t.Fatalf("listable_at after rename in %v, want ~72h", d)
+	}
+
 	// 72h cooldown now applies.
 	_, body = alice.do("GET", "/v1/ids/"+maxID+"/rename", nil)
 	if el = data(t, body); el["eligible"].(bool) {

@@ -29,7 +29,7 @@ type Repository interface {
 	ListPending(ctx context.Context, limit int32) ([]Request, error)
 	// Finalize performs the rename in one transaction: swap the name,
 	// quarantine the old one, record history, restart the cooldown.
-	Finalize(ctx context.Context, requestID uuid.UUID, cooldown, quarantine time.Duration) (Request, error)
+	Finalize(ctx context.Context, requestID uuid.UUID, cooldown, quarantine, hold time.Duration) (Request, error)
 	Close(ctx context.Context, requestID uuid.UUID, status Status, reason string) (Request, error)
 	History(ctx context.Context, maxID uuid.UUID) ([]HistoryEntry, error)
 }
