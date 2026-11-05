@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -14,13 +16,17 @@ import (
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/evmrpc"
+	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
+	"github.com/max/max-core/internal/pricing"
 	"github.com/max/max-core/internal/renames"
 	"github.com/max/max-core/internal/resolver"
 	"github.com/max/max-core/internal/routing/nearintents"
 	"github.com/max/max-core/internal/server"
 	"github.com/max/max-core/internal/shared"
+	"github.com/max/max-core/internal/solanarpc"
 	"github.com/max/max-core/internal/verifications"
 	"github.com/max/max-core/internal/wallets"
 	"github.com/max/max-core/internal/xapi"
@@ -60,7 +66,8 @@ func run() error {
 		SessionSecret: cfg.Auth.SessionSecret,
 	})
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
-	maxidSvc := maxids.NewService(maxids.NewRepository(pool))
+	maxidRepo := maxids.NewRepository(pool)
+	maxidSvc := maxids.NewService(maxidRepo, newRegistrationGate(cfg, maxidRepo))
 	resolverSvc := resolver.NewService(resolver.NewRepository(pool))
 
 	cc := cfg.Payments.CrossChain
@@ -162,4 +169,37 @@ func adminSet(ids []uuid.UUID) func(uuid.UUID) bool {
 		set[id] = true
 	}
 	return func(id uuid.UUID) bool { return set[id] }
+}
+
+// newRegistrationGate builds the MAX ID claim balance gate. It counts wallets
+// on every chain that has an RPC URL, skipping testnets in production. With a
+// zero minimum it never touches wallets, RPC or the price feed.
+func newRegistrationGate(cfg config.Config, wallets maxids.WalletLister) maxids.BalanceGate {
+	feed := pricing.NewCached(
+		pricing.NewCoinGecko(cfg.Pricing.URL, &http.Client{Timeout: 10 * time.Second}),
+		cfg.Pricing.TTL, cfg.Pricing.MaxAge, time.Now)
+
+	var gateChains []chains.Chain
+	evm := map[string]settle.EVMRPC{}
+	sol := map[string]settle.SolanaRPC{}
+	for _, c := range chains.Supported {
+		url, ok := cfg.Payments.RPCURLs[c.Key]
+		if !ok || (c.Testnet && cfg.IsProduction()) {
+			continue
+		}
+		switch c.Namespace {
+		case chains.NamespaceEVM:
+			evm[c.Key] = evmrpc.New(url)
+		case chains.NamespaceSolana:
+			sol[c.Key] = solanarpc.New(url)
+		default:
+			continue
+		}
+		gateChains = append(gateChains, c)
+	}
+	readers := map[chains.Namespace]maxids.BalanceReader{
+		chains.NamespaceEVM:    settle.NewEVMBalances(evm),
+		chains.NamespaceSolana: settle.NewSolana(sol),
+	}
+	return maxids.NewBalanceGate(cfg.Registration.MinBalanceUSD, wallets, readers, feed, gateChains)
 }

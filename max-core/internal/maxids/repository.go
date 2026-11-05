@@ -69,6 +69,28 @@ func (r *repository) CountByOwner(ctx context.Context, owner uuid.UUID) (int64, 
 	return n, nil
 }
 
+func (r *repository) ListActiveWallets(ctx context.Context, owner uuid.UUID) ([]WalletRef, error) {
+	rows, err := r.q.ListWalletsByAccount(ctx, owner)
+	if err != nil {
+		return nil, shared.ErrInternal.WithError(err)
+	}
+	out := make([]WalletRef, 0, len(rows))
+	for _, w := range rows {
+		out = append(out, WalletRef{Namespace: chains.Namespace(w.ChainNamespace), Address: w.Address})
+	}
+	return out, nil
+}
+
+func (r *repository) RecordGateCheck(ctx context.Context, owner uuid.UUID, requiredUSD float64, countedUSD *float64, passed bool) error {
+	meta := map[string]any{"requiredUsd": requiredUSD, "passed": passed}
+	if countedUSD != nil {
+		meta["countedUsd"] = *countedUSD
+	}
+	return audit.Write(ctx, r.q, audit.Entry{
+		Actor: &owner, Action: "registration_gate", ResourceType: "account", ResourceID: owner.String(), Metadata: meta,
+	})
+}
+
 func (r *repository) Create(ctx context.Context, owner uuid.UUID, canonical string, typ Type, displayName string) (MaxID, error) {
 	var out MaxID
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {

@@ -47,7 +47,16 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+type gateRecord struct {
+	owner   uuid.UUID
+	counted *float64
+	need    float64
+	passed  bool
+}
+
 type fakeRepo struct {
+	creates  int
+	gates    []gateRecord
 	reserved map[string]Reserved
 	ids      map[uuid.UUID]MaxID
 	wallets  map[uuid.UUID]struct {
@@ -96,7 +105,17 @@ func (f *fakeRepo) CountByOwner(_ context.Context, owner uuid.UUID) (int64, erro
 	return n, nil
 }
 
+func (f *fakeRepo) ListActiveWallets(context.Context, uuid.UUID) ([]WalletRef, error) {
+	return nil, nil
+}
+
+func (f *fakeRepo) RecordGateCheck(_ context.Context, owner uuid.UUID, required float64, counted *float64, passed bool) error {
+	f.gates = append(f.gates, gateRecord{owner, counted, required, passed})
+	return nil
+}
+
 func (f *fakeRepo) Create(ctx context.Context, owner uuid.UUID, n string, typ Type, display string) (MaxID, error) {
+	f.creates++
 	if st, _ := f.NameStatus(ctx, n); st != "" {
 		return MaxID{}, ErrNameTaken
 	}
@@ -182,7 +201,7 @@ func (f *fakeRepo) addWallet(owner uuid.UUID, ns chains.Namespace) uuid.UUID {
 
 func TestCheckAvailability(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo)
+	svc := NewService(repo, nil)
 	ctx := context.Background()
 	_, _ = svc.Claim(ctx, uuid.New(), ClaimInput{Name: "taken"})
 
@@ -242,7 +261,7 @@ func TestClaim(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(repo)
 			}
-			m, err := NewService(repo).Claim(ctx, owner, tt.in)
+			m, err := NewService(repo, nil).Claim(ctx, owner, tt.in)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("err = %v, want %v", err, tt.wantErr)
@@ -279,7 +298,7 @@ func TestSetDestination(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := newFakeRepo()
-			svc := NewService(repo)
+			svc := NewService(repo, nil)
 			m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
 			walletID := tt.wallet(repo)
 
@@ -302,7 +321,7 @@ func TestSetDestination(t *testing.T) {
 
 func TestUpdateProfile_RejectsNonHTTPSAvatar(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo)
+	svc := NewService(repo, nil)
 	owner := uuid.New()
 	m, _ := svc.Claim(context.Background(), owner, ClaimInput{Name: "yoda"})
 
@@ -334,7 +353,7 @@ func TestSetSettlement(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := newFakeRepo()
-			svc := NewService(repo)
+			svc := NewService(repo, nil)
 			m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
 			for _, ns := range tt.wallets {
 				w := repo.addWallet(owner, ns)
@@ -356,5 +375,61 @@ func TestSetSettlement(t *testing.T) {
 				t.Fatalf("settlement %+v", got.Settlement)
 			}
 		})
+	}
+}
+
+type stubGate struct {
+	err     error
+	enabled bool
+}
+
+func (g stubGate) Check(context.Context, uuid.UUID) error { return g.err }
+func (g stubGate) Enabled() bool                          { return g.enabled }
+
+func TestClaim_GateRunsBeforeCreate(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	insufficient := ErrInsufficientRegistrationBalance.WithDetails(map[string]any{"requiredUsd": 100.0, "countedUsd": 90.0})
+	for _, gateErr := range []error{insufficient, ErrPriceUnavailable} {
+		repo := newFakeRepo()
+		_, err := NewService(repo, stubGate{err: gateErr, enabled: true}).Claim(ctx, owner, ClaimInput{Name: "yoda"})
+		if !errors.Is(err, gateErr) {
+			t.Fatalf("err = %v, want %v", err, gateErr)
+		}
+		if repo.creates != 0 {
+			t.Fatalf("Create called %d times despite gate failure", repo.creates)
+		}
+	}
+}
+
+func TestClaim_GateAuditedOnFailureAndPass(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	repo := newFakeRepo()
+	insufficient := ErrInsufficientRegistrationBalance.WithDetails(map[string]any{"requiredUsd": 100.0, "countedUsd": 90.0})
+	_, _ = NewService(repo, stubGate{err: insufficient, enabled: true}).Claim(ctx, owner, ClaimInput{Name: "yoda"})
+	if _, err := NewService(repo, stubGate{enabled: true}).Claim(ctx, owner, ClaimInput{Name: "yoda"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.gates) != 2 || repo.gates[0].passed || repo.gates[0].counted == nil || *repo.gates[0].counted != 90 || repo.gates[0].need != 100 || !repo.gates[1].passed {
+		t.Fatalf("gate audit = %+v", repo.gates)
+	}
+}
+
+func TestClaim_DisabledGateNotAudited(t *testing.T) {
+	repo := newFakeRepo()
+	if _, err := NewService(repo, stubGate{}).Claim(context.Background(), uuid.New(), ClaimInput{Name: "yoda"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.gates) != 0 {
+		t.Fatalf("disabled gate audited: %+v", repo.gates)
+	}
+}
+
+func TestClaim_GateRunsAfterCheapChecks(t *testing.T) {
+	repo := newFakeRepo()
+	_, err := NewService(repo, stubGate{err: ErrPriceUnavailable, enabled: true}).Claim(context.Background(), uuid.New(), ClaimInput{Name: "admin"})
+	if !errors.Is(err, ErrNameReserved) {
+		t.Fatalf("err = %v", err)
 	}
 }

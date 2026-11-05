@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -235,7 +236,9 @@ func Load() (Config, error) {
 		errs = append(errs, errors.New("MARKET_FEE_BPS must be between 0 and 5000"))
 	}
 	cfg.Registration = RegistrationConfig{MinBalanceUSD: number("REGISTRATION_MIN_BALANCE_USD", "100")}
-	if cfg.Registration.MinBalanceUSD < 0 {
+	if m := cfg.Registration.MinBalanceUSD; math.IsNaN(m) || math.IsInf(m, 0) {
+		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must be a finite number"))
+	} else if m < 0 {
 		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must not be negative"))
 	}
 	cfg.Pricing = PricingConfig{

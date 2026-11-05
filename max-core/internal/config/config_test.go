@@ -82,3 +82,15 @@ func TestLoad_FeeBPSRange(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_RegistrationMinBalanceRejectsNonFinite(t *testing.T) {
+	for _, v := range []string{"NaN", "Inf", "+Inf", "-Inf"} {
+		t.Run(v, func(t *testing.T) {
+			baseEnv(t)
+			t.Setenv("REGISTRATION_MIN_BALANCE_USD", v)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted REGISTRATION_MIN_BALANCE_USD=%s", v)
+			}
+		})
+	}
+}

@@ -25,3 +25,8 @@ var (
 	ErrSettlementNotFound    = shared.NewAppError("SETTLEMENT_NOT_FOUND", http.StatusNotFound, "no settlement preference configured")
 	ErrMaxIDNotActive        = shared.NewAppError("MAX_ID_NOT_ACTIVE", http.StatusConflict, "MAX ID is not active")
 )
+
+var (
+	ErrInsufficientRegistrationBalance = shared.NewAppError("INSUFFICIENT_REGISTRATION_BALANCE", http.StatusForbidden, "linked wallets do not hold enough value to register a MAX ID")
+	ErrPriceUnavailable                = shared.NewAppError("PRICE_UNAVAILABLE", http.StatusServiceUnavailable, "wallet balances could not be priced right now; try again shortly")
+)

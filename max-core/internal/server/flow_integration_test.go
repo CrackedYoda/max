@@ -138,7 +138,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	_, _ = rand.Read(seed)
 	attestor, _ := agents.NewAttestor(seed)
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
-	maxidSvc := maxids.NewService(maxids.NewRepository(pool))
+	maxidSvc := maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))
 	agentSvc := agents.NewService(agents.Deps{
 		Repo: agents.NewRepository(pool), Payments: paySvc, Wallets: walletSvc, IDs: maxidSvc,
 		WalletProofs: authSvc, Attestor: attestor, CredentialSecret: strings.Repeat("a", 32), Log: zap.NewNop(),
@@ -164,7 +164,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		AuthService: authSvc,
 		Auth:        auth.NewHandler(authSvc, auth.CookieConfig{TTL: time.Hour}),
 		Wallets:     wallets.NewHandler(wallets.NewService(wallets.NewRepository(pool))),
-		MaxIDs:      maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool))),
+		MaxIDs:      maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))),
 		Resolver:    resolver.NewHandler(resolverSvc),
 		Payments:    payments.NewHandler(paySvc),
 	})

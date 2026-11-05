@@ -10,6 +10,8 @@ type AppError struct {
 	Status  int
 	Message string
 	Err     error
+	// Details is optional machine-readable context returned to the client.
+	Details map[string]any
 }
 
 func NewAppError(code string, status int, message string) *AppError {
@@ -43,6 +45,13 @@ func (e *AppError) WithError(err error) *AppError {
 func (e *AppError) WithMessage(msg string) *AppError {
 	c := *e
 	c.Message = msg
+	return &c
+}
+
+// WithDetails clones the sentinel and attaches response details.
+func (e *AppError) WithDetails(d map[string]any) *AppError {
+	c := *e
+	c.Details = d
 	return &c
 }
 

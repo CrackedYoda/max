@@ -10,8 +10,9 @@ import (
 var ERC20TransferTopic = "0x" + hex.EncodeToString(keccak256([]byte("Transfer(address,address,uint256)")))
 
 const (
-	erc20TransferSelector = "a9059cbb" // transfer(address,uint256)
-	ERC20DecimalsCallData = "0x313ce567"
+	erc20TransferSelector  = "a9059cbb" // transfer(address,uint256)
+	ERC20DecimalsCallData  = "0x313ce567"
+	erc20BalanceOfSelector = "70a08231" // balanceOf(address)
 )
 
 // EncodeERC20Transfer builds calldata for transfer(to, amount).
@@ -40,4 +41,9 @@ func ParseHexBig(s string) (*big.Int, bool) {
 		return new(big.Int), true
 	}
 	return new(big.Int).SetString(s, 16)
+}
+
+// EncodeERC20BalanceOf builds calldata for balanceOf(owner).
+func EncodeERC20BalanceOf(lowerOwner string) string {
+	return "0x" + erc20BalanceOfSelector + padAddress(lowerOwner)
 }
