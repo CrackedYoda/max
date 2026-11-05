@@ -1419,6 +1419,26 @@ func (q *Queries) InsertMarketStrike(ctx context.Context, arg InsertMarketStrike
 	return err
 }
 
+const leaseMarketSaleCheck = `-- name: LeaseMarketSaleCheck :execrows
+UPDATE market_sales SET next_check_at = now() + make_interval(secs => $1::double precision)
+WHERE id = $2 AND status IN ('submitted', 'confirming')
+`
+
+type LeaseMarketSaleCheckParams struct {
+	LeaseSeconds float64
+	ID           uuid.UUID
+}
+
+// Re-leases one claimed sale right before it is observed, so a slow batch
+// never outlives the claim's lease; 0 rows means the sale moved on.
+func (q *Queries) LeaseMarketSaleCheck(ctx context.Context, arg LeaseMarketSaleCheckParams) (int64, error) {
+	result, err := q.db.Exec(ctx, leaseMarketSaleCheck, arg.LeaseSeconds, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listActiveMarketListings = `-- name: ListActiveMarketListings :many
 SELECT l.id, l.max_id, l.seller_account_id, l.chain, l.asset_address, l.asset_decimals, l.price_base_units, l.payout_address, l.status, l.status_reason, l.expires_at, l.created_at, l.updated_at FROM market_listings l
 WHERE l.status = 'active'

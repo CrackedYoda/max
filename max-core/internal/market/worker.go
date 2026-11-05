@@ -19,12 +19,18 @@ const (
 	// recheckPending re-checks a seen transaction until it is finalized.
 	recheckPending = 10 * time.Second
 	// observeLease holds a claimed sale away from other workers while one
-	// observes it; it is also the retry delay after an RPC failure.
+	// observes it; it is also the retry delay after an RPC failure. Each sale
+	// is re-leased right before it is observed, so a slow batch never
+	// outlives its claim.
 	observeLease = 30 * time.Second
 	// observeTimeout bounds one sale's RPC calls.
 	observeTimeout = 20 * time.Second
-	tickBatch      = 100
-	fundingBatch   = 100
+	// observeBudget caps each observe step of a Tick, so an RPC outage
+	// cannot hold up lock expiry or the listing sweep. Claimed sales left
+	// unobserved fall due again when their lease ends.
+	observeBudget = 60 * time.Second
+	tickBatch     = 100
+	fundingBatch  = 100
 	// reasonTxNotFound is the expiry reason once the deadline passes.
 	reasonTxNotFound = "tx not found or not a payment for this sale"
 	reasonLockEnded  = "payment window ended without a transaction"
@@ -93,9 +99,7 @@ func (s *Service) Tick(ctx context.Context) (Result, error) {
 	if due, err := s.repo.ClaimDueSales(ctx, tickBatch, observeLease); err != nil {
 		errs = append(errs, err)
 	} else {
-		for _, sale := range due {
-			s.observe(ctx, sale.ID, &res)
-		}
+		s.observeAll(ctx, due, &res)
 	}
 
 	if err := s.expireLocks(ctx, &res); err != nil {
@@ -105,9 +109,7 @@ func (s *Service) Tick(ctx context.Context) (Result, error) {
 	if past, err := s.repo.ClaimSalesPastDeadline(ctx, s.now().Add(-txDeadlineGrace), tickBatch, observeLease); err != nil {
 		errs = append(errs, err)
 	} else {
-		for _, sale := range past {
-			s.observe(ctx, sale.ID, &res)
-		}
+		s.observeAll(ctx, past, &res)
 	}
 
 	if n, err := s.repo.ExpireListings(ctx, s.now(), tickBatch); err != nil {
@@ -122,6 +124,27 @@ func (s *Service) Tick(ctx context.Context) (Result, error) {
 		res.FundingChecked = n
 	}
 	return res, errors.Join(errs...)
+}
+
+// observeAll observes claimed sales in order until s.observeBudget runs out;
+// the rest keep their lease and fall due on a later tick.
+func (s *Service) observeAll(ctx context.Context, sales []Sale, res *Result) {
+	bctx, cancel := context.WithTimeout(ctx, s.observeBudget)
+	defer cancel()
+	for i, sale := range sales {
+		if bctx.Err() != nil {
+			s.log.Warn("market observe budget spent", zap.Int("left", len(sales)-i))
+			return
+		}
+		ok, err := s.repo.LeaseSale(bctx, sale.ID, observeLease)
+		if err != nil {
+			s.log.Warn("market lease sale", zap.String("sale_id", sale.ID.String()), zap.Error(err))
+			continue
+		}
+		if ok {
+			s.observe(bctx, sale.ID, res)
+		}
+	}
 }
 
 // observe runs ObserveSale on one claimed sale and counts the outcome.

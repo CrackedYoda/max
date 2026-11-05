@@ -52,6 +52,7 @@ type fakeRepo struct {
 	clock    func() time.Time
 	events   []fakeEvent
 	expiries map[uuid.UUID]Expiry
+	leases   int
 }
 
 func newFakeRepo() *fakeRepo {
@@ -203,6 +204,8 @@ func (f *fakeRepo) Inbox(context.Context, uuid.UUID) (Inbox, error) { return Inb
 type fakeAdapter struct {
 	fundsErr error
 	obs      settle.Observation
+	delay    time.Duration // Observe blocks this long, or until ctx ends
+	observed int
 }
 
 func (a *fakeAdapter) Quote(context.Context, settle.Order) (settle.Quote, error) {
@@ -214,7 +217,15 @@ func (a *fakeAdapter) CheckFunds(context.Context, settle.Order, settle.Quote) er
 func (a *fakeAdapter) BuildTx(o settle.Order, _ settle.Quote) (settle.Instructions, error) {
 	return settle.Instructions{Solana: []settle.SolanaIx{{Kind: "memo", Memo: "max:sale:" + o.SaleID.String()}}}, nil
 }
-func (a *fakeAdapter) Observe(context.Context, settle.Order, string) (settle.Observation, error) {
+func (a *fakeAdapter) Observe(ctx context.Context, _ settle.Order, _ string) (settle.Observation, error) {
+	a.observed++
+	if a.delay > 0 {
+		select {
+		case <-time.After(a.delay):
+		case <-ctx.Done():
+			return settle.Observation{}, ctx.Err()
+		}
+	}
 	return a.obs, nil
 }
 func (a *fakeAdapter) Balances(context.Context, chains.Chain, string) (map[string]*big.Int, error) {

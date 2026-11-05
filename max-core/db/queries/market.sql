@@ -147,6 +147,12 @@ UPDATE market_sales m SET next_check_at = now() + make_interval(secs => sqlc.arg
 FROM due WHERE m.id = due.id
 RETURNING m.*;
 
+-- name: LeaseMarketSaleCheck :execrows
+-- Re-leases one claimed sale right before it is observed, so a slow batch
+-- never outlives the claim's lease; 0 rows means the sale moved on.
+UPDATE market_sales SET next_check_at = now() + make_interval(secs => sqlc.arg(lease_seconds)::double precision)
+WHERE id = sqlc.arg(id) AND status IN ('submitted', 'confirming');
+
 -- name: ListExpiredLockedMarketSales :many
 -- Candidates only: ExpireSale re-checks each under the max_ids and sale locks.
 SELECT * FROM market_sales

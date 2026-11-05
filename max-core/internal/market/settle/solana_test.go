@@ -410,7 +410,10 @@ func TestObserve_PaidTowardSale(t *testing.T) {
 		"ToAnotherAccount":     {buyer, []ixSpec{transferChecked(usdc, b, ata(t, otherMnt), buyer, "1000000")}, "finalized", false, false},
 		"MemoOnly":             {buyer, []ixSpec{memoOK}, "finalized", false, false},
 		"Token2022":            {buyer, []ixSpec{{chains.SPLToken2022Program, goodIxs(t)[1].parsed}}, "finalized", false, false},
-		"UncheckedTransfer":    {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": b, "destination": tr, "authority": buyer, "amount": "5"}}}}, "finalized", false, false},
+		"UncheckedTransfer":    {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": b, "destination": tr, "authority": buyer, "amount": "5"}}}}, "finalized", false, true},
+		"UncheckedToSeller":    {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": b, "destination": se, "authority": buyer, "amount": "5"}}}}, "finalized", false, true},
+		"UncheckedElsewhere":   {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": b, "destination": ata(t, otherMnt), "authority": buyer, "amount": "5"}}}}, "finalized", false, false},
+		"UncheckedFromOther":   {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": se, "destination": tr, "authority": seller, "amount": "5"}}}}, "finalized", false, false},
 		"ExactButNotFinalized": {buyer, goodIxs(t), "confirmed", false, false},
 		"ExactButFailed":       {buyer, goodIxs(t), "finalized", true, false},
 	}

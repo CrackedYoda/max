@@ -326,6 +326,9 @@ func (r *repository) AttachTx(ctx context.Context, saleID, buyer uuid.UUID, txHa
 			if cur.TxHash != nil {
 				return ErrTxMismatch.WithMessage("a different transaction was already submitted for this sale")
 			}
+			if cur.Status == SaleExpired && cur.BuyerAccountID == buyer {
+				return errExpiredMeanwhile
+			}
 			return ErrSaleExpired.WithMessage("this sale is " + cur.Status + " and no longer accepts a transaction")
 		}
 		if err != nil {
@@ -335,6 +338,11 @@ func (r *repository) AttachTx(ctx context.Context, saleID, buyer uuid.UUID, txHa
 		from := SaleLocked
 		return event(ctx, q, saleID, "submitted", &from, row.Status, map[string]any{"tx_hash": txHash})
 	})
+	if errors.Is(err, errExpiredMeanwhile) {
+		// The worker expired the unpaid sale after the caller read it as
+		// locked: this is a late payment, judged under its own lock.
+		return r.AttachLateTx(ctx, saleID, buyer, txHash)
+	}
 	if database.IsUniqueViolation(err, "market_sales_tx_hash_idx") {
 		return Sale{}, ErrTxMismatch.WithMessage("this transaction is already attached to another sale")
 	}
@@ -343,6 +351,10 @@ func (r *repository) AttachTx(ctx context.Context, saleID, buyer uuid.UUID, txHa
 	}
 	return out, nil
 }
+
+// errExpiredMeanwhile signals, inside AttachTx's transaction, that the sale
+// expired unpaid between the caller's read and the attach.
+var errExpiredMeanwhile = errors.New("market: sale expired before the transaction was attached")
 
 func (r *repository) ProgressSale(ctx context.Context, saleID uuid.UUID, p Progress) (Sale, error) {
 	var out Sale

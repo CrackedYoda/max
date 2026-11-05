@@ -39,6 +39,14 @@ func (r *repository) ClaimSalesPastDeadline(ctx context.Context, cutoff time.Tim
 	return toSales(rows), nil
 }
 
+func (r *repository) LeaseSale(ctx context.Context, saleID uuid.UUID, lease time.Duration) (bool, error) {
+	n, err := r.q.LeaseMarketSaleCheck(ctx, generated.LeaseMarketSaleCheckParams{LeaseSeconds: lease.Seconds(), ID: saleID})
+	if err != nil {
+		return false, shared.ErrInternal.WithError(err)
+	}
+	return n == 1, nil
+}
+
 func (r *repository) ExpiredLocks(ctx context.Context, cutoff time.Time, limit int) ([]Sale, error) {
 	rows, err := r.q.ListExpiredLockedMarketSales(ctx, generated.ListExpiredLockedMarketSalesParams{Cutoff: cutoff, RowLimit: int32(limit)})
 	if err != nil {

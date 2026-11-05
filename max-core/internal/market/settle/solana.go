@@ -258,15 +258,20 @@ type parsedIx struct {
 	} `json:"info"`
 }
 
-// paidTowardSale reports whether tx contains a transferChecked of the sale's
-// mint from the buyer's token account to the seller's or the treasury's.
+// paidTowardSale reports whether tx moved any of the sale's mint from the
+// buyer's token account to the seller's or the treasury's: a transferChecked
+// of the mint, or an unchecked transfer, which carries no mint but moves it
+// all the same because associated token accounts are mint-specific.
 func paidTowardSale(tx *solanarpc.Transaction, o Order, a atas) bool {
 	for _, ins := range tx.AllInstructions() {
 		if ins.ProgramID != TokenProgram || len(ins.Parsed) == 0 || ins.Parsed[0] != '{' {
 			continue
 		}
 		var p parsedIx
-		if json.Unmarshal(ins.Parsed, &p) != nil || p.Type != "transferChecked" || p.Info.Mint != o.Mint || p.Info.Source != a.buyer {
+		if json.Unmarshal(ins.Parsed, &p) != nil || p.Info.Source != a.buyer {
+			continue
+		}
+		if p.Type != "transfer" && (p.Type != "transferChecked" || p.Info.Mint != o.Mint) {
 			continue
 		}
 		if p.Info.Destination == a.seller || p.Info.Destination == a.treasury {

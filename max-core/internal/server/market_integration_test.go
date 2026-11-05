@@ -1663,3 +1663,25 @@ func TestMarket_ListingSweep(t *testing.T) {
 		t.Fatalf("rename after sweep: %d %v", code, body)
 	}
 }
+
+// Submit read the sale as locked, then the worker expired it before AttachTx
+// ran: the transaction must take the late-payment path, not SALE_EXPIRED.
+func TestMarket_SubmitLosingRaceToExpiryTakesLatePath(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	_, listingID, saleID := buyAndExpire(t, env, alice, bob, "yoda")
+	repo := market.NewRepository(env.pool)
+	out, err := repo.AttachTx(context.Background(), uuid.MustParse(saleID), bob.account, solSigFor(81))
+	if err != nil || out.Status != market.SaleConfirming || out.TxHash == nil || *out.TxHash != solSigFor(81) {
+		t.Fatalf("attach after expiry: %v %+v", err, out)
+	}
+	if st := str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID); st != "locked" {
+		t.Fatalf("listing %s", st)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'late_submitted'`, saleID); n != 1 {
+		t.Fatalf("late_submitted events = %d", n)
+	}
+	if res := tick(t, env); res.Completed != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+}

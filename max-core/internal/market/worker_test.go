@@ -125,6 +125,18 @@ func (f *fakeRepo) AttachLateTx(_ context.Context, id, buyer uuid.UUID, h string
 	return s, nil
 }
 
+func (f *fakeRepo) LeaseSale(_ context.Context, id uuid.UUID, lease time.Duration) (bool, error) {
+	s, ok := f.sales[id]
+	if !ok || (s.Status != SaleSubmitted && s.Status != SaleConfirming) {
+		return false, nil
+	}
+	next := f.now().Add(lease)
+	s.NextCheckAt = &next
+	f.sales[id] = s
+	f.leases++
+	return true, nil
+}
+
 func (f *fakeRepo) ExpireListings(_ context.Context, cutoff time.Time, limit int) (int, error) {
 	n := 0
 	for id, l := range f.listings {
@@ -470,5 +482,41 @@ func TestObserveSale_MismatchEventOnce(t *testing.T) {
 	}
 	if n := h.repo.eventsOf(s.ID, "tx_mismatch"); n != 1 || h.repo.sales[s.ID].Status != SaleSubmitted {
 		t.Fatalf("tx_mismatch events %d, status %s", n, h.repo.sales[s.ID].Status)
+	}
+}
+
+// A hung RPC on one sale must not hold up lock expiry or the sweep: the
+// observe step stops at its budget and leaves the rest for the next tick.
+func TestTick_SlowObserveStillExpiresLocks(t *testing.T) {
+	h := newHarness(t, nil)
+	start := time.Now()
+	h.at(start)
+	v, err := h.buy("buy-key-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ { // submitted sales on other names whose RPC hangs
+		slow := v.Sale
+		tx, lock := validSig(), start.Add(time.Hour)
+		slow.ID, slow.MaxID, slow.ListingID, slow.Status = uuid.New(), uuid.New(), nil, SaleSubmitted
+		slow.TxHash, slow.SubmittedAt, slow.NextCheckAt, slow.LockExpiresAt = &tx, &start, &start, &lock
+		h.repo.sales[slow.ID] = slow
+	}
+	h.adapter.delay = time.Hour
+	h.svc.observeBudget = 50 * time.Millisecond
+	h.at(start.Add(h.svc.cfg.BuyLock))
+	began := time.Now()
+	res := h.tick(t)
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("tick took %v", took)
+	}
+	if res.Expired != 1 || h.repo.sales[v.Sale.ID].Status != SaleExpired {
+		t.Fatalf("lock not expired: %+v %s", res, h.repo.sales[v.Sale.ID].Status)
+	}
+	if h.adapter.observed != 1 {
+		t.Fatalf("observed %d sales; the rest should wait for the next tick", h.adapter.observed)
+	}
+	if h.repo.leases != 1 {
+		t.Fatalf("re-leased %d sales, want only the one observed", h.repo.leases)
 	}
 }

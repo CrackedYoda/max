@@ -303,6 +303,9 @@ type Repository interface {
 	// deadline anchor (see txDeadline) is at or before cutoff and that no
 	// worker holds.
 	ClaimSalesPastDeadline(ctx context.Context, cutoff time.Time, limit int, lease time.Duration) ([]Sale, error)
+	// LeaseSale pushes a submitted or confirming sale's next_check_at to
+	// now + lease; false means the sale is no longer submitted or confirming.
+	LeaseSale(ctx context.Context, saleID uuid.UUID, lease time.Duration) (bool, error)
 	// ExpiredLocks lists unpaid locked sales whose lock ended at or before cutoff.
 	ExpiredLocks(ctx context.Context, cutoff time.Time, limit int) ([]Sale, error)
 	// UnlapsedOffers lists accepted offers whose sale expired unpaid.

@@ -35,13 +35,15 @@ type Service struct {
 	agents   AgentPolicy
 	log      *zap.Logger
 	now      func() time.Time
+	// observeBudget caps each Tick observe step (see worker.go).
+	observeBudget time.Duration
 }
 
 func NewService(repo Repository, adapters map[chains.Namespace]settle.Adapter, cfg Config, agents AgentPolicy, log *zap.Logger) *Service {
 	if agents == nil {
 		agents = AllowAll{}
 	}
-	return &Service{repo: repo, adapters: adapters, cfg: cfg, agents: agents, log: log, now: time.Now}
+	return &Service{repo: repo, adapters: adapters, cfg: cfg, agents: agents, log: log, now: time.Now, observeBudget: observeBudget}
 }
 
 // Config returns the validated configuration (the HTTP gate reads it).
