@@ -37,3 +37,14 @@ func LookupVerifiedToken(chainKey, canonicalAddr string) (Token, bool) {
 	}
 	return Token{}, false
 }
+
+// VerifiedTokensFor lists the curated tokens of one chain.
+func VerifiedTokensFor(chainKey string) []Token {
+	var out []Token
+	for _, t := range verifiedTokens {
+		if t.Chain == chainKey {
+			out = append(out, t)
+		}
+	}
+	return out
+}

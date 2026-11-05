@@ -3,6 +3,8 @@ package solanarpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math/big"
 
 	"github.com/max/max-core/internal/jsonrpc"
 )
@@ -26,6 +28,13 @@ type InnerInstructions struct {
 	Instructions []ParsedInstruction `json:"instructions"`
 }
 
+// AccountKey is a jsonParsed message account key.
+type AccountKey struct {
+	Pubkey   string `json:"pubkey"`
+	Signer   bool   `json:"signer"`
+	Writable bool   `json:"writable"`
+}
+
 type Transaction struct {
 	Slot      uint64 `json:"slot"`
 	BlockTime *int64 `json:"blockTime"`
@@ -35,6 +44,8 @@ type Transaction struct {
 	} `json:"meta"`
 	Transaction struct {
 		Message struct {
+			// AccountKeys[0] is the fee payer.
+			AccountKeys  []AccountKey        `json:"accountKeys"`
 			Instructions []ParsedInstruction `json:"instructions"`
 		} `json:"message"`
 	} `json:"transaction"`
@@ -105,4 +116,70 @@ func (c *Client) AccountInfo(ctx context.Context, addr string) (*AccountInfo, er
 		return nil, err
 	}
 	return out.Value, nil
+}
+
+// FeePayer returns the first account key, or "" when the transaction has none.
+func (t *Transaction) FeePayer() string {
+	if len(t.Transaction.Message.AccountKeys) == 0 {
+		return ""
+	}
+	return t.Transaction.Message.AccountKeys[0].Pubkey
+}
+
+// Balance returns the lamport balance of addr at confirmed commitment.
+func (c *Client) Balance(ctx context.Context, addr string) (uint64, error) {
+	var out struct {
+		Value uint64 `json:"value"`
+	}
+	cfg := map[string]any{"commitment": "confirmed"}
+	if _, err := c.rpc.Call(ctx, "getBalance", []any{addr, cfg}, &out); err != nil {
+		return 0, err
+	}
+	return out.Value, nil
+}
+
+// TokenAccountsByOwner returns the total base units of mint held across all
+// token accounts of owner.
+func (c *Client) TokenAccountsByOwner(ctx context.Context, owner, mint string) (uint64, error) {
+	var out struct {
+		Value []struct {
+			Account struct {
+				Data struct {
+					Parsed struct {
+						Info struct {
+							TokenAmount struct {
+								Amount string `json:"amount"`
+							} `json:"tokenAmount"`
+						} `json:"info"`
+					} `json:"parsed"`
+				} `json:"data"`
+			} `json:"account"`
+		} `json:"value"`
+	}
+	cfg := map[string]any{"encoding": "jsonParsed", "commitment": "confirmed"}
+	if _, err := c.rpc.Call(ctx, "getTokenAccountsByOwner", []any{owner, map[string]any{"mint": mint}, cfg}, &out); err != nil {
+		return 0, err
+	}
+	total := new(big.Int)
+	for _, v := range out.Value {
+		n, ok := new(big.Int).SetString(v.Account.Data.Parsed.Info.TokenAmount.Amount, 10)
+		if !ok {
+			return 0, fmt.Errorf("solanarpc: bad token amount %q", v.Account.Data.Parsed.Info.TokenAmount.Amount)
+		}
+		total.Add(total, n)
+	}
+	if !total.IsUint64() {
+		return 0, fmt.Errorf("solanarpc: token balance overflows uint64")
+	}
+	return total.Uint64(), nil
+}
+
+// MinimumBalanceForRentExemption returns the lamports needed to keep an
+// account of the given data size rent-exempt.
+func (c *Client) MinimumBalanceForRentExemption(ctx context.Context, size int) (uint64, error) {
+	var out uint64
+	if _, err := c.rpc.Call(ctx, "getMinimumBalanceForRentExemption", []any{size}, &out); err != nil {
+		return 0, err
+	}
+	return out, nil
 }
