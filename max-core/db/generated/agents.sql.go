@@ -90,7 +90,7 @@ func (q *Queries) CreateAgentCredential(ctx context.Context, arg CreateAgentCred
 }
 
 const createAgentPolicy = `-- name: CreateAgentPolicy :one
-INSERT INTO agent_policies (agent_account_id) VALUES ($1) RETURNING agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at
+INSERT INTO agent_policies (agent_account_id) VALUES ($1) RETURNING agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at, market
 `
 
 func (q *Queries) CreateAgentPolicy(ctx context.Context, agentAccountID uuid.UUID) (AgentPolicy, error) {
@@ -103,6 +103,7 @@ func (q *Queries) CreateAgentPolicy(ctx context.Context, agentAccountID uuid.UUI
 		&i.AllowAnyRecipient,
 		&i.Version,
 		&i.UpdatedAt,
+		&i.Market,
 	)
 	return i, err
 }
@@ -238,7 +239,7 @@ func (q *Queries) GetAgentForAdministrator(ctx context.Context, arg GetAgentForA
 }
 
 const getAgentPolicy = `-- name: GetAgentPolicy :one
-SELECT agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at FROM agent_policies WHERE agent_account_id = $1
+SELECT agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at, market FROM agent_policies WHERE agent_account_id = $1
 `
 
 func (q *Queries) GetAgentPolicy(ctx context.Context, agentAccountID uuid.UUID) (AgentPolicy, error) {
@@ -251,6 +252,7 @@ func (q *Queries) GetAgentPolicy(ctx context.Context, agentAccountID uuid.UUID) 
 		&i.AllowAnyRecipient,
 		&i.Version,
 		&i.UpdatedAt,
+		&i.Market,
 	)
 	return i, err
 }
@@ -554,7 +556,7 @@ const updateAgentPolicy = `-- name: UpdateAgentPolicy :one
 UPDATE agent_policies
 SET limits = $2, allowed_recipients = $3, allow_any_recipient = $4, version = version + 1, updated_at = now()
 WHERE agent_account_id = $1
-RETURNING agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at
+RETURNING agent_account_id, limits, allowed_recipients, allow_any_recipient, version, updated_at, market
 `
 
 type UpdateAgentPolicyParams struct {
@@ -579,6 +581,7 @@ func (q *Queries) UpdateAgentPolicy(ctx context.Context, arg UpdateAgentPolicyPa
 		&i.AllowAnyRecipient,
 		&i.Version,
 		&i.UpdatedAt,
+		&i.Market,
 	)
 	return i, err
 }

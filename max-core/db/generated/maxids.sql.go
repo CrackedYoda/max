@@ -16,7 +16,7 @@ const bumpResolutionVersion = `-- name: BumpResolutionVersion :one
 UPDATE max_ids
 SET resolution_version = resolution_version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
 `
 
 func (q *Queries) BumpResolutionVersion(ctx context.Context, id uuid.UUID) (MaxID, error) {
@@ -35,6 +35,8 @@ func (q *Queries) BumpResolutionVersion(ctx context.Context, id uuid.UUID) (MaxI
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }
@@ -53,7 +55,7 @@ func (q *Queries) CountMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UU
 const createMaxID = `-- name: CreateMaxID :one
 INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name)
 VALUES ($1, $2, $3, $4)
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
 `
 
 type CreateMaxIDParams struct {
@@ -84,6 +86,8 @@ func (q *Queries) CreateMaxID(ctx context.Context, arg CreateMaxIDParams) (MaxID
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }
@@ -128,7 +132,7 @@ func (q *Queries) DeleteDestination(ctx context.Context, arg DeleteDestinationPa
 }
 
 const getMaxIDForOwner = `-- name: GetMaxIDForOwner :one
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at FROM max_ids WHERE id = $1 AND owner_account_id = $2
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 AND owner_account_id = $2
 `
 
 type GetMaxIDForOwnerParams struct {
@@ -152,6 +156,8 @@ func (q *Queries) GetMaxIDForOwner(ctx context.Context, arg GetMaxIDForOwnerPara
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }
@@ -241,7 +247,7 @@ func (q *Queries) ListDestinations(ctx context.Context, maxID uuid.UUID) ([]List
 }
 
 const listMaxIDsByOwner = `-- name: ListMaxIDsByOwner :many
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at FROM max_ids WHERE owner_account_id = $1 ORDER BY created_at
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE owner_account_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUID) ([]MaxID, error) {
@@ -266,6 +272,8 @@ func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUI
 			&i.RenameAvailableAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerChangedAt,
+			&i.ListableAt,
 		); err != nil {
 			return nil, err
 		}
@@ -278,7 +286,7 @@ func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUI
 }
 
 const lockMaxIDForOwner = `-- name: LockMaxIDForOwner :one
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at FROM max_ids WHERE id = $1 AND owner_account_id = $2 FOR UPDATE
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 AND owner_account_id = $2 FOR UPDATE
 `
 
 type LockMaxIDForOwnerParams struct {
@@ -302,6 +310,8 @@ func (q *Queries) LockMaxIDForOwner(ctx context.Context, arg LockMaxIDForOwnerPa
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }
@@ -321,7 +331,7 @@ const updateMaxIDProfile = `-- name: UpdateMaxIDProfile :one
 UPDATE max_ids
 SET display_name = $2, description = $3, avatar_url = $4, updated_at = now()
 WHERE id = $1
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
 `
 
 type UpdateMaxIDProfileParams struct {
@@ -352,6 +362,8 @@ func (q *Queries) UpdateMaxIDProfile(ctx context.Context, arg UpdateMaxIDProfile
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }

@@ -19,7 +19,7 @@ SET canonical_name = $1,
     resolution_version = resolution_version + 1,
     updated_at = now()
 WHERE id = $3 AND canonical_name = $4
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
 `
 
 type ApplyRenameParams struct {
@@ -50,6 +50,8 @@ func (q *Queries) ApplyRename(ctx context.Context, arg ApplyRenameParams) (MaxID
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }

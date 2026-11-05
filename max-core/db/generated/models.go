@@ -42,6 +42,25 @@ type AgentCredential struct {
 	CreatedAt      time.Time
 }
 
+type AgentMarketAuthorization struct {
+	ID              uuid.UUID
+	AgentAccountID  uuid.UUID
+	CredentialID    uuid.UUID
+	Action          string
+	SaleID          *uuid.UUID
+	OfferID         *uuid.UUID
+	ListingID       *uuid.UUID
+	Decision        string
+	Reasons         []byte
+	PolicyVersion   int32
+	Chain           string
+	AssetAddress    string
+	AmountBaseUnits string
+	DecidedBy       *uuid.UUID
+	DecidedAt       *time.Time
+	CreatedAt       time.Time
+}
+
 type AgentPolicy struct {
 	AgentAccountID    uuid.UUID
 	Limits            []byte
@@ -49,6 +68,7 @@ type AgentPolicy struct {
 	AllowAnyRecipient bool
 	Version           int32
 	UpdatedAt         time.Time
+	Market            []byte
 }
 
 type AgentTransferAuthorization struct {
@@ -91,6 +111,98 @@ type ExternalVerification struct {
 	CreatedAt         time.Time
 }
 
+type MarketListing struct {
+	ID              uuid.UUID
+	MaxID           uuid.UUID
+	SellerAccountID uuid.UUID
+	Chain           string
+	AssetAddress    string
+	AssetDecimals   int32
+	PriceBaseUnits  string
+	PayoutAddress   string
+	Status          string
+	StatusReason    string
+	ExpiresAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type MarketOffer struct {
+	ID              uuid.UUID
+	MaxID           uuid.UUID
+	BuyerAccountID  uuid.UUID
+	FromAddress     string
+	Chain           string
+	AssetAddress    string
+	AssetDecimals   int32
+	AmountBaseUnits string
+	Status          string
+	DeclineNote     string
+	ExpiresAt       time.Time
+	FundedCheckedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type MarketRestriction struct {
+	ID        uuid.UUID
+	AccountID uuid.UUID
+	Kind      string
+	Until     *time.Time
+	Reason    string
+	CreatedBy *uuid.UUID
+	CreatedAt time.Time
+	LiftedAt  *time.Time
+}
+
+type MarketSale struct {
+	ID                  uuid.UUID
+	MaxID               uuid.UUID
+	ListingID           *uuid.UUID
+	OfferID             *uuid.UUID
+	SellerAccountID     uuid.UUID
+	BuyerAccountID      uuid.UUID
+	BuyerAddress        string
+	SellerPayoutAddress string
+	TreasuryAddress     string
+	Chain               string
+	AssetAddress        string
+	AssetDecimals       int32
+	PriceBaseUnits      string
+	FeeBps              int32
+	FeeBaseUnits        string
+	SellerBaseUnits     string
+	QuotedNetworkFee    string
+	IdempotencyKey      string
+	Status              string
+	StatusReason        string
+	LockExpiresAt       *time.Time
+	TxHash              *string
+	Confirmations       int64
+	SubmittedAt         *time.Time
+	CompletedAt         *time.Time
+	NextCheckAt         *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type MarketSaleEvent struct {
+	ID         uuid.UUID
+	SaleID     uuid.UUID
+	EventType  string
+	FromStatus *string
+	ToStatus   string
+	Detail     []byte
+	CreatedAt  time.Time
+}
+
+type MarketStrike struct {
+	ID        uuid.UUID
+	AccountID uuid.UUID
+	OfferID   *uuid.UUID
+	CreatedAt time.Time
+}
+
 type MaxID struct {
 	ID                uuid.UUID
 	CanonicalName     string
@@ -104,6 +216,8 @@ type MaxID struct {
 	RenameAvailableAt time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	OwnerChangedAt    *time.Time
+	ListableAt        time.Time
 }
 
 type MaxIDDestination struct {
@@ -130,6 +244,7 @@ type MaxIDOwnershipEvent struct {
 	NextOwner     uuid.UUID
 	EventType     string
 	CreatedAt     time.Time
+	SaleID        *uuid.UUID
 }
 
 type NameQuarantine struct {
