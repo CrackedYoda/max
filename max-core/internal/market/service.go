@@ -28,12 +28,6 @@ var (
 	errAwaitingReview  = shared.ErrConflict.WithMessage("this sale is awaiting marketplace review")
 )
 
-// Observer re-check delays until Task 9's worker owns scheduling.
-const (
-	recheckPending  = 10 * time.Second
-	recheckNotFound = 15 * time.Second
-)
-
 type Service struct {
 	repo     Repository
 	adapters map[chains.Namespace]settle.Adapter
@@ -377,6 +371,14 @@ func (s *Service) Submit(ctx context.Context, p shared.Principal, saleID uuid.UU
 	}
 	switch sale.Status {
 	case SaleLocked:
+	case SaleExpired:
+		// A late payment (spec §6 Expiry and late payment): only an unpaid
+		// expiry reaches here, as a sale with a transaction returned above.
+		out, err := s.repo.AttachLateTx(ctx, saleID, p.AccountID, hash)
+		if err != nil {
+			return SaleView{}, err
+		}
+		return SaleView{Sale: out}, nil
 	case SalePendingReview:
 		return SaleView{}, errAwaitingReview
 	default:
@@ -400,8 +402,19 @@ func normalizeTxHash(chainKey, h string) (string, error) {
 	return h, nil
 }
 
-// ObserveSale checks a submitted sale against the chain once and advances it.
-// Task 9's worker drives it on a schedule; tests call it directly.
+// ObserveSale checks a submitted sale against the chain once and advances it
+// (spec §6 Expiry and late payment). The worker drives it on next_check_at;
+// tests call it directly.
+//
+//   - finalized and exact: complete.
+//   - finalized, not exact, but it paid something toward the sale: manual
+//     review, since a human must sort out refunds.
+//   - finalized and paid nothing toward the sale, or not found: keep waiting
+//     until the deadline (txDeadline), then expire. No strike: a tx was
+//     submitted.
+//   - failed on chain: expire.
+//   - seen but not finalized: confirming, re-checked until final, even past
+//     the deadline.
 func (s *Service) ObserveSale(ctx context.Context, saleID uuid.UUID) (Sale, error) {
 	sale, err := s.repo.GetSale(ctx, saleID)
 	if err != nil {
@@ -418,28 +431,59 @@ func (s *Service) ObserveSale(ctx context.Context, saleID uuid.UUID) (Sale, erro
 	if err != nil {
 		return Sale{}, err
 	}
+	now, deadline := s.now(), txDeadline(sale)
+	open := []string{SaleSubmitted, SaleConfirming}
 	switch {
 	case obs.Status == settle.StatusConfirmed && obs.Matches:
 		return s.CompleteObserved(ctx, saleID, obs.Confirmations)
-	case obs.Status == settle.StatusConfirmed:
-		// Funds moved but not as agreed: an admin must sort out refunds.
+	case obs.Status == settle.StatusConfirmed && obs.PaidTowardSale:
 		return s.repo.ProgressSale(ctx, saleID, Progress{
 			From: sale.Status, To: SaleManualReview, Reason: "transaction does not match the sale: " + obs.Reason,
-			Confirmations: obs.Confirmations, Event: "tx_mismatch", Detail: map[string]any{"reason": obs.Reason},
+			Confirmations: obs.Confirmations, Event: "tx_mismatch", Detail: map[string]any{"reason": obs.Reason, "paid_toward_sale": true},
 		})
 	case obs.Status == settle.StatusFailed:
-		return s.repo.ExpireSale(ctx, saleID, "transaction failed on chain")
+		return s.repo.ExpireSale(ctx, saleID, Expiry{From: open, Reason: "transaction failed on chain"})
 	case obs.Status == settle.StatusPending:
-		next := s.now().Add(recheckPending)
-		return s.repo.ProgressSale(ctx, saleID, Progress{
-			From: sale.Status, To: SaleConfirming, Confirmations: obs.Confirmations, NextCheckAt: &next, Event: "confirming",
-		})
-	default:
-		next := s.now().Add(recheckNotFound)
-		return s.repo.ProgressSale(ctx, saleID, Progress{
-			From: sale.Status, To: sale.Status, Confirmations: sale.Confirmations, NextCheckAt: &next,
-		})
+		next := now.Add(recheckPending)
+		p := Progress{From: sale.Status, To: SaleConfirming, Confirmations: obs.Confirmations, NextCheckAt: &next}
+		if sale.Status != SaleConfirming {
+			p.Event = "confirming"
+		}
+		return s.repo.ProgressSale(ctx, saleID, p)
 	}
+	// Not found, or final but not a payment for this sale.
+	mismatch := obs.Status == settle.StatusConfirmed
+	if !now.Before(deadline) {
+		detail := map[string]any{"observation": obs.Status}
+		if mismatch {
+			detail["mismatch"] = obs.Reason
+		}
+		return s.repo.ExpireSale(ctx, saleID, Expiry{From: open, Reason: reasonTxNotFound, Detail: detail})
+	}
+	if mismatch {
+		// A finalized transaction never changes; look again at the deadline.
+		// The status reason carries the mismatch, so a repeat look records
+		// no second event.
+		p := Progress{
+			From: sale.Status, To: sale.Status, Reason: "transaction is not a payment for this sale: " + obs.Reason,
+			Confirmations: sale.Confirmations, NextCheckAt: &deadline,
+		}
+		if sale.StatusReason != p.Reason {
+			p.Event, p.Detail = "tx_mismatch", map[string]any{"reason": obs.Reason, "paid_toward_sale": false}
+		}
+		return s.repo.ProgressSale(ctx, saleID, p)
+	}
+	waited := time.Duration(0)
+	if sale.SubmittedAt != nil {
+		waited = now.Sub(*sale.SubmittedAt)
+	}
+	next := now.Add(recheckNotFound(waited))
+	if next.After(deadline) {
+		next = deadline
+	}
+	return s.repo.ProgressSale(ctx, saleID, Progress{
+		From: sale.Status, To: sale.Status, Reason: sale.StatusReason, Confirmations: sale.Confirmations, NextCheckAt: &next,
+	})
 }
 
 // CompleteObserved completes a sale whose transaction has been verified.

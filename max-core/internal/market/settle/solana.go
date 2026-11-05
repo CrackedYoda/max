@@ -236,7 +236,7 @@ func (s *solana) Observe(ctx context.Context, o Order, txHash string) (Observati
 	if status != "finalized" {
 		return Observation{Status: StatusPending, Reason: "transaction not finalized"}, nil
 	}
-	obs := Observation{Status: StatusConfirmed, Confirmations: 1}
+	obs := Observation{Status: StatusConfirmed, Confirmations: 1, PaidTowardSale: paidTowardSale(tx, o, a)}
 	if obs.Reason = matchSale(tx, o, a); obs.Reason == "" {
 		obs.Matches = true
 	}
@@ -256,6 +256,24 @@ type parsedIx struct {
 			Amount string `json:"amount"`
 		} `json:"tokenAmount"`
 	} `json:"info"`
+}
+
+// paidTowardSale reports whether tx contains a transferChecked of the sale's
+// mint from the buyer's token account to the seller's or the treasury's.
+func paidTowardSale(tx *solanarpc.Transaction, o Order, a atas) bool {
+	for _, ins := range tx.AllInstructions() {
+		if ins.ProgramID != TokenProgram || len(ins.Parsed) == 0 || ins.Parsed[0] != '{' {
+			continue
+		}
+		var p parsedIx
+		if json.Unmarshal(ins.Parsed, &p) != nil || p.Type != "transferChecked" || p.Info.Mint != o.Mint || p.Info.Source != a.buyer {
+			continue
+		}
+		if p.Info.Destination == a.seller || p.Info.Destination == a.treasury {
+			return true
+		}
+	}
+	return false
 }
 
 func amountIs(s string, want *big.Int) bool {

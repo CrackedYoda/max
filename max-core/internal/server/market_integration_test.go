@@ -1317,3 +1317,349 @@ func TestMarket_LiveOfferCountExcludesExpired(t *testing.T) {
 		t.Fatalf("after expiry: %v", body)
 	}
 }
+
+// Task 9: the worker.
+
+func tick(t *testing.T, env *testEnv) market.Result {
+	t.Helper()
+	res, err := env.market.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	return res
+}
+
+func exec(t *testing.T, env *testEnv, query string, args ...any) {
+	t.Helper()
+	if _, err := env.pool.Exec(context.Background(), query, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func str(t *testing.T, env *testEnv, query string, args ...any) string {
+	t.Helper()
+	var s string
+	if err := env.pool.QueryRow(context.Background(), query, args...).Scan(&s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// endLock moves a sale's lock (and any submission) into the past, by more
+// than the transaction deadline when pastDeadline is set.
+func endLock(t *testing.T, env *testEnv, saleID string, pastDeadline bool) {
+	t.Helper()
+	ago := "1 minute"
+	if pastDeadline {
+		ago = "31 minutes"
+	}
+	exec(t, env, `UPDATE market_sales SET lock_expires_at = now() - $2::interval,
+		submitted_at = CASE WHEN submitted_at IS NULL THEN NULL ELSE now() - $2::interval END,
+		next_check_at = CASE WHEN next_check_at IS NULL THEN NULL ELSE now() END WHERE id = $1`, saleID, ago)
+}
+
+func setObs(env *testEnv, obs settle.Observation) {
+	env.settle.mu.Lock()
+	defer env.settle.mu.Unlock()
+	env.settle.obs = obs
+}
+
+// buyAndExpire lists alice's name, has bob buy it and lets the lock end unpaid.
+func buyAndExpire(t *testing.T, env *testEnv, alice, bob party, name string) (maxID uuid.UUID, listingID, saleID string) {
+	t.Helper()
+	maxID = claimID(t, alice, name)
+	makeListable(t, env, maxID)
+	listingID = listName(t, alice, maxID, "25")
+	code, body := buyListing(bob, listingID, "late-buy-"+name)
+	if code != http.StatusCreated {
+		t.Fatalf("buy: %d %v", code, body)
+	}
+	saleID = saleOf(t, body)["id"].(string)
+	if res := tick(t, env); res.Expired != 0 {
+		t.Fatalf("expired inside the lock: %+v", res)
+	}
+	endLock(t, env, saleID, false)
+	if res := tick(t, env); res.Expired != 1 {
+		t.Fatalf("expire: %+v", res)
+	}
+	if st := str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID); st != "active" {
+		t.Fatalf("listing after expiry: %s", st)
+	}
+	return maxID, listingID, saleID
+}
+
+func TestMarket_LateValidTxAfterExpiryCompletes(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id, listingID, saleID := buyAndExpire(t, env, alice, bob, "yoda")
+	if n := count(t, env, `SELECT count(*) FROM market_strikes`); n != 0 {
+		t.Fatalf("buy-now expiry struck: %d", n)
+	}
+
+	code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(21)})
+	if code != http.StatusOK || saleOf(t, body)["status"] != "confirming" {
+		t.Fatalf("late submit: %d %v", code, body)
+	}
+	if st := str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID); st != "locked" {
+		t.Fatalf("listing while the late sale is open: %s", st)
+	}
+	// The same hash again is idempotent; another is refused.
+	if code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(21)}); code != http.StatusOK {
+		t.Fatalf("late resubmit: %d %v", code, body)
+	}
+	if _, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(22)}); errCode(body) != "TX_MISMATCH" {
+		t.Fatalf("second late hash: %v", body)
+	}
+
+	if res := tick(t, env); res.Completed != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	var owner uuid.UUID
+	_ = env.pool.QueryRow(context.Background(), `SELECT owner_account_id FROM max_ids WHERE id = $1`, id).Scan(&owner)
+	if owner != bob.account || str(t, env, `SELECT status FROM market_sales WHERE id = $1`, saleID) != "completed" ||
+		str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID) != "sold" {
+		t.Fatalf("after late completion: owner %v", owner)
+	}
+	var kinds string
+	_ = env.pool.QueryRow(context.Background(),
+		`SELECT string_agg(event_type, ',' ORDER BY created_at) FROM market_sale_events WHERE sale_id = $1`, saleID).Scan(&kinds)
+	if kinds != "created,expired,late_submitted,completed" {
+		t.Fatalf("events: %s", kinds)
+	}
+}
+
+func TestMarket_LateTxAfterResaleGoesToManualReview(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id, listingID, saleID := buyAndExpire(t, env, alice, bob, "yoda")
+
+	// Carol buys the re-activated listing; while her sale is open bob's late
+	// transaction cannot reopen his.
+	code, body := buyListing(carol, listingID, "resale-buy-0001")
+	if code != http.StatusCreated {
+		t.Fatalf("carol buy: %d %v", code, body)
+	}
+	carolSale := saleOf(t, body)["id"].(string)
+	code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(31)})
+	if code != http.StatusOK || saleOf(t, body)["status"] != "manual_review" {
+		t.Fatalf("late submit with an open sale: %d %v", code, body)
+	}
+	if st := str(t, env, `SELECT status FROM market_sales WHERE id = $1`, carolSale); st != "locked" {
+		t.Fatalf("carol's sale disturbed: %s", st)
+	}
+
+	// Carol completes; a late transaction on another expired sale of the old
+	// owner now also goes to review.
+	if code, body = carol.c.do("POST", "/v1/market/sales/"+carolSale+"/submit", map[string]any{"txHash": solSigFor(32)}); code != http.StatusOK {
+		t.Fatalf("carol submit: %d %v", code, body)
+	}
+	if res := tick(t, env); res.Completed != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	dave := newParty(t, env)
+	var daveSale uuid.UUID
+	err := env.pool.QueryRow(context.Background(), `
+		INSERT INTO market_sales (max_id, listing_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address,
+			chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, idempotency_key, status, lock_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'solana-devnet', $8, 6, '25000000', 1000, '2500000', '22500000', 'old-sale', 'expired', now() - interval '1 hour')
+		RETURNING id`, id, listingID, alice.account, dave.account, dave.wallet.address(), alice.wallet.address(), newSol().address(), devnetUSDC).Scan(&daveSale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body = dave.c.do("POST", "/v1/market/sales/"+daveSale.String()+"/submit", map[string]any{"txHash": solSigFor(33)})
+	if code != http.StatusOK || saleOf(t, body)["status"] != "manual_review" || saleOf(t, body)["txHash"] != solSigFor(33) {
+		t.Fatalf("late submit after resale: %d %v", code, body)
+	}
+	var owner uuid.UUID
+	_ = env.pool.QueryRow(context.Background(), `SELECT owner_account_id FROM max_ids WHERE id = $1`, id).Scan(&owner)
+	if owner != carol.account {
+		t.Fatalf("owner %v", owner)
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'market.sale_manual_review' AND resource_id IN ($1, $2)`, saleID, daveSale.String()); n != 2 {
+		t.Fatalf("manual review audit = %d", n)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE event_type = 'late_payment_review'`); n != 2 {
+		t.Fatalf("late review events = %d", n)
+	}
+	// Review sales are not observed.
+	if res := tick(t, env); res != (market.Result{}) {
+		t.Fatalf("tick touched review sales: %+v", res)
+	}
+}
+
+func TestMarket_GarbageTxWaitsThenExpires(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	_, body := buyListing(bob, listingID, "garbage-buy-0001")
+	saleID := saleOf(t, body)["id"].(string)
+	if code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(41)}); code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	setObs(env, settle.Observation{Status: settle.StatusConfirmed, Reason: "no transferChecked of the mint to the treasury account", Confirmations: 1})
+	if res := tick(t, env); res.ManualReview != 0 || res.Expired != 0 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if st := str(t, env, `SELECT status FROM market_sales WHERE id = $1`, saleID); st != "submitted" {
+		t.Fatalf("garbage tx moved the sale to %s", st)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'tx_mismatch'`, saleID); n != 1 {
+		t.Fatalf("tx_mismatch events = %d", n)
+	}
+	// Past the lock the name stays locked until the deadline...
+	endLock(t, env, saleID, false)
+	if res := tick(t, env); res.Expired != 0 || str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID) != "locked" {
+		t.Fatalf("before deadline: %+v", res)
+	}
+	// ...then the sale expires and the listing is back, with no strike.
+	endLock(t, env, saleID, true)
+	if res := tick(t, env); res.Expired != 1 {
+		t.Fatalf("after deadline: %+v", res)
+	}
+	if st, reason := str(t, env, `SELECT status FROM market_sales WHERE id = $1`, saleID), str(t, env, `SELECT status_reason FROM market_sales WHERE id = $1`, saleID); st != "expired" || reason != "tx not found or not a payment for this sale" {
+		t.Fatalf("sale %s %q", st, reason)
+	}
+	if st := str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID); st != "active" {
+		t.Fatalf("listing %s", st)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_strikes`); n != 0 {
+		t.Fatalf("strikes %d", n)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'tx_mismatch'`, saleID); n != 1 {
+		t.Fatalf("tx_mismatch events = %d", n)
+	}
+	// An expired sale with a transaction takes no late payment.
+	if _, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(42)}); errCode(body) != "TX_MISMATCH" {
+		t.Fatalf("resubmit: %v", body)
+	}
+
+	// A mismatch that paid something toward the sale needs a human.
+	carol := newParty(t, env)
+	_, body = buyListing(carol, listingID, "paid-bad-0001")
+	sale2 := saleOf(t, body)["id"].(string)
+	if code, body := carol.c.do("POST", "/v1/market/sales/"+sale2+"/submit", map[string]any{"txHash": solSigFor(43)}); code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	setObs(env, settle.Observation{Status: settle.StatusConfirmed, Reason: "seller transfer amount does not equal the seller amount", PaidTowardSale: true, Confirmations: 1})
+	if res := tick(t, env); res.ManualReview != 1 || str(t, env, `SELECT status FROM market_sales WHERE id = $1`, sale2) != "manual_review" {
+		t.Fatalf("paid mismatch: %+v", res)
+	}
+}
+
+func TestMarket_NotFoundTxExpiresAtDeadline(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	_, body := buyListing(bob, listingID, "notfound-buy-0001")
+	saleID := saleOf(t, body)["id"].(string)
+	bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(51)})
+	setObs(env, settle.Observation{Status: settle.StatusNotFound, Reason: "transaction not found"})
+	tick(t, env)
+	var delay float64
+	_ = env.pool.QueryRow(context.Background(), `SELECT extract(epoch FROM next_check_at - now()) FROM market_sales WHERE id = $1`, saleID).Scan(&delay)
+	if str(t, env, `SELECT status FROM market_sales WHERE id = $1`, saleID) != "submitted" || delay < 5 || delay > 20 {
+		t.Fatalf("not found: next check in %.0fs", delay)
+	}
+	endLock(t, env, saleID, true)
+	if res := tick(t, env); res.Expired != 1 || str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID) != "active" {
+		t.Fatalf("deadline: %+v", res)
+	}
+}
+
+func TestMarket_ExpiredOfferSaleLapsesWithStrike(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "50")
+	_, body := makeOffer(bob, "yoda", "30")
+	offerID := data(t, body)["id"].(string)
+	code, body := alice.c.do("POST", "/v1/market/offers/"+offerID+"/accept", nil)
+	if code != http.StatusCreated {
+		t.Fatalf("accept: %d %v", code, body)
+	}
+	saleID := saleOf(t, body)["id"].(string)
+	endLock(t, env, saleID, false)
+	if res := tick(t, env); res.Expired != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if st := str(t, env, `SELECT status FROM market_sales WHERE id = $1`, saleID); st != "expired" {
+		t.Fatalf("sale %s", st)
+	}
+	if offerStatus(t, env, offerID) != "lapsed" || str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID) != "active" {
+		t.Fatalf("offer %s listing %s", offerStatus(t, env, offerID), str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID))
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_strikes WHERE account_id = $1 AND offer_id = $2`, bob.account, offerID); n != 1 {
+		t.Fatalf("strikes = %d", n)
+	}
+	if res := tick(t, env); res != (market.Result{}) || count(t, env, `SELECT count(*) FROM market_strikes`) != 1 {
+		t.Fatalf("second tick: %+v", res)
+	}
+
+	// Paid late after all: the offer completes and the strike goes.
+	if code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(61)}); code != http.StatusOK || saleOf(t, body)["status"] != "confirming" {
+		t.Fatalf("late submit: %d %v", code, body)
+	}
+	if res := tick(t, env); res.Completed != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if offerStatus(t, env, offerID) != "completed" || count(t, env, `SELECT count(*) FROM market_strikes`) != 0 ||
+		str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID) != "sold" {
+		t.Fatalf("after late offer payment: offer %s", offerStatus(t, env, offerID))
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'market.strike_removed' AND resource_id = $1`, offerID); n != 1 {
+		t.Fatalf("strike removal audit = %d", n)
+	}
+}
+
+func TestMarket_FailedTxOnOfferSaleClosesOfferWithoutStrike(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	offerID, saleID := seedOfferSale(t, env, id, alice, bob)
+	if code, body := bob.c.do("POST", "/v1/market/sales/"+saleID.String()+"/submit", map[string]any{"txHash": solSigFor(71)}); code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	setObs(env, settle.Observation{Status: settle.StatusFailed, Reason: "transaction failed on chain"})
+	if res := tick(t, env); res.Expired != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if offerStatus(t, env, offerID.String()) != "expired" || count(t, env, `SELECT count(*) FROM market_strikes`) != 0 {
+		t.Fatalf("offer %s", offerStatus(t, env, offerID.String()))
+	}
+	// The buyer can offer on the name again.
+	if code, body := makeOffer(bob, "yoda", "30"); code != http.StatusCreated {
+		t.Fatalf("new offer: %d %v", code, body)
+	}
+}
+
+func TestMarket_ListingSweep(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice := newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	if res := tick(t, env); res.ListingsExpired != 0 {
+		t.Fatalf("swept a listing with no expiry: %+v", res)
+	}
+	exec(t, env, `UPDATE market_listings SET expires_at = now() - interval '1 second' WHERE id = $1`, listingID)
+	if res := tick(t, env); res.ListingsExpired != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if st, reason := str(t, env, `SELECT status FROM market_listings WHERE id = $1`, listingID), str(t, env, `SELECT status_reason FROM market_listings WHERE id = $1`, listingID); st != "cancelled" || reason != "expired" {
+		t.Fatalf("listing %s %q", st, reason)
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'market.listing_expired' AND resource_id = $1`, listingID); n != 1 {
+		t.Fatalf("audit = %d", n)
+	}
+	// The name is no longer listed: renames are unblocked.
+	code, body := requestRename(t, alice.c, id.String(), "jedi", alice.wallet, "rename-swept-0001")
+	if errCode(body) == "NAME_LISTED" || code >= 500 {
+		t.Fatalf("rename after sweep: %d %v", code, body)
+	}
+}

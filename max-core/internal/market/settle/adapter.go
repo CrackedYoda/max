@@ -61,6 +61,11 @@ type Observation struct {
 	Matches       bool
 	Reason        string
 	Confirmations int64
+	// PaidTowardSale is true when a finalized, successful transaction moved
+	// at least some of the sale's asset from the buyer's token account to the
+	// seller's or the treasury's. A mismatch that paid something needs a
+	// human; one that paid nothing is just a wrong transaction.
+	PaidTowardSale bool
 }
 
 type Adapter interface {

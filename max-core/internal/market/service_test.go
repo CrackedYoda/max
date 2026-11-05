@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -46,6 +47,11 @@ type fakeRepo struct {
 	restrictions map[string]*Restriction // account|kind
 	strikes      map[uuid.UUID][]time.Time
 	fundingSets  int
+
+	// Worker (worker_test.go).
+	clock    func() time.Time
+	events   []fakeEvent
+	expiries map[uuid.UUID]Expiry
 }
 
 func newFakeRepo() *fakeRepo {
@@ -54,6 +60,7 @@ func newFakeRepo() *fakeRepo {
 		wallets: map[string]uuid.UUID{}, restricted: map[uuid.UUID]bool{},
 		listings: map[uuid.UUID]Listing{}, sales: map[uuid.UUID]Sale{},
 		offers: map[uuid.UUID]Offer{}, restrictions: map[string]*Restriction{}, strikes: map[uuid.UUID][]time.Time{},
+		expiries: map[uuid.UUID]Expiry{},
 	}
 }
 
@@ -103,6 +110,13 @@ func (f *fakeRepo) OpenSale(_ context.Context, in NewSale) (Sale, error) {
 		FeeBaseUnits: in.Fee, SellerBaseUnits: in.SellerAmount, IdempotencyKey: in.IdempotencyKey, Status: in.Status,
 		LockExpiresAt: in.LockExpiresAt}
 	f.sales[s.ID] = s
+	if in.ListingID != nil {
+		if l, ok := f.listings[*in.ListingID]; ok && l.Status == ListingActive {
+			l.Status = ListingLocked
+			f.listings[l.ID] = l
+		}
+	}
+	f.record(s.ID, "created", "", s.Status)
 	return s, nil
 }
 func (f *fakeRepo) SaleByIdempotencyKey(_ context.Context, buyer uuid.UUID, key string) (*Sale, error) {
@@ -115,26 +129,60 @@ func (f *fakeRepo) SaleByIdempotencyKey(_ context.Context, buyer uuid.UUID, key 
 }
 func (f *fakeRepo) AttachTx(_ context.Context, id, _ uuid.UUID, h string) (Sale, error) {
 	s := f.sales[id]
-	s.Status, s.TxHash = SaleSubmitted, &h
+	now := f.now()
+	s.Status, s.TxHash, s.SubmittedAt, s.NextCheckAt = SaleSubmitted, &h, &now, &now
 	f.sales[id] = s
+	f.record(id, "submitted", SaleLocked, SaleSubmitted)
 	return s, nil
 }
 func (f *fakeRepo) ProgressSale(_ context.Context, id uuid.UUID, p Progress) (Sale, error) {
 	s := f.sales[id]
-	s.Status = p.To
+	if s.Status != p.From {
+		return s, nil
+	}
+	s.Status, s.StatusReason, s.Confirmations, s.NextCheckAt = p.To, p.Reason, p.Confirmations, p.NextCheckAt
 	f.sales[id] = s
+	if p.Event != "" {
+		f.record(id, p.Event, p.From, p.To)
+	}
 	return s, nil
 }
 func (f *fakeRepo) CompleteSale(_ context.Context, id uuid.UUID, _ time.Duration, _ int64) (Sale, error) {
 	s := f.sales[id]
-	s.Status = SaleCompleted
+	if s.Status != SaleSubmitted && s.Status != SaleConfirming {
+		return s, nil
+	}
+	from := s.Status
+	s.Status, s.NextCheckAt = SaleCompleted, nil
 	f.sales[id] = s
+	f.record(id, "completed", from, SaleCompleted)
 	return s, nil
 }
-func (f *fakeRepo) ExpireSale(_ context.Context, id uuid.UUID, _ string) (Sale, error) {
+func (f *fakeRepo) ExpireSale(_ context.Context, id uuid.UUID, e Expiry) (Sale, error) {
 	s := f.sales[id]
-	s.Status = SaleExpired
+	if !slices.Contains(e.From, s.Status) {
+		return s, nil
+	}
+	if e.LockedBefore != nil && (s.TxHash != nil || s.LockExpiresAt == nil || s.LockExpiresAt.After(*e.LockedBefore)) {
+		return s, nil
+	}
+	from := s.Status
+	s.Status, s.StatusReason, s.NextCheckAt = SaleExpired, e.Reason, nil
 	f.sales[id] = s
+	for lid, l := range f.listings {
+		if l.MaxID == s.MaxID && l.Status == ListingLocked {
+			l.Status = ListingActive
+			f.listings[lid] = l
+		}
+	}
+	if f.liveListing != nil && f.liveListing.Status == ListingLocked {
+		f.liveListing.Status = ListingActive
+	}
+	if s.OfferID != nil && s.TxHash != nil && f.offers[*s.OfferID].Status == OfferAccepted {
+		f.setOffer(*s.OfferID, OfferExpired)
+	}
+	f.expiries[id] = e
+	f.record(id, "expired", from, SaleExpired)
 	return s, nil
 }
 func (f *fakeRepo) GetSale(_ context.Context, id uuid.UUID) (Sale, error) {
@@ -486,7 +534,8 @@ func TestObserveSale_Transitions(t *testing.T) {
 		want string
 	}{
 		{settle.Observation{Status: settle.StatusConfirmed, Matches: true}, SaleCompleted},
-		{settle.Observation{Status: settle.StatusConfirmed, Matches: false, Reason: "wrong amount"}, SaleManualReview},
+		{settle.Observation{Status: settle.StatusConfirmed, Matches: false, Reason: "wrong amount", PaidTowardSale: true}, SaleManualReview},
+		{settle.Observation{Status: settle.StatusConfirmed, Matches: false, Reason: "not a payment"}, SaleSubmitted},
 		{settle.Observation{Status: settle.StatusFailed}, SaleExpired},
 		{settle.Observation{Status: settle.StatusPending}, SaleConfirming},
 		{settle.Observation{Status: settle.StatusNotFound}, SaleSubmitted},

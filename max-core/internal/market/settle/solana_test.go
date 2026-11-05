@@ -390,3 +390,37 @@ func TestBalances(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+func TestObserve_PaidTowardSale(t *testing.T) {
+	b, tr, se := ata(t, buyer), ata(t, treasury), ata(t, seller)
+	memoOK := memo("max:sale:11111111-2222-3333-4444-555555555555")
+	cases := map[string]struct {
+		payer  string
+		ixs    []ixSpec
+		status string
+		failed bool
+		want   bool
+	}{
+		"Exact":                {buyer, goodIxs(t), "finalized", false, true},
+		"UnderpaidSeller":      {buyer, []ixSpec{transferChecked(usdc, b, se, buyer, "1"), memoOK}, "finalized", false, true},
+		"OnlyTreasury":         {buyer, []ixSpec{transferChecked(usdc, b, tr, buyer, "1000000")}, "finalized", false, true},
+		"OtherFeePayer":        {seller, goodIxs(t), "finalized", false, true},
+		"OtherMint":            {buyer, []ixSpec{transferChecked(otherMnt, b, tr, buyer, "1000000")}, "finalized", false, false},
+		"FromAnotherAccount":   {buyer, []ixSpec{transferChecked(usdc, se, tr, seller, "1000000")}, "finalized", false, false},
+		"ToAnotherAccount":     {buyer, []ixSpec{transferChecked(usdc, b, ata(t, otherMnt), buyer, "1000000")}, "finalized", false, false},
+		"MemoOnly":             {buyer, []ixSpec{memoOK}, "finalized", false, false},
+		"Token2022":            {buyer, []ixSpec{{chains.SPLToken2022Program, goodIxs(t)[1].parsed}}, "finalized", false, false},
+		"UncheckedTransfer":    {buyer, []ixSpec{{TokenProgram, map[string]any{"type": "transfer", "info": map[string]any{"source": b, "destination": tr, "authority": buyer, "amount": "5"}}}}, "finalized", false, false},
+		"ExactButNotFinalized": {buyer, goodIxs(t), "confirmed", false, false},
+		"ExactButFailed":       {buyer, goodIxs(t), "finalized", true, false},
+	}
+	for name, c := range cases {
+		obs := observe(t, mkTx(t, c.payer, c.failed, c.ixs...), c.status)
+		if obs.PaidTowardSale != c.want {
+			t.Errorf("%s: PaidTowardSale = %v, want %v (%+v)", name, obs.PaidTowardSale, c.want, obs)
+		}
+	}
+	if obs := observe(t, nil, ""); obs.PaidTowardSale {
+		t.Errorf("not found: %+v", obs)
+	}
+}

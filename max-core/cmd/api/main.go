@@ -148,6 +148,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if marketSvc.Config().Enabled {
+		go market.RunWorker(ctx, marketSvc, 15*time.Second, log.Named("market"))
+	}
 
 	router := server.NewRouter(server.Deps{
 		Logger:         log,

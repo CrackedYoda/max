@@ -12,6 +12,66 @@ import (
 	"github.com/google/uuid"
 )
 
+const attachLateMarketSaleTx = `-- name: AttachLateMarketSaleTx :one
+UPDATE market_sales
+SET status = $1, status_reason = $2, tx_hash = $3, submitted_at = now(),
+    next_check_at = CASE WHEN $1::text = 'confirming' THEN now() END, updated_at = now()
+WHERE id = $4 AND buyer_account_id = $5 AND status = 'expired' AND tx_hash IS NULL
+RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
+`
+
+type AttachLateMarketSaleTxParams struct {
+	ToStatus string
+	Reason   string
+	TxHash   *string
+	ID       uuid.UUID
+	Buyer    uuid.UUID
+}
+
+// A transaction for an expired, unpaid sale (spec §6 Expiry and late
+// payment). to_status is confirming, or manual_review when the name moved on.
+func (q *Queries) AttachLateMarketSaleTx(ctx context.Context, arg AttachLateMarketSaleTxParams) (MarketSale, error) {
+	row := q.db.QueryRow(ctx, attachLateMarketSaleTx,
+		arg.ToStatus,
+		arg.Reason,
+		arg.TxHash,
+		arg.ID,
+		arg.Buyer,
+	)
+	var i MarketSale
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.ListingID,
+		&i.OfferID,
+		&i.SellerAccountID,
+		&i.BuyerAccountID,
+		&i.BuyerAddress,
+		&i.SellerPayoutAddress,
+		&i.TreasuryAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.PriceBaseUnits,
+		&i.FeeBps,
+		&i.FeeBaseUnits,
+		&i.SellerBaseUnits,
+		&i.QuotedNetworkFee,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.StatusReason,
+		&i.LockExpiresAt,
+		&i.TxHash,
+		&i.Confirmations,
+		&i.SubmittedAt,
+		&i.CompletedAt,
+		&i.NextCheckAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const attachMarketSaleTx = `-- name: AttachMarketSaleTx :one
 UPDATE market_sales
 SET status = 'submitted', tx_hash = $1, submitted_at = now(), next_check_at = now(), updated_at = now()
@@ -62,15 +122,28 @@ func (q *Queries) AttachMarketSaleTx(ctx context.Context, arg AttachMarketSaleTx
 }
 
 const claimDueMarketSales = `-- name: ClaimDueMarketSales :many
-SELECT id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at FROM market_sales
-WHERE status IN ('submitted', 'confirming') AND next_check_at IS NOT NULL AND next_check_at <= now()
-ORDER BY next_check_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED
+WITH due AS (
+    SELECT s.id FROM market_sales s
+    WHERE s.status IN ('submitted', 'confirming') AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
+    ORDER BY s.next_check_at
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_sales m SET next_check_at = now() + make_interval(secs => $1::double precision)
+FROM due WHERE m.id = due.id
+RETURNING m.id, m.max_id, m.listing_id, m.offer_id, m.seller_account_id, m.buyer_account_id, m.buyer_address, m.seller_payout_address, m.treasury_address, m.chain, m.asset_address, m.asset_decimals, m.price_base_units, m.fee_bps, m.fee_base_units, m.seller_base_units, m.quoted_network_fee, m.idempotency_key, m.status, m.status_reason, m.lock_expires_at, m.tx_hash, m.confirmations, m.submitted_at, m.completed_at, m.next_check_at, m.created_at, m.updated_at
 `
 
-func (q *Queries) ClaimDueMarketSales(ctx context.Context, limit int32) ([]MarketSale, error) {
-	rows, err := q.db.Query(ctx, claimDueMarketSales, limit)
+type ClaimDueMarketSalesParams struct {
+	LeaseSeconds float64
+	RowLimit     int32
+}
+
+// Leases submitted and confirming sales due for observation by pushing
+// next_check_at forward under SKIP LOCKED, so concurrent workers never
+// observe the same sale; the observer then sets the real next check.
+func (q *Queries) ClaimDueMarketSales(ctx context.Context, arg ClaimDueMarketSalesParams) ([]MarketSale, error) {
+	rows, err := q.db.Query(ctx, claimDueMarketSales, arg.LeaseSeconds, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +247,78 @@ func (q *Queries) ClaimMarketOfferFundingChecks(ctx context.Context, arg ClaimMa
 	return items, nil
 }
 
-const completeMarketOffer = `-- name: CompleteMarketOffer :exec
-UPDATE market_offers SET status = 'completed', updated_at = now()
-WHERE id = $1 AND status = 'accepted'
+const claimMarketSalesPastTxDeadline = `-- name: ClaimMarketSalesPastTxDeadline :many
+WITH due AS (
+    SELECT s.id FROM market_sales s
+    WHERE s.status IN ('submitted', 'confirming')
+      AND coalesce(greatest(s.lock_expires_at, s.submitted_at), s.created_at) <= $2::timestamptz
+      AND (s.next_check_at IS NULL OR s.next_check_at <= now())
+    ORDER BY s.submitted_at
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_sales m SET next_check_at = now() + make_interval(secs => $1::double precision)
+FROM due WHERE m.id = due.id
+RETURNING m.id, m.max_id, m.listing_id, m.offer_id, m.seller_account_id, m.buyer_account_id, m.buyer_address, m.seller_payout_address, m.treasury_address, m.chain, m.asset_address, m.asset_decimals, m.price_base_units, m.fee_bps, m.fee_base_units, m.seller_base_units, m.quoted_network_fee, m.idempotency_key, m.status, m.status_reason, m.lock_expires_at, m.tx_hash, m.confirmations, m.submitted_at, m.completed_at, m.next_check_at, m.created_at, m.updated_at
 `
 
-func (q *Queries) CompleteMarketOffer(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, completeMarketOffer, id)
-	return err
+type ClaimMarketSalesPastTxDeadlineParams struct {
+	LeaseSeconds float64
+	Cutoff       time.Time
+	RowLimit     int32
+}
+
+// Submitted and confirming sales whose transaction deadline anchor
+// (the later of the lock end and the submission; created_at only when both
+// are missing) is at or before cutoff and that no worker holds; leased like
+// ClaimDueMarketSales. Mirrors market.txDeadline.
+func (q *Queries) ClaimMarketSalesPastTxDeadline(ctx context.Context, arg ClaimMarketSalesPastTxDeadlineParams) ([]MarketSale, error) {
+	rows, err := q.db.Query(ctx, claimMarketSalesPastTxDeadline, arg.LeaseSeconds, arg.Cutoff, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MarketSale
+	for rows.Next() {
+		var i MarketSale
+		if err := rows.Scan(
+			&i.ID,
+			&i.MaxID,
+			&i.ListingID,
+			&i.OfferID,
+			&i.SellerAccountID,
+			&i.BuyerAccountID,
+			&i.BuyerAddress,
+			&i.SellerPayoutAddress,
+			&i.TreasuryAddress,
+			&i.Chain,
+			&i.AssetAddress,
+			&i.AssetDecimals,
+			&i.PriceBaseUnits,
+			&i.FeeBps,
+			&i.FeeBaseUnits,
+			&i.SellerBaseUnits,
+			&i.QuotedNetworkFee,
+			&i.IdempotencyKey,
+			&i.Status,
+			&i.StatusReason,
+			&i.LockExpiresAt,
+			&i.TxHash,
+			&i.Confirmations,
+			&i.SubmittedAt,
+			&i.CompletedAt,
+			&i.NextCheckAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const completeMarketSale = `-- name: CompleteMarketSale :one
@@ -533,6 +670,65 @@ func (q *Queries) DeclineMarketOffer(ctx context.Context, arg DeclineMarketOffer
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteMarketStrikesByOffer = `-- name: DeleteMarketStrikesByOffer :execrows
+DELETE FROM market_strikes WHERE offer_id = $1
+`
+
+// A lapsed offer that was paid late after all earns no strike.
+func (q *Queries) DeleteMarketStrikesByOffer(ctx context.Context, offerID *uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMarketStrikesByOffer, offerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const expireMarketListings = `-- name: ExpireMarketListings :many
+WITH due AS (
+    SELECT l.id FROM market_listings l
+    WHERE l.status = 'active' AND l.expires_at IS NOT NULL AND l.expires_at <= $1::timestamptz
+    ORDER BY l.expires_at
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_listings m SET status = 'cancelled', status_reason = 'expired', updated_at = now()
+FROM due WHERE m.id = due.id
+RETURNING m.id, m.max_id, m.seller_account_id
+`
+
+type ExpireMarketListingsParams struct {
+	Cutoff   time.Time
+	RowLimit int32
+}
+
+type ExpireMarketListingsRow struct {
+	ID              uuid.UUID
+	MaxID           uuid.UUID
+	SellerAccountID uuid.UUID
+}
+
+// The worker's sweep: active listings past expires_at close as cancelled
+// ("expired"), which unblocks renames. SKIP LOCKED lets workers share it.
+func (q *Queries) ExpireMarketListings(ctx context.Context, arg ExpireMarketListingsParams) ([]ExpireMarketListingsRow, error) {
+	rows, err := q.db.Query(ctx, expireMarketListings, arg.Cutoff, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpireMarketListingsRow
+	for rows.Next() {
+		var i ExpireMarketListingsRow
+		if err := rows.Scan(&i.ID, &i.MaxID, &i.SellerAccountID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const expireMarketOffers = `-- name: ExpireMarketOffers :many
@@ -1272,14 +1468,19 @@ func (q *Queries) ListActiveMarketListings(ctx context.Context, arg ListActiveMa
 
 const listExpiredLockedMarketSales = `-- name: ListExpiredLockedMarketSales :many
 SELECT id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at FROM market_sales
-WHERE status = 'locked' AND lock_expires_at IS NOT NULL AND lock_expires_at <= now()
+WHERE status = 'locked' AND tx_hash IS NULL AND lock_expires_at IS NOT NULL AND lock_expires_at <= $1::timestamptz
 ORDER BY lock_expires_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED
+LIMIT $2
 `
 
-func (q *Queries) ListExpiredLockedMarketSales(ctx context.Context, limit int32) ([]MarketSale, error) {
-	rows, err := q.db.Query(ctx, listExpiredLockedMarketSales, limit)
+type ListExpiredLockedMarketSalesParams struct {
+	Cutoff   time.Time
+	RowLimit int32
+}
+
+// Candidates only: ExpireSale re-checks each under the max_ids and sale locks.
+func (q *Queries) ListExpiredLockedMarketSales(ctx context.Context, arg ListExpiredLockedMarketSalesParams) ([]MarketSale, error) {
+	rows, err := q.db.Query(ctx, listExpiredLockedMarketSales, arg.Cutoff, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1314,48 +1515,6 @@ func (q *Queries) ListExpiredLockedMarketSales(ctx context.Context, limit int32)
 			&i.SubmittedAt,
 			&i.CompletedAt,
 			&i.NextCheckAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listExpiredMarketListings = `-- name: ListExpiredMarketListings :many
-SELECT id, max_id, seller_account_id, chain, asset_address, asset_decimals, price_base_units, payout_address, status, status_reason, expires_at, created_at, updated_at FROM market_listings
-WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= now()
-ORDER BY expires_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED
-`
-
-func (q *Queries) ListExpiredMarketListings(ctx context.Context, limit int32) ([]MarketListing, error) {
-	rows, err := q.db.Query(ctx, listExpiredMarketListings, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MarketListing
-	for rows.Next() {
-		var i MarketListing
-		if err := rows.Scan(
-			&i.ID,
-			&i.MaxID,
-			&i.SellerAccountID,
-			&i.Chain,
-			&i.AssetAddress,
-			&i.AssetDecimals,
-			&i.PriceBaseUnits,
-			&i.PayoutAddress,
-			&i.Status,
-			&i.StatusReason,
-			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -1851,6 +2010,36 @@ func (q *Queries) ListMarketSalesByStatus(ctx context.Context, arg ListMarketSal
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnlapsedExpiredOfferSales = `-- name: ListUnlapsedExpiredOfferSales :many
+SELECT o.id FROM market_offers o
+JOIN market_sales s ON s.offer_id = o.id
+WHERE o.status = 'accepted' AND s.status = 'expired' AND s.tx_hash IS NULL
+ORDER BY s.updated_at
+LIMIT $1
+`
+
+// Accepted offers whose sale expired unpaid but that never lapsed (the
+// worker stopped between the two steps). LapseAcceptedOffer is idempotent.
+func (q *Queries) ListUnlapsedExpiredOfferSales(ctx context.Context, rowLimit int32) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUnlapsedExpiredOfferSales, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

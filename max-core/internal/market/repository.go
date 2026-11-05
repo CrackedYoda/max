@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -359,7 +360,7 @@ func (r *repository) ProgressSale(ctx context.Context, saleID uuid.UUID, p Progr
 			return err
 		}
 		out = toSale(row, "")
-		if p.From == p.To || p.Event == "" {
+		if p.Event == "" {
 			return nil
 		}
 		from := p.From
@@ -422,17 +423,19 @@ func (r *repository) CompleteSale(ctx context.Context, saleID uuid.UUID, hold ti
 		if err != nil {
 			return err
 		}
-		if sale.ListingID != nil {
-			if _, err := q.TransitionMarketListing(ctx, generated.TransitionMarketListingParams{
-				ID: *sale.ListingID, FromStatus: ListingLocked, ToStatus: ListingSold, Reason: "sale " + sale.ID.String(),
-			}); err != nil {
-				return err
+		// The name sold, so its live listing is sold too (spec §6 Complete 2):
+		// the sale's own listing, the seller's listing an accepted offer
+		// locked, or a listing a late payment locked after an expiry put it
+		// back to active. The transition is guarded on the status read under
+		// the row lock. A listing that is no longer live (the seller delisted,
+		// or the sweep closed it, after the sale expired) is left as it is.
+		if l, err := q.GetLiveMarketListingByMaxIDForUpdate(ctx, sale.MaxID); err == nil {
+			reason := "sale " + sale.ID.String()
+			if sale.OfferID != nil {
+				reason = "sold through an accepted offer, sale " + sale.ID.String()
 			}
-		} else if l, err := q.GetLiveMarketListingByMaxIDForUpdate(ctx, sale.MaxID); err == nil {
-			// An accepted offer locked the seller's listing; the name sold,
-			// so the listing is sold too (spec §6 Complete 2).
 			if _, err := q.TransitionMarketListing(ctx, generated.TransitionMarketListingParams{
-				ID: l.ID, FromStatus: ListingLocked, ToStatus: ListingSold, Reason: "sold through an accepted offer, sale " + sale.ID.String(),
+				ID: l.ID, FromStatus: l.Status, ToStatus: ListingSold, Reason: reason,
 			}); err != nil {
 				return err
 			}
@@ -440,7 +443,7 @@ func (r *repository) CompleteSale(ctx context.Context, saleID uuid.UUID, hold ti
 			return err
 		}
 		if sale.OfferID != nil {
-			if err := q.CompleteMarketOffer(ctx, *sale.OfferID); err != nil {
+			if err := completeOffer(ctx, q, *sale.OfferID, sale.ID); err != nil {
 				return err
 			}
 		}
@@ -473,6 +476,36 @@ func (r *repository) CompleteSale(ctx context.Context, saleID uuid.UUID, hold ti
 	return out, nil
 }
 
+// completeOffer closes a sold offer. An offer that lapsed when its sale
+// expired unpaid and was then paid late completes too, and its strike is
+// removed; a suspension it caused stays.
+func completeOffer(ctx context.Context, q *generated.Queries, offerID, saleID uuid.UUID) error {
+	o, err := q.GetMarketOfferForUpdate(ctx, offerID)
+	if err != nil {
+		return err
+	}
+	if o.Status != OfferAccepted && o.Status != OfferLapsed {
+		return nil
+	}
+	if _, err := q.TransitionMarketOffer(ctx, generated.TransitionMarketOfferParams{
+		ID: offerID, FromStatuses: []string{o.Status}, ToStatus: OfferCompleted,
+	}); err != nil {
+		return err
+	}
+	if o.Status != OfferLapsed {
+		return nil
+	}
+	n, err := q.DeleteMarketStrikesByOffer(ctx, &offerID)
+	if err != nil {
+		return err
+	}
+	return audit.Write(ctx, q, audit.Entry{
+		Action: "market.strike_removed", ResourceType: "market_offer", ResourceID: offerID.String(),
+		Metadata: map[string]any{"buyer": o.BuyerAccountID.String(), "sale_id": saleID.String(), "strikes_removed": n,
+			"reason": "the lapsed offer was paid late and the sale completed"},
+	})
+}
+
 // toManualReview parks a paid sale whose ownership move was refused. The
 // transfer wrote nothing (it refuses before its first write), so this
 // transaction is still clean.
@@ -495,7 +528,7 @@ func (r *repository) toManualReview(ctx context.Context, q *generated.Queries, s
 	})
 }
 
-func (r *repository) ExpireSale(ctx context.Context, saleID uuid.UUID, reason string) (Sale, error) {
+func (r *repository) ExpireSale(ctx context.Context, saleID uuid.UUID, e Expiry) (Sale, error) {
 	head, err := r.q.GetMarketSale(ctx, saleID)
 	if err != nil {
 		return Sale{}, mapErr(err, ErrSaleNotFound)
@@ -511,13 +544,14 @@ func (r *repository) ExpireSale(ctx context.Context, saleID uuid.UUID, reason st
 			return err
 		}
 		out = toSale(sale, "")
-		switch sale.Status {
-		case SaleLocked, SaleSubmitted, SaleConfirming:
-		default:
-			return nil // already closed
+		if !slices.Contains(e.From, sale.Status) {
+			return nil // moved on meanwhile
 		}
-		row, err := q.TransitionMarketSale(ctx, generated.TransitionMarketSaleParams{
-			ID: saleID, FromStatus: sale.Status, ToStatus: SaleExpired, Reason: reason,
+		if e.LockedBefore != nil && (sale.TxHash != nil || sale.LockExpiresAt == nil || sale.LockExpiresAt.After(*e.LockedBefore)) {
+			return nil
+		}
+		row, err := q.ProgressMarketSale(ctx, generated.ProgressMarketSaleParams{
+			ID: saleID, FromStatus: sale.Status, ToStatus: SaleExpired, Reason: e.Reason, Confirmations: sale.Confirmations,
 		})
 		if err != nil {
 			return err
@@ -532,9 +566,29 @@ func (r *repository) ExpireSale(ctx context.Context, saleID uuid.UUID, reason st
 		} else if err != nil && !database.IsNoRows(err) {
 			return err
 		}
+		// A buyer who submitted a transaction earns no strike, but the
+		// accepted offer must still close or it blocks their next offer.
+		if sale.OfferID != nil && sale.TxHash != nil {
+			if _, err := q.TransitionMarketOffer(ctx, generated.TransitionMarketOfferParams{
+				ID: *sale.OfferID, FromStatuses: []string{OfferAccepted}, ToStatus: OfferExpired,
+			}); err == nil {
+				if err := audit.Write(ctx, q, audit.Entry{
+					Action: "market.offer_expired", ResourceType: "market_offer", ResourceID: sale.OfferID.String(),
+					Metadata: map[string]any{"max_id": sale.MaxID.String(), "sale_id": saleID.String(), "reason": e.Reason},
+				}); err != nil {
+					return err
+				}
+			} else if !database.IsNoRows(err) {
+				return err
+			}
+		}
 		out = toSale(row, "")
+		detail := map[string]any{"reason": e.Reason}
+		for k, v := range e.Detail {
+			detail[k] = v
+		}
 		from := sale.Status
-		return event(ctx, q, saleID, "expired", &from, SaleExpired, map[string]any{"reason": reason})
+		return event(ctx, q, saleID, "expired", &from, SaleExpired, detail)
 	})
 	if err != nil {
 		return Sale{}, mapErr(err, ErrSaleNotFound)

@@ -38,12 +38,19 @@ WHERE l.status = 'active'
 ORDER BY l.created_at DESC
 LIMIT $1 OFFSET $2;
 
--- name: ListExpiredMarketListings :many
-SELECT * FROM market_listings
-WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= now()
-ORDER BY expires_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED;
+-- name: ExpireMarketListings :many
+-- The worker's sweep: active listings past expires_at close as cancelled
+-- ("expired"), which unblocks renames. SKIP LOCKED lets workers share it.
+WITH due AS (
+    SELECT l.id FROM market_listings l
+    WHERE l.status = 'active' AND l.expires_at IS NOT NULL AND l.expires_at <= sqlc.arg(cutoff)::timestamptz
+    ORDER BY l.expires_at
+    LIMIT sqlc.arg(row_limit)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_listings m SET status = 'cancelled', status_reason = 'expired', updated_at = now()
+FROM due WHERE m.id = due.id
+RETURNING m.id, m.max_id, m.seller_account_id;
 
 -- Sales
 
@@ -108,18 +115,62 @@ SELECT * FROM market_sales WHERE max_id = $1 ORDER BY created_at DESC LIMIT $2;
 SELECT * FROM market_sales WHERE status = $1 ORDER BY created_at LIMIT $2;
 
 -- name: ClaimDueMarketSales :many
-SELECT * FROM market_sales
-WHERE status IN ('submitted', 'confirming') AND next_check_at IS NOT NULL AND next_check_at <= now()
-ORDER BY next_check_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED;
+-- Leases submitted and confirming sales due for observation by pushing
+-- next_check_at forward under SKIP LOCKED, so concurrent workers never
+-- observe the same sale; the observer then sets the real next check.
+WITH due AS (
+    SELECT s.id FROM market_sales s
+    WHERE s.status IN ('submitted', 'confirming') AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
+    ORDER BY s.next_check_at
+    LIMIT sqlc.arg(row_limit)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_sales m SET next_check_at = now() + make_interval(secs => sqlc.arg(lease_seconds)::double precision)
+FROM due WHERE m.id = due.id
+RETURNING m.*;
+
+-- name: ClaimMarketSalesPastTxDeadline :many
+-- Submitted and confirming sales whose transaction deadline anchor
+-- (the later of the lock end and the submission; created_at only when both
+-- are missing) is at or before cutoff and that no worker holds; leased like
+-- ClaimDueMarketSales. Mirrors market.txDeadline.
+WITH due AS (
+    SELECT s.id FROM market_sales s
+    WHERE s.status IN ('submitted', 'confirming')
+      AND coalesce(greatest(s.lock_expires_at, s.submitted_at), s.created_at) <= sqlc.arg(cutoff)::timestamptz
+      AND (s.next_check_at IS NULL OR s.next_check_at <= now())
+    ORDER BY s.submitted_at
+    LIMIT sqlc.arg(row_limit)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_sales m SET next_check_at = now() + make_interval(secs => sqlc.arg(lease_seconds)::double precision)
+FROM due WHERE m.id = due.id
+RETURNING m.*;
 
 -- name: ListExpiredLockedMarketSales :many
+-- Candidates only: ExpireSale re-checks each under the max_ids and sale locks.
 SELECT * FROM market_sales
-WHERE status = 'locked' AND lock_expires_at IS NOT NULL AND lock_expires_at <= now()
+WHERE status = 'locked' AND tx_hash IS NULL AND lock_expires_at IS NOT NULL AND lock_expires_at <= sqlc.arg(cutoff)::timestamptz
 ORDER BY lock_expires_at
-LIMIT $1
-FOR UPDATE SKIP LOCKED;
+LIMIT sqlc.arg(row_limit);
+
+-- name: ListUnlapsedExpiredOfferSales :many
+-- Accepted offers whose sale expired unpaid but that never lapsed (the
+-- worker stopped between the two steps). LapseAcceptedOffer is idempotent.
+SELECT o.id FROM market_offers o
+JOIN market_sales s ON s.offer_id = o.id
+WHERE o.status = 'accepted' AND s.status = 'expired' AND s.tx_hash IS NULL
+ORDER BY s.updated_at
+LIMIT sqlc.arg(row_limit);
+
+-- name: AttachLateMarketSaleTx :one
+-- A transaction for an expired, unpaid sale (spec §6 Expiry and late
+-- payment). to_status is confirming, or manual_review when the name moved on.
+UPDATE market_sales
+SET status = sqlc.arg(to_status), status_reason = sqlc.arg(reason), tx_hash = sqlc.arg(tx_hash), submitted_at = now(),
+    next_check_at = CASE WHEN sqlc.arg(to_status)::text = 'confirming' THEN now() END, updated_at = now()
+WHERE id = sqlc.arg(id) AND buyer_account_id = sqlc.arg(buyer) AND status = 'expired' AND tx_hash IS NULL
+RETURNING *;
 
 -- Sale events
 
@@ -204,10 +255,6 @@ UPDATE market_sales
 SET status = 'completed', confirmations = sqlc.arg(confirmations), completed_at = now(), next_check_at = NULL, updated_at = now()
 WHERE id = sqlc.arg(id) AND status IN ('submitted', 'confirming')
 RETURNING *;
-
--- name: CompleteMarketOffer :exec
-UPDATE market_offers SET status = 'completed', updated_at = now()
-WHERE id = $1 AND status = 'accepted';
 
 -- name: SupersedeMarketOffers :exec
 -- Every other live or unfunded offer on the name once it changes hands.
@@ -354,6 +401,10 @@ LIMIT $2;
 
 -- name: InsertMarketStrike :exec
 INSERT INTO market_strikes (account_id, offer_id) VALUES ($1, $2);
+
+-- name: DeleteMarketStrikesByOffer :execrows
+-- A lapsed offer that was paid late after all earns no strike.
+DELETE FROM market_strikes WHERE offer_id = $1;
 
 -- name: CountMarketStrikesSince :one
 SELECT count(*) FROM market_strikes WHERE account_id = $1 AND created_at > $2;

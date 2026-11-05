@@ -80,6 +80,17 @@ type Progress struct {
 	Detail           map[string]any
 }
 
+// Expiry is one guarded move of a sale to expired. The sale must be in one of
+// From; with LockedBefore set it must also be unpaid with its lock ended at or
+// before that time. Otherwise ExpireSale changes nothing and returns the sale
+// as it is.
+type Expiry struct {
+	From         []string
+	LockedBefore *time.Time
+	Reason       string
+	Detail       map[string]any
+}
+
 // ListingQuery filters the public listing search. Prices are decimal asset amounts.
 type ListingQuery struct {
 	Q                  string
@@ -231,9 +242,17 @@ type Repository interface {
 	// ownership transfer is refused (owner changed, rename pending) the sale
 	// moves to manual_review instead and is returned without error.
 	CompleteSale(ctx context.Context, saleID uuid.UUID, hold time.Duration, confirmations int64) (Sale, error)
-	// ExpireSale closes a locked, submitted or confirming sale as expired and
-	// returns a locked listing on the name to active.
-	ExpireSale(ctx context.Context, saleID uuid.UUID, reason string) (Sale, error)
+	// ExpireSale closes a sale as expired under the max_ids and sale locks when
+	// e's guard holds, and returns a locked listing on the name to active. An
+	// offer sale that had a transaction closes its accepted offer as expired
+	// (no strike); an unpaid one is left for LapseAcceptedOffer.
+	ExpireSale(ctx context.Context, saleID uuid.UUID, e Expiry) (Sale, error)
+	// AttachLateTx records a transaction for an expired, unpaid sale (spec §6
+	// Expiry and late payment). Under the max_ids lock: when the seller still
+	// owns the name and no other sale is open on it the sale moves to
+	// confirming and locks the name's active listing; otherwise it moves to
+	// manual_review, because the buyer may have paid.
+	AttachLateTx(ctx context.Context, saleID, buyer uuid.UUID, txHash string) (Sale, error)
 	GetSale(ctx context.Context, id uuid.UUID) (Sale, error)
 
 	SearchListings(ctx context.Context, q ListingQuery) ([]ListingCard, string, error)
@@ -275,6 +294,21 @@ type Repository interface {
 	// strike, counts strikes since strikesSince and applies rule. Lapsing an
 	// already lapsed offer is a no-op.
 	LapseOffer(ctx context.Context, offerID uuid.UUID, strikesSince time.Time, rule SuspendRule) (LapseResult, error)
+
+	// Worker (Task 9).
+	// ClaimDueSales leases submitted and confirming sales whose next_check_at
+	// has passed, pushing it forward by lease (FOR UPDATE SKIP LOCKED).
+	ClaimDueSales(ctx context.Context, limit int, lease time.Duration) ([]Sale, error)
+	// ClaimSalesPastDeadline leases submitted and confirming sales whose
+	// deadline anchor (see txDeadline) is at or before cutoff and that no
+	// worker holds.
+	ClaimSalesPastDeadline(ctx context.Context, cutoff time.Time, limit int, lease time.Duration) ([]Sale, error)
+	// ExpiredLocks lists unpaid locked sales whose lock ended at or before cutoff.
+	ExpiredLocks(ctx context.Context, cutoff time.Time, limit int) ([]Sale, error)
+	// UnlapsedOffers lists accepted offers whose sale expired unpaid.
+	UnlapsedOffers(ctx context.Context, limit int) ([]uuid.UUID, error)
+	// ExpireListings cancels active listings past expires_at (reason "expired").
+	ExpireListings(ctx context.Context, cutoff time.Time, limit int) (int, error)
 }
 
 // Agent policy actions.
