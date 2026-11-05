@@ -434,14 +434,19 @@ func newTestMarket(t *testing.T, pool *pgxpool.Pool, ec envConfig) (*market.Serv
 // fakeSettle stands in for the Solana settlement adapter; its matching logic
 // is covered by the settle package tests.
 type fakeSettle struct {
-	mu  sync.Mutex
-	obs settle.Observation
+	mu       sync.Mutex
+	obs      settle.Observation
+	fundsErr error
 }
 
 func (f *fakeSettle) Quote(context.Context, settle.Order) (settle.Quote, error) {
 	return settle.Quote{NetworkFee: big.NewInt(5000), RentPerATA: big.NewInt(2039280)}, nil
 }
-func (f *fakeSettle) CheckFunds(context.Context, settle.Order, settle.Quote) error { return nil }
+func (f *fakeSettle) CheckFunds(context.Context, settle.Order, settle.Quote) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fundsErr
+}
 func (f *fakeSettle) BuildTx(o settle.Order, _ settle.Quote) (settle.Instructions, error) {
 	return settle.Instructions{Solana: []settle.SolanaIx{
 		{Kind: "transfer_checked", Amount: o.SellerAmount.String(), Decimals: o.Decimals},
@@ -887,5 +892,371 @@ func TestMarket_PublicNameViewHidesModerationAndExpiry(t *testing.T) {
 	_, body = anon.do("GET", "/v1/market/names/yoda", nil)
 	if nv := data(t, body); nv["reason"] != "unavailable" {
 		t.Fatalf("public suspension reason: %v", body)
+	}
+}
+
+func makeOffer(p party, name, amount string) (int, map[string]any) {
+	return p.c.do("POST", "/v1/market/offers", map[string]any{
+		"name": name, "amount": amount, "chain": "solana-devnet", "asset": devnetUSDC, "fromAddress": p.wallet.address(),
+	})
+}
+
+func offerStatus(t *testing.T, env *testEnv, id string) string {
+	t.Helper()
+	var st string
+	if err := env.pool.QueryRow(context.Background(), `SELECT status FROM market_offers WHERE id = $1`, id).Scan(&st); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func TestMarket_OfferAcceptPay(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	ctx := context.Background()
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "50")
+
+	code, body := makeOffer(bob, "max.yoda", "30")
+	if code != http.StatusCreated || data(t, body)["status"] != "live" || data(t, body)["amount"] != "30" {
+		t.Fatalf("bob offer: %d %v", code, body)
+	}
+	bobOffer := data(t, body)["id"].(string)
+	if code, body = makeOffer(bob, "yoda", "31"); errCode(body) != "OFFER_LIMIT" {
+		t.Fatalf("second offer on the same name: %d %v", code, body)
+	}
+	if code, body = makeOffer(alice, "yoda", "30"); errCode(body) != "SELF_TRADE" {
+		t.Fatalf("self offer: %d %v", code, body)
+	}
+	if code, body = makeOffer(carol, "yoda", "0.5"); errCode(body) != "OFFER_BELOW_MINIMUM" {
+		t.Fatalf("below minimum: %d %v", code, body)
+	}
+	code, body = makeOffer(carol, "yoda", "25")
+	if code != http.StatusCreated {
+		t.Fatalf("carol offer: %d %v", code, body)
+	}
+	carolOffer := data(t, body)["id"].(string)
+
+	// Public view: a live offer count, never amounts or buyers.
+	anon := &client{t: t, h: env.handler}
+	_, body = anon.do("GET", "/v1/market/names/yoda", nil)
+	if nv := data(t, body); nv["liveOfferCount"] != float64(2) || nv["offers"] != nil {
+		t.Fatalf("public name view: %v", body)
+	}
+	// The seller sees live offers without the buyer's wallet; the buyer sees all their own.
+	_, body = alice.c.do("GET", "/v1/market/me", nil)
+	recv := data(t, body)["offersReceived"].([]any)
+	if len(recv) != 2 {
+		t.Fatalf("offers received: %v", body)
+	}
+	if _, ok := recv[0].(map[string]any)["fromAddress"]; ok {
+		t.Fatalf("seller inbox leaks the buyer wallet: %v", recv[0])
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE market_offers SET status = 'unfunded' WHERE id = $1`, carolOffer); err != nil {
+		t.Fatal(err)
+	}
+	_, body = alice.c.do("GET", "/v1/market/me", nil)
+	if recv = data(t, body)["offersReceived"].([]any); len(recv) != 1 || recv[0].(map[string]any)["id"] != bobOffer {
+		t.Fatalf("unfunded offer shown to the seller: %v", recv)
+	}
+	_, body = carol.c.do("GET", "/v1/market/me", nil)
+	if made := data(t, body)["offersMade"].([]any); len(made) != 1 || made[0].(map[string]any)["status"] != "unfunded" {
+		t.Fatalf("buyer's own offers: %v", body)
+	}
+
+	// Only the owner accepts; the buyer cannot pay before acceptance.
+	if code, body = carol.c.do("POST", "/v1/market/offers/"+bobOffer+"/accept", nil); code != http.StatusNotFound {
+		t.Fatalf("stranger accept: %d %v", code, body)
+	}
+	if code, body = bob.c.do("POST", "/v1/market/offers/"+bobOffer+"/pay", map[string]any{"idempotencyKey": "pay-key-0001"}); code != http.StatusConflict {
+		t.Fatalf("pay before accept: %d %v", code, body)
+	}
+
+	// Accept: the payout comes from the listing, which locks.
+	code, body = alice.c.do("POST", "/v1/market/offers/"+bobOffer+"/accept", nil)
+	if code != http.StatusCreated {
+		t.Fatalf("accept: %d %v", code, body)
+	}
+	sale := saleOf(t, body)
+	saleID := sale["id"].(string)
+	lock, _ := time.Parse(time.RFC3339Nano, sale["lockExpiresAt"].(string))
+	if sale["status"] != "locked" || sale["offerId"] != bobOffer || sale["listingId"] != nil || sale["price"] != "30" ||
+		sale["sellerPayoutAddress"] != alice.wallet.address() || sale["buyerAddress"] != bob.wallet.address() || time.Until(lock) < 23*time.Hour {
+		t.Fatalf("offer sale: %v", sale)
+	}
+	if data(t, body)["instructions"] != nil {
+		t.Fatalf("seller got payment instructions: %v", body)
+	}
+	var listingStatus string
+	_ = env.pool.QueryRow(ctx, `SELECT status FROM market_listings WHERE id = $1`, listingID).Scan(&listingStatus)
+	if listingStatus != "locked" || offerStatus(t, env, bobOffer) != "accepted" || offerStatus(t, env, carolOffer) != "superseded" {
+		t.Fatalf("after accept: listing %s bob %s carol %s", listingStatus, offerStatus(t, env, bobOffer), offerStatus(t, env, carolOffer))
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'market.offer_accepted' AND resource_id = $1`, bobOffer); n != 1 {
+		t.Fatalf("accept audit = %d", n)
+	}
+	// An accepted offer with an open sale cannot lapse.
+	if err := env.market.LapseAcceptedOffer(ctx, uuid.MustParse(bobOffer)); err == nil {
+		t.Fatal("lapsed an offer whose sale is open")
+	}
+
+	// Pay returns a fresh quote and the instructions to sign.
+	code, body = bob.c.do("POST", "/v1/market/offers/"+bobOffer+"/pay", map[string]any{"idempotencyKey": "pay-key-0001"})
+	if code != http.StatusOK || saleOf(t, body)["id"] != saleID || data(t, body)["quote"].(map[string]any)["totalAsset"] != "30" {
+		t.Fatalf("pay: %d %v", code, body)
+	}
+	ins := data(t, body)["instructions"].(map[string]any)["solana"].([]any)
+	if memo := ins[len(ins)-1].(map[string]any)["memo"]; memo != "max:sale:"+saleID {
+		t.Fatalf("memo %v", memo)
+	}
+	if code, body = carol.c.do("POST", "/v1/market/offers/"+bobOffer+"/pay", nil); code != http.StatusNotFound {
+		t.Fatalf("stranger pay: %d %v", code, body)
+	}
+
+	// Submit and observe, as for buy now.
+	code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(7)})
+	if code != http.StatusOK || saleOf(t, body)["status"] != "submitted" {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	done, err := env.market.ObserveSale(ctx, uuid.MustParse(saleID))
+	if err != nil || done.Status != market.SaleCompleted {
+		t.Fatalf("observe: %v %+v", err, done)
+	}
+	var owner, dest uuid.UUID
+	_ = env.pool.QueryRow(ctx, `SELECT owner_account_id FROM max_ids WHERE id = $1`, id).Scan(&owner)
+	_ = env.pool.QueryRow(ctx, `SELECT wallet_id FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = 'solana'`, id).Scan(&dest)
+	_ = env.pool.QueryRow(ctx, `SELECT status FROM market_listings WHERE id = $1`, listingID).Scan(&listingStatus)
+	if owner != bob.account || dest != bob.walletID {
+		t.Fatalf("after completion: owner %v dest %v", owner, dest)
+	}
+	if offerStatus(t, env, bobOffer) != "completed" || offerStatus(t, env, carolOffer) != "superseded" || listingStatus != "cancelled" {
+		t.Fatalf("after completion: bob %s carol %s listing %s", offerStatus(t, env, bobOffer), offerStatus(t, env, carolOffer), listingStatus)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1`, saleID); n != 3 {
+		t.Fatalf("sale events = %d, want created, submitted, completed", n)
+	}
+	// The new owner can list: the old listing no longer blocks the name.
+	makeListable(t, env, id)
+	listName(t, bob, id, "60")
+}
+
+func TestMarket_OfferAcceptWithoutListingNeedsPayout(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	_, body := makeOffer(bob, "yoda", "30")
+	offerID := data(t, body)["id"].(string)
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+offerID+"/accept", nil); errCode(body) != "VALIDATION_FAILED" {
+		t.Fatalf("accept without payout: %d %v", code, body)
+	}
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+offerID+"/accept", map[string]any{"payoutAddress": bob.wallet.address()}); errCode(body) != "VALIDATION_FAILED" {
+		t.Fatalf("accept to the buyer's wallet: %d %v", code, body)
+	}
+	code, body := alice.c.do("POST", "/v1/market/offers/"+offerID+"/accept", map[string]any{"payoutAddress": alice.wallet.address()})
+	if code != http.StatusCreated || saleOf(t, body)["sellerPayoutAddress"] != alice.wallet.address() {
+		t.Fatalf("accept: %d %v", code, body)
+	}
+	// Declining or withdrawing an accepted offer is refused.
+	if code, body = alice.c.do("POST", "/v1/market/offers/"+offerID+"/decline", map[string]any{"note": "changed my mind"}); code != http.StatusConflict {
+		t.Fatalf("decline accepted: %d %v", code, body)
+	}
+	if code, body = bob.c.do("DELETE", "/v1/market/offers/"+offerID, nil); code != http.StatusConflict {
+		t.Fatalf("withdraw accepted: %d %v", code, body)
+	}
+}
+
+func TestMarket_OfferDeclineAndWithdraw(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	_, body := makeOffer(bob, "yoda", "30")
+	bobOffer := data(t, body)["id"].(string)
+	_, body = makeOffer(carol, "yoda", "20")
+	carolOffer := data(t, body)["id"].(string)
+	if code, body := bob.c.do("POST", "/v1/market/offers/"+bobOffer+"/decline", nil); code != http.StatusNotFound {
+		t.Fatalf("buyer decline: %d %v", code, body)
+	}
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+bobOffer+"/decline", map[string]any{"note": "too low"}); code != http.StatusNoContent {
+		t.Fatalf("decline: %d %v", code, body)
+	}
+	if code, body := alice.c.do("DELETE", "/v1/market/offers/"+carolOffer, nil); code != http.StatusNotFound {
+		t.Fatalf("seller withdraw: %d %v", code, body)
+	}
+	if code, body := carol.c.do("DELETE", "/v1/market/offers/"+carolOffer, nil); code != http.StatusNoContent {
+		t.Fatalf("withdraw: %d %v", code, body)
+	}
+	_, body = bob.c.do("GET", "/v1/market/me", nil)
+	made := data(t, body)["offersMade"].([]any)[0].(map[string]any)
+	if made["status"] != "declined" || made["declineNote"] != "too low" {
+		t.Fatalf("declined offer: %v", made)
+	}
+	if offerStatus(t, env, carolOffer) != "withdrawn" {
+		t.Fatalf("carol offer %s", offerStatus(t, env, carolOffer))
+	}
+	// A closed offer frees the slot for a new one on the same name.
+	if code, body := makeOffer(bob, "yoda", "35"); code != http.StatusCreated {
+		t.Fatalf("new offer after decline: %d %v", code, body)
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action IN ('market.offer_declined', 'market.offer_withdrawn')`); n != 2 {
+		t.Fatalf("audit rows = %d", n)
+	}
+}
+
+// seedOfferSale inserts an accepted offer and its locked sale directly.
+func seedOfferSale(t *testing.T, env *testEnv, maxID uuid.UUID, seller, buyer party) (offerID, saleID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	err := env.pool.QueryRow(ctx, `
+		INSERT INTO market_offers (max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, expires_at)
+		VALUES ($1, $2, $3, 'solana-devnet', $4, 6, '30000000', 'accepted', now() + interval '7 days') RETURNING id`,
+		maxID, buyer.account, buyer.wallet.address(), devnetUSDC).Scan(&offerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = env.pool.QueryRow(ctx, `
+		INSERT INTO market_sales (max_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address,
+			chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, idempotency_key, status, lock_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'solana-devnet', $8, 6, '30000000', 1000, '3000000', '27000000', $9, 'locked', now() + interval '1 day')
+		RETURNING id`,
+		maxID, offerID, seller.account, buyer.account, buyer.wallet.address(), seller.wallet.address(), newSol().address(), devnetUSDC,
+		"offer:"+offerID.String()).Scan(&saleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return offerID, saleID
+}
+
+func TestMarket_OfferPausedBlocksAllButPay(t *testing.T) {
+	env := newTestEnv(t, withMarket(func(c *config.MarketConfig) { c.TradingPaused = true }))
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	if code, body := makeOffer(bob, "yoda", "30"); code != http.StatusServiceUnavailable || errCode(body) != "MARKET_PAUSED" {
+		t.Fatalf("offer while paused: %d %v", code, body)
+	}
+	offerID, saleID := seedOfferSale(t, env, id, alice, bob)
+	for _, r := range []struct {
+		who          party
+		method, path string
+	}{
+		{alice, "POST", "/accept"}, {alice, "POST", "/decline"}, {bob, "DELETE", ""},
+	} {
+		if code, body := r.who.c.do(r.method, "/v1/market/offers/"+offerID.String()+r.path, nil); errCode(body) != "MARKET_PAUSED" {
+			t.Fatalf("%s %s while paused: %d %v", r.method, r.path, code, body)
+		}
+	}
+	code, body := bob.c.do("POST", "/v1/market/offers/"+offerID.String()+"/pay", map[string]any{"idempotencyKey": "pay-key-0001"})
+	if code != http.StatusOK || saleOf(t, body)["id"] != saleID.String() || data(t, body)["instructions"] == nil {
+		t.Fatalf("pay while paused: %d %v", code, body)
+	}
+}
+
+func TestMarket_OfferLapseThirdStrikeSuspends(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	ctx := context.Background()
+	alice, bob := newParty(t, env), newParty(t, env)
+	for i, name := range []string{"yoda", "luke", "leia"} {
+		id := claimID(t, alice, name)
+		offerID, saleID := seedOfferSale(t, env, id, alice, bob)
+		if _, err := env.pool.Exec(ctx, `UPDATE market_sales SET status = 'expired' WHERE id = $1`, saleID); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.market.LapseAcceptedOffer(ctx, offerID); err != nil {
+			t.Fatalf("lapse %d: %v", i+1, err)
+		}
+		if err := env.market.LapseAcceptedOffer(ctx, offerID); err != nil { // idempotent
+			t.Fatalf("lapse %d again: %v", i+1, err)
+		}
+		if offerStatus(t, env, offerID.String()) != "lapsed" {
+			t.Fatalf("offer %d not lapsed", i+1)
+		}
+		n := count(t, env, `SELECT count(*) FROM market_restrictions WHERE account_id = $1 AND kind = 'offer_suspension'`, bob.account)
+		if want := map[bool]int{true: 1, false: 0}[i == 2]; n != want {
+			t.Fatalf("after strike %d: %d suspensions", i+1, n)
+		}
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_strikes WHERE account_id = $1`, bob.account); n != 3 {
+		t.Fatalf("strikes = %d", n)
+	}
+	var days int
+	_ = env.pool.QueryRow(ctx, `SELECT round(extract(epoch FROM until - now()) / 86400)::int FROM market_restrictions WHERE account_id = $1`, bob.account).Scan(&days)
+	if days != 30 {
+		t.Fatalf("suspended for %d days", days)
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action IN ('market.offer_lapsed', 'market.restriction_created')`); n != 4 {
+		t.Fatalf("audit rows = %d", n)
+	}
+	carol := newParty(t, env)
+	id := claimID(t, carol, "han")
+	makeListable(t, env, id)
+	if code, body := makeOffer(bob, "han", "30"); errCode(body) != "MARKET_RESTRICTED" {
+		t.Fatalf("offer while suspended: %d %v", code, body)
+	}
+}
+
+func TestMarket_OfferFundingRecheck(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	ctx := context.Background()
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	_, body := makeOffer(bob, "yoda", "30")
+	bobOffer := data(t, body)["id"].(string)
+	_, body = makeOffer(carol, "yoda", "20")
+	carolOffer := data(t, body)["id"].(string)
+	stale := func() {
+		if _, err := env.pool.Exec(ctx, `UPDATE market_offers SET funded_checked_at = now() - interval '6 minutes'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Freshly checked offers are not due.
+	if n, err := env.market.RecheckFunding(ctx, 50); err != nil || n != 0 {
+		t.Fatalf("fresh recheck: %d %v", n, err)
+	}
+	env.settle.mu.Lock()
+	env.settle.fundsErr = &settle.FundsShortfall{NeedAsset: big.NewInt(1), HaveAsset: big.NewInt(0), NeedNative: big.NewInt(0), HaveNative: big.NewInt(0)}
+	env.settle.mu.Unlock()
+	stale()
+	if n, err := env.market.RecheckFunding(ctx, 50); err != nil || n != 2 {
+		t.Fatalf("recheck short: %d %v", n, err)
+	}
+	if offerStatus(t, env, bobOffer) != "unfunded" || offerStatus(t, env, carolOffer) != "unfunded" {
+		t.Fatal("offers not flipped to unfunded")
+	}
+	// Accepting an unfunded offer fails cleanly.
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+bobOffer+"/accept", map[string]any{"payoutAddress": alice.wallet.address()}); errCode(body) != "OFFER_UNFUNDED" {
+		t.Fatalf("accept unfunded: %d %v", code, body)
+	}
+
+	env.settle.mu.Lock()
+	env.settle.fundsErr = nil
+	env.settle.mu.Unlock()
+	stale()
+	if _, err := env.pool.Exec(ctx, `UPDATE market_offers SET expires_at = now() - interval '1 minute' WHERE id = $1`, carolOffer); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := env.market.RecheckFunding(ctx, 50); err != nil || n != 2 {
+		t.Fatalf("recheck funded: %d %v", n, err)
+	}
+	if offerStatus(t, env, bobOffer) != "live" || offerStatus(t, env, carolOffer) != "expired" {
+		t.Fatalf("after funding: bob %s carol %s", offerStatus(t, env, bobOffer), offerStatus(t, env, carolOffer))
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'market.offer_funding_changed'`); n != 3 {
+		t.Fatalf("funding audit rows = %d", n)
+	}
+
+	// Accept re-runs CheckFunds: a shortfall flips the offer and fails.
+	env.settle.mu.Lock()
+	env.settle.fundsErr = &settle.FundsShortfall{NeedAsset: big.NewInt(1), HaveAsset: big.NewInt(0), NeedNative: big.NewInt(0), HaveNative: big.NewInt(0)}
+	env.settle.mu.Unlock()
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+bobOffer+"/accept", map[string]any{"payoutAddress": alice.wallet.address()}); errCode(body) != "OFFER_UNFUNDED" {
+		t.Fatalf("accept short: %d %v", code, body)
+	}
+	if offerStatus(t, env, bobOffer) != "unfunded" {
+		t.Fatalf("accept did not flip the offer: %s", offerStatus(t, env, bobOffer))
 	}
 }

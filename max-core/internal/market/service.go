@@ -152,14 +152,17 @@ func (s *Service) List(ctx context.Context, p shared.Principal, in ListInput) (L
 	})
 }
 
-// price parses a decimal amount and enforces the marketplace minimum.
-func (s *Service) price(raw string, a Asset) (*big.Int, error) {
+// price parses a listing price and enforces the marketplace minimum.
+func (s *Service) price(raw string, a Asset) (*big.Int, error) { return s.minAmount("price", raw, a) }
+
+// minAmount parses a decimal amount of the asset and enforces MARKET_MIN_OFFER.
+func (s *Service) minAmount(field, raw string, a Asset) (*big.Int, error) {
 	v, err := payments.ParseAmount(raw, a.Decimals)
 	if err != nil {
-		return nil, shared.ErrValidation.WithMessage("price: " + err.Error())
+		return nil, shared.ErrValidation.WithMessage(field + ": " + err.Error())
 	}
 	if v.Cmp(s.cfg.minBase(a)) < 0 {
-		return nil, ErrOfferBelowMinimum.WithMessage("price is below the marketplace minimum of " + s.cfg.MinPrice + " " + a.Symbol)
+		return nil, ErrOfferBelowMinimum.WithMessage(field + " is below the marketplace minimum of " + s.cfg.MinPrice + " " + a.Symbol)
 	}
 	return v, nil
 }
@@ -254,19 +257,12 @@ func (s *Service) Buy(ctx context.Context, p shared.Principal, listingID uuid.UU
 	if ok, reason := Listable(facts, s.now()); !ok {
 		return SaleView{}, NotListable(reason)
 	}
-	if banned, err := s.repo.Restricted(ctx, p.AccountID, "ban"); err != nil {
+	if err := s.notBanned(ctx, p.AccountID, ErrMarketRestricted); err != nil {
 		return SaleView{}, err
-	} else if banned {
-		return SaleView{}, ErrMarketRestricted
 	}
-	payer, err := chains.NormalizeAddress(a.Chain.Namespace, in.FromAddress)
+	payer, err := s.linkedPayer(ctx, p.AccountID, a, in.FromAddress)
 	if err != nil {
-		return SaleView{}, errPayerNotLinked
-	}
-	if id, err := s.repo.ActiveWalletID(ctx, p.AccountID, a.Chain.Namespace, payer); err != nil {
 		return SaleView{}, err
-	} else if id == uuid.Nil {
-		return SaleView{}, errPayerNotLinked
 	}
 	parties, err := s.repo.PartyFacts(ctx, p.AccountID, l.SellerAccountID, payer)
 	if err != nil {

@@ -258,3 +258,114 @@ JOIN max_ids m ON m.id = s.max_id
 WHERE s.seller_account_id = $1 OR s.buyer_account_id = $1
 ORDER BY s.created_at DESC
 LIMIT $2;
+
+-- Offers (Task 8)
+
+-- name: LockMarketOfferBuyer :exec
+-- Serialises offer creation per buyer so the open-offer limit holds.
+SELECT pg_advisory_xact_lock(hashtextextended('market_offers:' || sqlc.arg(buyer)::text, 0));
+
+-- name: CountOpenMarketOffersByBuyer :one
+SELECT count(*) FROM market_offers WHERE buyer_account_id = $1 AND status IN ('live', 'unfunded');
+
+-- name: HasOpenMarketOfferOnName :one
+SELECT EXISTS (SELECT 1 FROM market_offers
+               WHERE buyer_account_id = $1 AND max_id = $2 AND status IN ('live', 'unfunded', 'accepted'))::boolean;
+
+-- name: CreateMarketOffer :one
+INSERT INTO market_offers (
+    max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals,
+    amount_base_units, status, expires_at, funded_checked_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, 'live', $8, now())
+RETURNING *;
+
+-- name: GetMarketOffer :one
+SELECT * FROM market_offers WHERE id = $1;
+
+-- name: GetMarketOfferForUpdate :one
+SELECT * FROM market_offers WHERE id = $1 FOR UPDATE;
+
+-- name: TransitionMarketOffer :one
+UPDATE market_offers
+SET status = sqlc.arg(to_status), updated_at = now()
+WHERE id = sqlc.arg(id) AND status = ANY(sqlc.arg(from_statuses)::text[])
+RETURNING *;
+
+-- name: DeclineMarketOffer :one
+UPDATE market_offers
+SET status = 'declined', decline_note = sqlc.arg(note), updated_at = now()
+WHERE id = sqlc.arg(id) AND status IN ('live', 'unfunded')
+RETURNING *;
+
+-- name: SetMarketOfferFunding :one
+UPDATE market_offers
+SET status = sqlc.arg(to_status), funded_checked_at = sqlc.arg(checked_at), updated_at = now()
+WHERE id = sqlc.arg(id) AND status IN ('live', 'unfunded')
+RETURNING *;
+
+-- name: ClaimMarketOfferFundingChecks :many
+-- Claims due offers by stamping funded_checked_at under SKIP LOCKED, so
+-- concurrent workers never check the same offer; the RPC runs after commit.
+WITH due AS (
+    SELECT f.id FROM market_offers f
+    WHERE f.status IN ('live', 'unfunded') AND f.expires_at > now()
+      AND (f.funded_checked_at IS NULL OR f.funded_checked_at < sqlc.arg(older_than)::timestamptz)
+    ORDER BY f.funded_checked_at NULLS FIRST
+    LIMIT sqlc.arg(row_limit)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_offers o SET funded_checked_at = now()
+FROM due WHERE o.id = due.id
+RETURNING o.*;
+
+-- name: ExpireMarketOffers :many
+WITH due AS (
+    SELECT f.id FROM market_offers f
+    WHERE f.status IN ('live', 'unfunded') AND f.expires_at <= now()
+    ORDER BY f.expires_at
+    LIMIT sqlc.arg(row_limit)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_offers o SET status = 'expired', updated_at = now()
+FROM due WHERE o.id = due.id
+RETURNING o.id, o.buyer_account_id, o.max_id;
+
+-- name: GetMarketSaleByOfferID :one
+SELECT * FROM market_sales WHERE offer_id = $1 ORDER BY created_at DESC LIMIT 1;
+
+-- name: ListLiveMarketOffersReceived :many
+-- The seller's inbox: only live, unexpired offers on names they own now.
+SELECT sqlc.embed(o), m.canonical_name
+FROM market_offers o
+JOIN max_ids m ON m.id = o.max_id
+WHERE m.owner_account_id = $1 AND o.status = 'live' AND o.expires_at > now()
+ORDER BY o.created_at DESC
+LIMIT $2;
+
+-- name: ListMarketOffersByBuyerWithName :many
+SELECT sqlc.embed(o), m.canonical_name
+FROM market_offers o
+JOIN max_ids m ON m.id = o.max_id
+WHERE o.buyer_account_id = $1
+ORDER BY o.created_at DESC
+LIMIT $2;
+
+-- Strikes and restrictions
+
+-- name: InsertMarketStrike :exec
+INSERT INTO market_strikes (account_id, offer_id) VALUES ($1, $2);
+
+-- name: CountMarketStrikesSince :one
+SELECT count(*) FROM market_strikes WHERE account_id = $1 AND created_at > $2;
+
+-- name: CreateMarketRestriction :one
+INSERT INTO market_restrictions (account_id, kind, until, reason, created_by)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: GetActiveMarketRestriction :one
+-- The longest-running active restriction of a kind (no end date first).
+SELECT * FROM market_restrictions
+WHERE account_id = $1 AND kind = $2 AND lifted_at IS NULL AND (until IS NULL OR until > now())
+ORDER BY until DESC NULLS FIRST
+LIMIT 1;

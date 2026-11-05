@@ -180,6 +180,12 @@ func NewRouter(d Deps) *gin.Engine {
 	mine.PATCH("/listings/:id", listLimit, trade, d.Market.UpdateListing)
 	mine.DELETE("/listings/:id", listLimit, trade, d.Market.DeleteListing)
 	mine.POST("/listings/:id/buy", payLimit, trade, d.Market.Buy)
+	mine.POST("/offers", listLimit, trade, d.Market.MakeOffer)
+	mine.DELETE("/offers/:id", listLimit, trade, d.Market.WithdrawOffer)
+	mine.POST("/offers/:id/accept", listLimit, trade, d.Market.AcceptOffer)
+	mine.POST("/offers/:id/decline", listLimit, trade, d.Market.DeclineOffer)
+	// Paying an accepted offer, like submit, stays open while paused.
+	mine.POST("/offers/:id/pay", payLimit, d.Market.PayOffer)
 	mine.POST("/sales/:id/submit", payLimit, d.Market.Submit)
 	mine.GET("/sales/:id", d.Market.GetSale)
 	mine.GET("/me", d.Market.Me)

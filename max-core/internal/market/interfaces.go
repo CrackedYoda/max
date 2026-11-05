@@ -121,10 +121,74 @@ type NameView struct {
 	Reason         string
 }
 
-// Inbox is the caller's own market activity. Offers join it in Task 8.
+// Inbox is the caller's own market activity. OffersReceived holds only live
+// offers on names the caller owns; OffersMade holds all of the caller's own.
 type Inbox struct {
-	Listings []Listing
-	Sales    []Sale
+	Listings       []Listing
+	Sales          []Sale
+	OffersReceived []Offer
+	OffersMade     []Offer
+}
+
+// Offer is a market_offers row. Name is filled where the query joins it.
+type Offer struct {
+	ID, MaxID, BuyerAccountID        uuid.UUID
+	Name                             string
+	FromAddress, Chain, AssetAddress string
+	AssetDecimals                    int
+	AmountBaseUnits                  string
+	Status, DeclineNote              string
+	ExpiresAt                        time.Time
+	FundedCheckedAt                  *time.Time
+	CreatedAt, UpdatedAt             time.Time
+}
+
+type NewOffer struct {
+	MaxID, Buyer                     uuid.UUID
+	FromAddress, Chain, AssetAddress string
+	AssetDecimals                    int
+	AmountBaseUnits                  string
+	ExpiresAt                        time.Time
+}
+
+type OfferInput struct {
+	Name, Amount, Chain, Asset, FromAddress string
+	ExpiresAt                               *time.Time
+}
+
+// Restriction kinds (spec §4 market_restrictions.kind).
+const (
+	RestrictionBan             = "ban"
+	RestrictionOfferSuspension = "offer_suspension"
+)
+
+// Restriction is an active market_restrictions row.
+type Restriction struct {
+	ID, AccountID uuid.UUID
+	Kind          string
+	Until         *time.Time
+	Reason        string
+	CreatedBy     *uuid.UUID
+	CreatedAt     time.Time
+}
+
+type NewRestriction struct {
+	Kind   string
+	Until  *time.Time
+	Reason string
+}
+
+// SuspendRule decides, inside the lapse transaction, whether the buyer's
+// strikes in the window warrant a restriction. suspended reports an active
+// offer_suspension already in place.
+type SuspendRule func(strikes int, suspended bool) *NewRestriction
+
+// LapseResult is the outcome of LapseOffer. Suspension is set only when one
+// was created by this lapse.
+type LapseResult struct {
+	Offer      Offer
+	Strikes    int
+	Suspension *Restriction
 }
 
 // Eligibility tells an owner whether, and on what terms, a name can be listed.
@@ -175,6 +239,42 @@ type Repository interface {
 	SearchListings(ctx context.Context, q ListingQuery) ([]ListingCard, string, error)
 	NameView(ctx context.Context, name string) (NameView, error)
 	Inbox(ctx context.Context, account uuid.UUID) (Inbox, error)
+
+	// Offers (spec §6 Offer).
+	MaxIDByName(ctx context.Context, name string) (uuid.UUID, error)
+	// ActiveRestriction returns the longest-running active restriction of a
+	// kind, or nil.
+	ActiveRestriction(ctx context.Context, account uuid.UUID, kind string) (*Restriction, error)
+	Restrict(ctx context.Context, account uuid.UUID, kind string, until *time.Time, reason string, by *uuid.UUID) error
+	// OpenOfferCount counts the buyer's live and unfunded offers.
+	OpenOfferCount(ctx context.Context, buyer uuid.UUID) (int, error)
+	// CreateOffer re-checks the open-offer limit and the one-open-offer-per-name
+	// rule under a per-buyer lock and inserts a live offer.
+	CreateOffer(ctx context.Context, in NewOffer, maxOpen int) (Offer, error)
+	GetOffer(ctx context.Context, id uuid.UUID) (Offer, error)
+	WithdrawOffer(ctx context.Context, id, buyer uuid.UUID) error
+	// DeclineOffer locks the name, checks seller still owns it and declines a
+	// live or unfunded offer.
+	DeclineOffer(ctx context.Context, id, seller uuid.UUID, note string) error
+	// LiveListing returns the active or locked listing on a name, or nil.
+	LiveListing(ctx context.Context, maxID uuid.UUID) (*Listing, error)
+	// AcceptOffer, in one transaction: locks the name and re-checks
+	// listability, accepts the live offer, supersedes the other live and
+	// unfunded offers on the name, locks the listing if any, and opens the sale.
+	AcceptOffer(ctx context.Context, offerID, seller uuid.UUID, in NewSale) (Sale, error)
+	SaleByOffer(ctx context.Context, offerID uuid.UUID) (Sale, error)
+	// SetOfferFunded flips a live or unfunded offer; closed offers are left alone.
+	SetOfferFunded(ctx context.Context, id uuid.UUID, funded bool, checkedAt time.Time) error
+	// DueFundingChecks claims live and unfunded offers last checked before
+	// olderThan (FOR UPDATE SKIP LOCKED), stamping them so no other worker
+	// claims them while the caller checks funds.
+	DueFundingChecks(ctx context.Context, olderThan time.Time, limit int) ([]Offer, error)
+	// ExpireOffers closes live and unfunded offers past expires_at.
+	ExpireOffers(ctx context.Context, limit int) (int, error)
+	// LapseOffer, in one transaction: accepted offer -> lapsed, records a
+	// strike, counts strikes since strikesSince and applies rule. Lapsing an
+	// already lapsed offer is a no-op.
+	LapseOffer(ctx context.Context, offerID uuid.UUID, strikesSince time.Time, rule SuspendRule) (LapseResult, error)
 }
 
 // Agent policy actions.

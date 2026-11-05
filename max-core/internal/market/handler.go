@@ -2,6 +2,7 @@ package market
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -204,4 +205,95 @@ func param(c *gin.Context, name string, notFound error) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+func (h *Handler) MakeOffer(c *gin.Context) {
+	var req makeOfferRequest
+	if err := shared.BindJSON(c, &req); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	o, err := h.svc.MakeOffer(c.Request.Context(), shared.MustPrincipal(c), OfferInput{
+		Name: req.Name, Amount: req.Amount, Chain: req.Chain, Asset: req.Asset, FromAddress: req.FromAddress, ExpiresAt: req.ExpiresAt,
+	})
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.Created(c, toOfferResponse(o))
+}
+
+func (h *Handler) WithdrawOffer(c *gin.Context) {
+	id, ok := param(c, "id", ErrOfferNotFound)
+	if !ok {
+		return
+	}
+	if err := h.svc.WithdrawOffer(c.Request.Context(), shared.MustPrincipal(c), id); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.NoContent(c)
+}
+
+func (h *Handler) AcceptOffer(c *gin.Context) {
+	id, ok := param(c, "id", ErrOfferNotFound)
+	if !ok {
+		return
+	}
+	var req acceptOfferRequest
+	if !bindOptional(c, &req) {
+		return
+	}
+	v, err := h.svc.AcceptOffer(c.Request.Context(), shared.MustPrincipal(c), id, req.PayoutAddress)
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.Created(c, toSaleViewResponse(v))
+}
+
+func (h *Handler) DeclineOffer(c *gin.Context) {
+	id, ok := param(c, "id", ErrOfferNotFound)
+	if !ok {
+		return
+	}
+	var req declineOfferRequest
+	if !bindOptional(c, &req) {
+		return
+	}
+	if err := h.svc.DeclineOffer(c.Request.Context(), shared.MustPrincipal(c), id, strings.TrimSpace(req.Note)); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.NoContent(c)
+}
+
+func (h *Handler) PayOffer(c *gin.Context) {
+	id, ok := param(c, "id", ErrOfferNotFound)
+	if !ok {
+		return
+	}
+	var req payOfferRequest
+	if !bindOptional(c, &req) {
+		return
+	}
+	v, err := h.svc.PayOffer(c.Request.Context(), shared.MustPrincipal(c), id, req.IdempotencyKey)
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, toSaleViewResponse(v))
+}
+
+// bindOptional binds a JSON body when one is sent; an empty body is fine.
+func bindOptional(c *gin.Context, dst any) bool {
+	if c.Request.ContentLength == 0 {
+		return true
+	}
+	if err := shared.BindJSON(c, dst); err != nil {
+		shared.Fail(c, err)
+		return false
+	}
+	return true
 }

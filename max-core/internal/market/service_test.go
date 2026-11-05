@@ -38,6 +38,14 @@ type fakeRepo struct {
 	sales       map[uuid.UUID]Sale
 	opened      int
 	nameListing *Listing
+
+	// Offers (offers_test.go).
+	nameID       uuid.UUID
+	liveListing  *Listing
+	offers       map[uuid.UUID]Offer
+	restrictions map[string]*Restriction // account|kind
+	strikes      map[uuid.UUID][]time.Time
+	fundingSets  int
 }
 
 func newFakeRepo() *fakeRepo {
@@ -45,6 +53,7 @@ func newFakeRepo() *fakeRepo {
 		facts:   NameFacts{Status: "active", OwnerStatus: "active"},
 		wallets: map[string]uuid.UUID{}, restricted: map[uuid.UUID]bool{},
 		listings: map[uuid.UUID]Listing{}, sales: map[uuid.UUID]Sale{},
+		offers: map[uuid.UUID]Offer{}, restrictions: map[string]*Restriction{}, strikes: map[uuid.UUID][]time.Time{},
 	}
 }
 
@@ -88,7 +97,7 @@ func (f *fakeRepo) UpdateListingPrice(_ context.Context, id, _ uuid.UUID, price 
 func (f *fakeRepo) CancelListing(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (f *fakeRepo) OpenSale(_ context.Context, in NewSale) (Sale, error) {
 	f.opened++
-	s := Sale{ID: uuid.New(), MaxID: in.MaxID, ListingID: in.ListingID, SellerAccountID: in.Seller, BuyerAccountID: in.Buyer,
+	s := Sale{ID: uuid.New(), MaxID: in.MaxID, ListingID: in.ListingID, OfferID: in.OfferID, SellerAccountID: in.Seller, BuyerAccountID: in.Buyer,
 		BuyerAddress: in.BuyerAddress, SellerPayoutAddress: in.SellerPayout, TreasuryAddress: in.Treasury, Chain: in.Chain,
 		AssetAddress: in.AssetAddress, AssetDecimals: in.AssetDecimals, PriceBaseUnits: in.Price, FeeBPS: in.FeeBPS,
 		FeeBaseUnits: in.Fee, SellerBaseUnits: in.SellerAmount, IdempotencyKey: in.IdempotencyKey, Status: in.Status,
@@ -189,6 +198,7 @@ func newHarness(t *testing.T, mutate func(*config.MarketConfig)) *harness {
 	h := &harness{repo: newFakeRepo(), adapter: &fakeAdapter{}, seller: uuid.New(), buyer: uuid.New(),
 		payout: solAddr(), payer: solAddr(), maxID: uuid.New()}
 	h.repo.owner = h.seller
+	h.repo.nameID = h.maxID
 	h.repo.link(h.seller, h.payout)
 	h.repo.link(h.buyer, h.payer)
 	h.listing = uuid.New()

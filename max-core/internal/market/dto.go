@@ -27,6 +27,29 @@ type buyRequest struct {
 	IdempotencyKey string `json:"idempotencyKey" binding:"required,min=8,max=64,printascii"`
 }
 
+type makeOfferRequest struct {
+	Name        string     `json:"name" binding:"required,max=128"`
+	Amount      string     `json:"amount" binding:"required,max=80"`
+	Chain       string     `json:"chain" binding:"required,max=32"`
+	Asset       string     `json:"asset" binding:"required,max=128"`
+	FromAddress string     `json:"fromAddress" binding:"required,max=128"`
+	ExpiresAt   *time.Time `json:"expiresAt"`
+}
+
+// acceptOfferRequest: payoutAddress is required only when the name has no
+// listing whose payout address can be used.
+type acceptOfferRequest struct {
+	PayoutAddress string `json:"payoutAddress" binding:"max=128"`
+}
+
+type declineOfferRequest struct {
+	Note string `json:"note" binding:"max=280"`
+}
+
+type payOfferRequest struct {
+	IdempotencyKey string `json:"idempotencyKey" binding:"omitempty,min=8,max=64,printascii"`
+}
+
 type submitRequest struct {
 	TxHash string `json:"txHash" binding:"required,max=128"`
 }
@@ -169,9 +192,45 @@ type eligibilityResponse struct {
 	Assets            []assetResponse `json:"assets"`
 }
 
+// offerResponse is the buyer's own view of an offer.
+type offerResponse struct {
+	ID              string     `json:"id"`
+	MaxID           string     `json:"maxId"`
+	Handle          string     `json:"handle,omitempty"`
+	FromAddress     string     `json:"fromAddress"`
+	Chain           string     `json:"chain"`
+	Asset           string     `json:"asset"`
+	Symbol          string     `json:"symbol"`
+	Amount          string     `json:"amount"`
+	AmountBaseUnits string     `json:"amountBaseUnits"`
+	Status          string     `json:"status"`
+	DeclineNote     string     `json:"declineNote,omitempty"`
+	ExpiresAt       time.Time  `json:"expiresAt"`
+	FundedCheckedAt *time.Time `json:"fundedCheckedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+}
+
+// receivedOfferResponse is a live offer as the name's owner sees it: the
+// terms, not the buyer's wallet.
+type receivedOfferResponse struct {
+	ID              string    `json:"id"`
+	MaxID           string    `json:"maxId"`
+	Handle          string    `json:"handle,omitempty"`
+	Chain           string    `json:"chain"`
+	Asset           string    `json:"asset"`
+	Symbol          string    `json:"symbol"`
+	Amount          string    `json:"amount"`
+	AmountBaseUnits string    `json:"amountBaseUnits"`
+	Status          string    `json:"status"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
 type inboxResponse struct {
-	Listings []listingResponse `json:"listings"`
-	Sales    []saleResponse    `json:"sales"`
+	Listings       []listingResponse       `json:"listings"`
+	Sales          []saleResponse          `json:"sales"`
+	OffersReceived []receivedOfferResponse `json:"offersReceived"`
+	OffersMade     []offerResponse         `json:"offersMade"`
 }
 
 // amount renders base units as a decimal string of the asset.
@@ -286,8 +345,33 @@ func toEligibilityResponse(e Eligibility) eligibilityResponse {
 	return out
 }
 
+func toOfferResponse(o Offer) offerResponse {
+	asset, sym := assetLabel(o.Chain, o.AssetAddress)
+	return offerResponse{
+		ID: o.ID.String(), MaxID: o.MaxID.String(), Handle: handle(o.Name), FromAddress: o.FromAddress, Chain: o.Chain,
+		Asset: asset, Symbol: sym, Amount: amount(o.AmountBaseUnits, o.AssetDecimals), AmountBaseUnits: o.AmountBaseUnits,
+		Status: o.Status, DeclineNote: o.DeclineNote, ExpiresAt: o.ExpiresAt, FundedCheckedAt: o.FundedCheckedAt, CreatedAt: o.CreatedAt,
+	}
+}
+
+func toReceivedOfferResponse(o Offer) receivedOfferResponse {
+	asset, sym := assetLabel(o.Chain, o.AssetAddress)
+	return receivedOfferResponse{
+		ID: o.ID.String(), MaxID: o.MaxID.String(), Handle: handle(o.Name), Chain: o.Chain, Asset: asset, Symbol: sym,
+		Amount: amount(o.AmountBaseUnits, o.AssetDecimals), AmountBaseUnits: o.AmountBaseUnits, Status: o.Status,
+		ExpiresAt: o.ExpiresAt, CreatedAt: o.CreatedAt,
+	}
+}
+
 func toInboxResponse(in Inbox) inboxResponse {
-	out := inboxResponse{Listings: make([]listingResponse, 0, len(in.Listings)), Sales: make([]saleResponse, 0, len(in.Sales))}
+	out := inboxResponse{Listings: make([]listingResponse, 0, len(in.Listings)), Sales: make([]saleResponse, 0, len(in.Sales)),
+		OffersReceived: make([]receivedOfferResponse, 0, len(in.OffersReceived)), OffersMade: make([]offerResponse, 0, len(in.OffersMade))}
+	for _, o := range in.OffersReceived {
+		out.OffersReceived = append(out.OffersReceived, toReceivedOfferResponse(o))
+	}
+	for _, o := range in.OffersMade {
+		out.OffersMade = append(out.OffersMade, toOfferResponse(o))
+	}
 	for _, l := range in.Listings {
 		out.Listings = append(out.Listings, toListingResponse(l))
 	}

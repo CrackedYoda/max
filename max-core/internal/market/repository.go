@@ -428,6 +428,16 @@ func (r *repository) CompleteSale(ctx context.Context, saleID uuid.UUID, hold ti
 			}); err != nil {
 				return err
 			}
+		} else if l, err := q.GetLiveMarketListingByMaxIDForUpdate(ctx, sale.MaxID); err == nil {
+			// An accepted offer locked the seller's listing; the name has
+			// changed hands, so the listing closes.
+			if _, err := q.TransitionMarketListing(ctx, generated.TransitionMarketListingParams{
+				ID: l.ID, FromStatus: l.Status, ToStatus: ListingCancelled, Reason: "sold through an accepted offer, sale " + sale.ID.String(),
+			}); err != nil {
+				return err
+			}
+		} else if !database.IsNoRows(err) {
+			return err
 		}
 		if sale.OfferID != nil {
 			if err := q.CompleteMarketOffer(ctx, *sale.OfferID); err != nil {
@@ -650,7 +660,22 @@ func (r *repository) Inbox(ctx context.Context, account uuid.UUID) (Inbox, error
 	if err != nil {
 		return Inbox{}, shared.ErrInternal.WithError(err)
 	}
-	out := Inbox{Listings: make([]Listing, 0, len(ls)), Sales: make([]Sale, 0, len(ss))}
+	recv, err := r.q.ListLiveMarketOffersReceived(ctx, generated.ListLiveMarketOffersReceivedParams{OwnerAccountID: account, Limit: inboxLimit})
+	if err != nil {
+		return Inbox{}, shared.ErrInternal.WithError(err)
+	}
+	made, err := r.q.ListMarketOffersByBuyerWithName(ctx, generated.ListMarketOffersByBuyerWithNameParams{BuyerAccountID: account, Limit: inboxLimit})
+	if err != nil {
+		return Inbox{}, shared.ErrInternal.WithError(err)
+	}
+	out := Inbox{Listings: make([]Listing, 0, len(ls)), Sales: make([]Sale, 0, len(ss)),
+		OffersReceived: make([]Offer, 0, len(recv)), OffersMade: make([]Offer, 0, len(made))}
+	for _, o := range recv {
+		out.OffersReceived = append(out.OffersReceived, toOffer(o.MarketOffer, o.CanonicalName))
+	}
+	for _, o := range made {
+		out.OffersMade = append(out.OffersMade, toOffer(o.MarketOffer, o.CanonicalName))
+	}
 	for _, l := range ls {
 		out.Listings = append(out.Listings, toListing(l.MarketListing, l.CanonicalName))
 	}

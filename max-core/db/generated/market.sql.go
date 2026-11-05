@@ -118,6 +118,62 @@ func (q *Queries) ClaimDueMarketSales(ctx context.Context, limit int32) ([]Marke
 	return items, nil
 }
 
+const claimMarketOfferFundingChecks = `-- name: ClaimMarketOfferFundingChecks :many
+WITH due AS (
+    SELECT f.id FROM market_offers f
+    WHERE f.status IN ('live', 'unfunded') AND f.expires_at > now()
+      AND (f.funded_checked_at IS NULL OR f.funded_checked_at < $1::timestamptz)
+    ORDER BY f.funded_checked_at NULLS FIRST
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_offers o SET funded_checked_at = now()
+FROM due WHERE o.id = due.id
+RETURNING o.id, o.max_id, o.buyer_account_id, o.from_address, o.chain, o.asset_address, o.asset_decimals, o.amount_base_units, o.status, o.decline_note, o.expires_at, o.funded_checked_at, o.created_at, o.updated_at
+`
+
+type ClaimMarketOfferFundingChecksParams struct {
+	OlderThan time.Time
+	RowLimit  int32
+}
+
+// Claims due offers by stamping funded_checked_at under SKIP LOCKED, so
+// concurrent workers never check the same offer; the RPC runs after commit.
+func (q *Queries) ClaimMarketOfferFundingChecks(ctx context.Context, arg ClaimMarketOfferFundingChecksParams) ([]MarketOffer, error) {
+	rows, err := q.db.Query(ctx, claimMarketOfferFundingChecks, arg.OlderThan, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MarketOffer
+	for rows.Next() {
+		var i MarketOffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.MaxID,
+			&i.BuyerAccountID,
+			&i.FromAddress,
+			&i.Chain,
+			&i.AssetAddress,
+			&i.AssetDecimals,
+			&i.AmountBaseUnits,
+			&i.Status,
+			&i.DeclineNote,
+			&i.ExpiresAt,
+			&i.FundedCheckedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const completeMarketOffer = `-- name: CompleteMarketOffer :exec
 UPDATE market_offers SET status = 'completed', updated_at = now()
 WHERE id = $1 AND status = 'accepted'
@@ -187,6 +243,33 @@ func (q *Queries) CountLiveMarketOffers(ctx context.Context, maxID uuid.UUID) (i
 	return count, err
 }
 
+const countMarketStrikesSince = `-- name: CountMarketStrikesSince :one
+SELECT count(*) FROM market_strikes WHERE account_id = $1 AND created_at > $2
+`
+
+type CountMarketStrikesSinceParams struct {
+	AccountID uuid.UUID
+	CreatedAt time.Time
+}
+
+func (q *Queries) CountMarketStrikesSince(ctx context.Context, arg CountMarketStrikesSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMarketStrikesSince, arg.AccountID, arg.CreatedAt)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenMarketOffersByBuyer = `-- name: CountOpenMarketOffersByBuyer :one
+SELECT count(*) FROM market_offers WHERE buyer_account_id = $1 AND status IN ('live', 'unfunded')
+`
+
+func (q *Queries) CountOpenMarketOffersByBuyer(ctx context.Context, buyerAccountID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenMarketOffersByBuyer, buyerAccountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMarketListing = `-- name: CreateMarketListing :one
 
 INSERT INTO market_listings (
@@ -234,6 +317,92 @@ func (q *Queries) CreateMarketListing(ctx context.Context, arg CreateMarketListi
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createMarketOffer = `-- name: CreateMarketOffer :one
+INSERT INTO market_offers (
+    max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals,
+    amount_base_units, status, expires_at, funded_checked_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, 'live', $8, now())
+RETURNING id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at
+`
+
+type CreateMarketOfferParams struct {
+	MaxID           uuid.UUID
+	BuyerAccountID  uuid.UUID
+	FromAddress     string
+	Chain           string
+	AssetAddress    string
+	AssetDecimals   int32
+	AmountBaseUnits string
+	ExpiresAt       time.Time
+}
+
+func (q *Queries) CreateMarketOffer(ctx context.Context, arg CreateMarketOfferParams) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, createMarketOffer,
+		arg.MaxID,
+		arg.BuyerAccountID,
+		arg.FromAddress,
+		arg.Chain,
+		arg.AssetAddress,
+		arg.AssetDecimals,
+		arg.AmountBaseUnits,
+		arg.ExpiresAt,
+	)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createMarketRestriction = `-- name: CreateMarketRestriction :one
+INSERT INTO market_restrictions (account_id, kind, until, reason, created_by)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, account_id, kind, until, reason, created_by, created_at, lifted_at
+`
+
+type CreateMarketRestrictionParams struct {
+	AccountID uuid.UUID
+	Kind      string
+	Until     *time.Time
+	Reason    string
+	CreatedBy *uuid.UUID
+}
+
+func (q *Queries) CreateMarketRestriction(ctx context.Context, arg CreateMarketRestrictionParams) (MarketRestriction, error) {
+	row := q.db.QueryRow(ctx, createMarketRestriction,
+		arg.AccountID,
+		arg.Kind,
+		arg.Until,
+		arg.Reason,
+		arg.CreatedBy,
+	)
+	var i MarketRestriction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.Kind,
+		&i.Until,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.LiftedAt,
 	)
 	return i, err
 }
@@ -328,6 +497,108 @@ func (q *Queries) CreateMarketSale(ctx context.Context, arg CreateMarketSalePara
 		&i.NextCheckAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const declineMarketOffer = `-- name: DeclineMarketOffer :one
+UPDATE market_offers
+SET status = 'declined', decline_note = $1, updated_at = now()
+WHERE id = $2 AND status IN ('live', 'unfunded')
+RETURNING id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at
+`
+
+type DeclineMarketOfferParams struct {
+	Note string
+	ID   uuid.UUID
+}
+
+func (q *Queries) DeclineMarketOffer(ctx context.Context, arg DeclineMarketOfferParams) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, declineMarketOffer, arg.Note, arg.ID)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const expireMarketOffers = `-- name: ExpireMarketOffers :many
+WITH due AS (
+    SELECT f.id FROM market_offers f
+    WHERE f.status IN ('live', 'unfunded') AND f.expires_at <= now()
+    ORDER BY f.expires_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE market_offers o SET status = 'expired', updated_at = now()
+FROM due WHERE o.id = due.id
+RETURNING o.id, o.buyer_account_id, o.max_id
+`
+
+type ExpireMarketOffersRow struct {
+	ID             uuid.UUID
+	BuyerAccountID uuid.UUID
+	MaxID          uuid.UUID
+}
+
+func (q *Queries) ExpireMarketOffers(ctx context.Context, rowLimit int32) ([]ExpireMarketOffersRow, error) {
+	rows, err := q.db.Query(ctx, expireMarketOffers, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpireMarketOffersRow
+	for rows.Next() {
+		var i ExpireMarketOffersRow
+		if err := rows.Scan(&i.ID, &i.BuyerAccountID, &i.MaxID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getActiveMarketRestriction = `-- name: GetActiveMarketRestriction :one
+SELECT id, account_id, kind, until, reason, created_by, created_at, lifted_at FROM market_restrictions
+WHERE account_id = $1 AND kind = $2 AND lifted_at IS NULL AND (until IS NULL OR until > now())
+ORDER BY until DESC NULLS FIRST
+LIMIT 1
+`
+
+type GetActiveMarketRestrictionParams struct {
+	AccountID uuid.UUID
+	Kind      string
+}
+
+// The longest-running active restriction of a kind (no end date first).
+func (q *Queries) GetActiveMarketRestriction(ctx context.Context, arg GetActiveMarketRestrictionParams) (MarketRestriction, error) {
+	row := q.db.QueryRow(ctx, getActiveMarketRestriction, arg.AccountID, arg.Kind)
+	var i MarketRestriction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.Kind,
+		&i.Until,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.LiftedAt,
 	)
 	return i, err
 }
@@ -536,6 +807,58 @@ func (q *Queries) GetMarketNameFacts(ctx context.Context, id uuid.UUID) (GetMark
 	return i, err
 }
 
+const getMarketOffer = `-- name: GetMarketOffer :one
+SELECT id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at FROM market_offers WHERE id = $1
+`
+
+func (q *Queries) GetMarketOffer(ctx context.Context, id uuid.UUID) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, getMarketOffer, id)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMarketOfferForUpdate = `-- name: GetMarketOfferForUpdate :one
+SELECT id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at FROM market_offers WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetMarketOfferForUpdate(ctx context.Context, id uuid.UUID) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, getMarketOfferForUpdate, id)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getMarketSale = `-- name: GetMarketSale :one
 SELECT id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at FROM market_sales WHERE id = $1
 `
@@ -587,6 +910,46 @@ type GetMarketSaleByIdempotencyKeyParams struct {
 
 func (q *Queries) GetMarketSaleByIdempotencyKey(ctx context.Context, arg GetMarketSaleByIdempotencyKeyParams) (MarketSale, error) {
 	row := q.db.QueryRow(ctx, getMarketSaleByIdempotencyKey, arg.BuyerAccountID, arg.IdempotencyKey)
+	var i MarketSale
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.ListingID,
+		&i.OfferID,
+		&i.SellerAccountID,
+		&i.BuyerAccountID,
+		&i.BuyerAddress,
+		&i.SellerPayoutAddress,
+		&i.TreasuryAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.PriceBaseUnits,
+		&i.FeeBps,
+		&i.FeeBaseUnits,
+		&i.SellerBaseUnits,
+		&i.QuotedNetworkFee,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.StatusReason,
+		&i.LockExpiresAt,
+		&i.TxHash,
+		&i.Confirmations,
+		&i.SubmittedAt,
+		&i.CompletedAt,
+		&i.NextCheckAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMarketSaleByOfferID = `-- name: GetMarketSaleByOfferID :one
+SELECT id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at FROM market_sales WHERE offer_id = $1 ORDER BY created_at DESC LIMIT 1
+`
+
+func (q *Queries) GetMarketSaleByOfferID(ctx context.Context, offerID *uuid.UUID) (MarketSale, error) {
+	row := q.db.QueryRow(ctx, getMarketSaleByOfferID, offerID)
 	var i MarketSale
 	err := row.Scan(
 		&i.ID,
@@ -801,6 +1164,23 @@ func (q *Queries) HasActiveMarketRestriction(ctx context.Context, arg HasActiveM
 	return column_1, err
 }
 
+const hasOpenMarketOfferOnName = `-- name: HasOpenMarketOfferOnName :one
+SELECT EXISTS (SELECT 1 FROM market_offers
+               WHERE buyer_account_id = $1 AND max_id = $2 AND status IN ('live', 'unfunded', 'accepted'))::boolean
+`
+
+type HasOpenMarketOfferOnNameParams struct {
+	BuyerAccountID uuid.UUID
+	MaxID          uuid.UUID
+}
+
+func (q *Queries) HasOpenMarketOfferOnName(ctx context.Context, arg HasOpenMarketOfferOnNameParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasOpenMarketOfferOnName, arg.BuyerAccountID, arg.MaxID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const insertMarketSaleEvent = `-- name: InsertMarketSaleEvent :exec
 
 INSERT INTO market_sale_events (sale_id, event_type, from_status, to_status, detail)
@@ -824,6 +1204,22 @@ func (q *Queries) InsertMarketSaleEvent(ctx context.Context, arg InsertMarketSal
 		arg.ToStatus,
 		arg.Detail,
 	)
+	return err
+}
+
+const insertMarketStrike = `-- name: InsertMarketStrike :exec
+
+INSERT INTO market_strikes (account_id, offer_id) VALUES ($1, $2)
+`
+
+type InsertMarketStrikeParams struct {
+	AccountID uuid.UUID
+	OfferID   *uuid.UUID
+}
+
+// Strikes and restrictions
+func (q *Queries) InsertMarketStrike(ctx context.Context, arg InsertMarketStrikeParams) error {
+	_, err := q.db.Exec(ctx, insertMarketStrike, arg.AccountID, arg.OfferID)
 	return err
 }
 
@@ -973,6 +1369,62 @@ func (q *Queries) ListExpiredMarketListings(ctx context.Context, limit int32) ([
 	return items, nil
 }
 
+const listLiveMarketOffersReceived = `-- name: ListLiveMarketOffersReceived :many
+SELECT o.id, o.max_id, o.buyer_account_id, o.from_address, o.chain, o.asset_address, o.asset_decimals, o.amount_base_units, o.status, o.decline_note, o.expires_at, o.funded_checked_at, o.created_at, o.updated_at, m.canonical_name
+FROM market_offers o
+JOIN max_ids m ON m.id = o.max_id
+WHERE m.owner_account_id = $1 AND o.status = 'live' AND o.expires_at > now()
+ORDER BY o.created_at DESC
+LIMIT $2
+`
+
+type ListLiveMarketOffersReceivedParams struct {
+	OwnerAccountID uuid.UUID
+	Limit          int32
+}
+
+type ListLiveMarketOffersReceivedRow struct {
+	MarketOffer   MarketOffer
+	CanonicalName string
+}
+
+// The seller's inbox: only live, unexpired offers on names they own now.
+func (q *Queries) ListLiveMarketOffersReceived(ctx context.Context, arg ListLiveMarketOffersReceivedParams) ([]ListLiveMarketOffersReceivedRow, error) {
+	rows, err := q.db.Query(ctx, listLiveMarketOffersReceived, arg.OwnerAccountID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveMarketOffersReceivedRow
+	for rows.Next() {
+		var i ListLiveMarketOffersReceivedRow
+		if err := rows.Scan(
+			&i.MarketOffer.ID,
+			&i.MarketOffer.MaxID,
+			&i.MarketOffer.BuyerAccountID,
+			&i.MarketOffer.FromAddress,
+			&i.MarketOffer.Chain,
+			&i.MarketOffer.AssetAddress,
+			&i.MarketOffer.AssetDecimals,
+			&i.MarketOffer.AmountBaseUnits,
+			&i.MarketOffer.Status,
+			&i.MarketOffer.DeclineNote,
+			&i.MarketOffer.ExpiresAt,
+			&i.MarketOffer.FundedCheckedAt,
+			&i.MarketOffer.CreatedAt,
+			&i.MarketOffer.UpdatedAt,
+			&i.CanonicalName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMarketListingsBySeller = `-- name: ListMarketListingsBySeller :many
 SELECT id, max_id, seller_account_id, chain, asset_address, asset_decimals, price_base_units, payout_address, status, status_reason, expires_at, created_at, updated_at FROM market_listings
 WHERE seller_account_id = $1
@@ -1061,6 +1513,61 @@ func (q *Queries) ListMarketListingsBySellerWithName(ctx context.Context, arg Li
 			&i.MarketListing.ExpiresAt,
 			&i.MarketListing.CreatedAt,
 			&i.MarketListing.UpdatedAt,
+			&i.CanonicalName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMarketOffersByBuyerWithName = `-- name: ListMarketOffersByBuyerWithName :many
+SELECT o.id, o.max_id, o.buyer_account_id, o.from_address, o.chain, o.asset_address, o.asset_decimals, o.amount_base_units, o.status, o.decline_note, o.expires_at, o.funded_checked_at, o.created_at, o.updated_at, m.canonical_name
+FROM market_offers o
+JOIN max_ids m ON m.id = o.max_id
+WHERE o.buyer_account_id = $1
+ORDER BY o.created_at DESC
+LIMIT $2
+`
+
+type ListMarketOffersByBuyerWithNameParams struct {
+	BuyerAccountID uuid.UUID
+	Limit          int32
+}
+
+type ListMarketOffersByBuyerWithNameRow struct {
+	MarketOffer   MarketOffer
+	CanonicalName string
+}
+
+func (q *Queries) ListMarketOffersByBuyerWithName(ctx context.Context, arg ListMarketOffersByBuyerWithNameParams) ([]ListMarketOffersByBuyerWithNameRow, error) {
+	rows, err := q.db.Query(ctx, listMarketOffersByBuyerWithName, arg.BuyerAccountID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMarketOffersByBuyerWithNameRow
+	for rows.Next() {
+		var i ListMarketOffersByBuyerWithNameRow
+		if err := rows.Scan(
+			&i.MarketOffer.ID,
+			&i.MarketOffer.MaxID,
+			&i.MarketOffer.BuyerAccountID,
+			&i.MarketOffer.FromAddress,
+			&i.MarketOffer.Chain,
+			&i.MarketOffer.AssetAddress,
+			&i.MarketOffer.AssetDecimals,
+			&i.MarketOffer.AmountBaseUnits,
+			&i.MarketOffer.Status,
+			&i.MarketOffer.DeclineNote,
+			&i.MarketOffer.ExpiresAt,
+			&i.MarketOffer.FundedCheckedAt,
+			&i.MarketOffer.CreatedAt,
+			&i.MarketOffer.UpdatedAt,
 			&i.CanonicalName,
 		); err != nil {
 			return nil, err
@@ -1351,6 +1858,18 @@ func (q *Queries) ListMarketSalesByStatus(ctx context.Context, arg ListMarketSal
 	return items, nil
 }
 
+const lockMarketOfferBuyer = `-- name: LockMarketOfferBuyer :exec
+
+SELECT pg_advisory_xact_lock(hashtextextended('market_offers:' || $1::text, 0))
+`
+
+// Offers (Task 8)
+// Serialises offer creation per buyer so the open-offer limit holds.
+func (q *Queries) LockMarketOfferBuyer(ctx context.Context, buyer string) error {
+	_, err := q.db.Exec(ctx, lockMarketOfferBuyer, buyer)
+	return err
+}
+
 const progressMarketSale = `-- name: ProgressMarketSale :one
 UPDATE market_sales
 SET status = $1, status_reason = $2, confirmations = $3,
@@ -1487,6 +2006,41 @@ func (q *Queries) SearchMarketListings(ctx context.Context, arg SearchMarketList
 	return items, nil
 }
 
+const setMarketOfferFunding = `-- name: SetMarketOfferFunding :one
+UPDATE market_offers
+SET status = $1, funded_checked_at = $2, updated_at = now()
+WHERE id = $3 AND status IN ('live', 'unfunded')
+RETURNING id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at
+`
+
+type SetMarketOfferFundingParams struct {
+	ToStatus  string
+	CheckedAt *time.Time
+	ID        uuid.UUID
+}
+
+func (q *Queries) SetMarketOfferFunding(ctx context.Context, arg SetMarketOfferFundingParams) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, setMarketOfferFunding, arg.ToStatus, arg.CheckedAt, arg.ID)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const submitMarketSale = `-- name: SubmitMarketSale :one
 UPDATE market_sales
 SET status = 'submitted', tx_hash = $2, submitted_at = now(), next_check_at = $3, updated_at = now()
@@ -1587,6 +2141,41 @@ func (q *Queries) TransitionMarketListing(ctx context.Context, arg TransitionMar
 		&i.Status,
 		&i.StatusReason,
 		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const transitionMarketOffer = `-- name: TransitionMarketOffer :one
+UPDATE market_offers
+SET status = $1, updated_at = now()
+WHERE id = $2 AND status = ANY($3::text[])
+RETURNING id, max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, decline_note, expires_at, funded_checked_at, created_at, updated_at
+`
+
+type TransitionMarketOfferParams struct {
+	ToStatus     string
+	ID           uuid.UUID
+	FromStatuses []string
+}
+
+func (q *Queries) TransitionMarketOffer(ctx context.Context, arg TransitionMarketOfferParams) (MarketOffer, error) {
+	row := q.db.QueryRow(ctx, transitionMarketOffer, arg.ToStatus, arg.ID, arg.FromStatuses)
+	var i MarketOffer
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.BuyerAccountID,
+		&i.FromAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.AmountBaseUnits,
+		&i.Status,
+		&i.DeclineNote,
+		&i.ExpiresAt,
+		&i.FundedCheckedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
