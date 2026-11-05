@@ -62,8 +62,9 @@ SELECT * FROM max_ids WHERE id = $1 FOR UPDATE;
 -- name: TransferMaxIDOwner :one
 -- Moves the ID to a new owner and resets its public identity. The WHERE clause
 -- pins the previous owner so a stale caller cannot transfer twice.
-UPDATE max_ids
+UPDATE max_ids m
 SET owner_account_id = sqlc.arg(to_owner),
+    type = CASE WHEN (SELECT a.type FROM accounts a WHERE a.id = sqlc.arg(to_owner)) = 'agent' THEN 'agent' ELSE 'human' END,
     display_name = '',
     description = '',
     avatar_url = '',
@@ -72,8 +73,8 @@ SET owner_account_id = sqlc.arg(to_owner),
     listable_at = now() + make_interval(secs => sqlc.arg(hold_seconds)::int),
     rename_available_at = greatest(rename_available_at, now() + make_interval(secs => sqlc.arg(hold_seconds)::int)),
     updated_at = now()
-WHERE id = sqlc.arg(id) AND owner_account_id = sqlc.arg(from_owner)
-RETURNING *;
+WHERE m.id = sqlc.arg(id) AND m.owner_account_id = sqlc.arg(from_owner)
+RETURNING m.*;
 
 -- name: DeleteAllDestinations :exec
 DELETE FROM max_id_destinations WHERE max_id = $1;

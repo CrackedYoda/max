@@ -2,8 +2,6 @@ package maxids
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,14 +35,22 @@ type TransferParams struct {
 }
 
 // TransferOwnership moves a MAX ID to a new owner and resets everything the
-// previous owner configured, so the buyer never inherits a payout route they
+// previous owner configured (and aligns max_ids.type with the new owner's
+// account type), so the buyer never inherits a payout route they
 // did not choose. It runs on the caller's transaction, and the caller must
 // already hold SELECT ... FOR UPDATE on the max_ids row (LockMaxIDByID).
 // max_id_history and name_quarantine are left untouched. The caller writes
 // the audit entry for the surrounding sale or reversal.
 func TransferOwnership(ctx context.Context, q *generated.Queries, p TransferParams) error {
 	if p.From == p.To {
-		return errors.New("transfer: from and to are the same account")
+		return ErrTransferSameAccount
+	}
+	// A pending rename would finalize against the new owner's ID; the caller
+	// must resolve it first. Checked inside the caller's transaction.
+	if _, err := q.GetPendingRenameForMaxID(ctx, p.MaxID); err == nil {
+		return ErrRenamePending
+	} else if !database.IsNoRows(err) {
+		return err
 	}
 	if p.DestinationWalletID != uuid.Nil {
 		w, err := q.GetOwnedActiveWallet(ctx, generated.GetOwnedActiveWalletParams{ID: p.DestinationWalletID, AccountID: p.To})
@@ -64,7 +70,7 @@ func transferRows(ctx context.Context, q *generated.Queries, p TransferParams, n
 		ID: p.MaxID, FromOwner: p.From, ToOwner: p.To, HoldSeconds: holdSeconds(p.HoldPeriod),
 	}); err != nil {
 		if database.IsNoRows(err) {
-			return fmt.Errorf("transfer: %s is not the current owner of %s", p.From, p.MaxID)
+			return ErrTransferOwnerMismatch
 		}
 		return err
 	}

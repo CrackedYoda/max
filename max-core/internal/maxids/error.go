@@ -37,3 +37,13 @@ var (
 	// ErrNameLocked refuses edits while the name has an open sale.
 	ErrNameLocked = shared.NewAppError("NAME_LOCKED", http.StatusConflict, "this MAX ID has a sale in progress and cannot be changed")
 )
+
+var (
+	// ErrTransferOwnerMismatch means the ID is no longer held by the expected owner.
+	ErrTransferOwnerMismatch = shared.NewAppError("OWNER_CHANGED", http.StatusConflict, "the MAX ID is no longer held by the expected owner")
+	// ErrTransferSameAccount means a transfer named the same account on both sides.
+	ErrTransferSameAccount = shared.NewAppError("TRANSFER_SAME_ACCOUNT", http.StatusBadRequest, "cannot transfer a MAX ID to its current owner")
+	// ErrRenamePending refuses a transfer while a rename awaits payment. It
+	// shares its code with renames.ErrRenamePending, so errors.Is matches both.
+	ErrRenamePending = shared.NewAppError("RENAME_PENDING", http.StatusConflict, "a rename for this MAX ID is already awaiting payment")
+)

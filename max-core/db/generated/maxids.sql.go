@@ -399,8 +399,9 @@ func (q *Queries) SetListableAfter(ctx context.Context, arg SetListableAfterPara
 }
 
 const transferMaxIDOwner = `-- name: TransferMaxIDOwner :one
-UPDATE max_ids
+UPDATE max_ids m
 SET owner_account_id = $1,
+    type = CASE WHEN (SELECT a.type FROM accounts a WHERE a.id = $1) = 'agent' THEN 'agent' ELSE 'human' END,
     display_name = '',
     description = '',
     avatar_url = '',
@@ -409,8 +410,8 @@ SET owner_account_id = $1,
     listable_at = now() + make_interval(secs => $2::int),
     rename_available_at = greatest(rename_available_at, now() + make_interval(secs => $2::int)),
     updated_at = now()
-WHERE id = $3 AND owner_account_id = $4
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
+WHERE m.id = $3 AND m.owner_account_id = $4
+RETURNING m.id, m.canonical_name, m.owner_account_id, m.type, m.status, m.display_name, m.description, m.avatar_url, m.resolution_version, m.rename_available_at, m.created_at, m.updated_at, m.owner_changed_at, m.listable_at
 `
 
 type TransferMaxIDOwnerParams struct {

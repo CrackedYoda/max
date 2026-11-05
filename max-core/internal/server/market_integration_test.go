@@ -4,6 +4,7 @@ package server_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -323,5 +324,69 @@ func TestClaim_SetsListableAt(t *testing.T) {
 	}
 	if d := time.Until(listable); d < 71*time.Hour || d > 73*time.Hour {
 		t.Fatalf("listable_at in %v, want ~72h", d)
+	}
+}
+
+func TestTransferOwnership_TypeFollowsOwner(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	human, agent := newParty(t, env), newParty(t, env)
+	if _, err := env.pool.Exec(ctx, `UPDATE accounts SET type = 'agent' WHERE id = $1`, agent.account); err != nil {
+		t.Fatal(err)
+	}
+	id := claimID(t, human, "yoda")
+	typeOf := func() string {
+		var s string
+		_ = env.pool.QueryRow(ctx, `SELECT type FROM max_ids WHERE id = $1`, id).Scan(&s)
+		return s
+	}
+	if typeOf() != "human" {
+		t.Fatalf("initial type %q", typeOf())
+	}
+	if err := transfer(t, env, maxids.TransferParams{MaxID: id, From: human.account, To: agent.account}); err != nil {
+		t.Fatal(err)
+	}
+	if typeOf() != "agent" {
+		t.Fatalf("after human->agent: %q", typeOf())
+	}
+	if err := transfer(t, env, maxids.TransferParams{MaxID: id, From: agent.account, To: human.account}); err != nil {
+		t.Fatal(err)
+	}
+	if typeOf() != "human" {
+		t.Fatalf("after agent->human: %q", typeOf())
+	}
+}
+
+func TestTransferOwnership_TypedErrors(t *testing.T) {
+	env := newTestEnv(t)
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	if err := transfer(t, env, maxids.TransferParams{MaxID: id, From: bob.account, To: alice.account}); !errors.Is(err, maxids.ErrTransferOwnerMismatch) {
+		t.Fatalf("owner mismatch: %v", err)
+	}
+	if err := transfer(t, env, maxids.TransferParams{MaxID: id, From: alice.account, To: alice.account}); !errors.Is(err, maxids.ErrTransferSameAccount) {
+		t.Fatalf("same account: %v", err)
+	}
+	if errors.Is(maxids.ErrTransferOwnerMismatch, maxids.ErrTransferSameAccount) {
+		t.Fatal("sentinels must be distinguishable")
+	}
+}
+
+func TestTransferOwnership_RefusedWithPendingRename(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	alice, bob := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	if code, body := requestRename(t, alice.c, id.String(), "jedi", alice.wallet, "rename-pending-0001"); code != http.StatusCreated {
+		t.Fatalf("rename request: %d %v", code, body)
+	}
+	err := transfer(t, env, maxids.TransferParams{MaxID: id, From: alice.account, To: bob.account})
+	if !errors.Is(err, maxids.ErrRenamePending) {
+		t.Fatalf("transfer with pending rename: %v", err)
+	}
+	var owner uuid.UUID
+	_ = env.pool.QueryRow(ctx, `SELECT owner_account_id FROM max_ids WHERE id = $1`, id).Scan(&owner)
+	if owner != alice.account {
+		t.Fatal("ownership moved despite pending rename")
 	}
 }
