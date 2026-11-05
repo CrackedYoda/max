@@ -55,6 +55,19 @@ type listingResponse struct {
 	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
+// publicListingResponse is a listing as anyone may see it: no payout wallet,
+// no internal status reasons.
+type publicListingResponse struct {
+	ID        string     `json:"id"`
+	Chain     string     `json:"chain"`
+	Asset     string     `json:"asset"`
+	Symbol    string     `json:"symbol"`
+	Price     string     `json:"price"`
+	Status    string     `json:"status"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
 type saleResponse struct {
 	ID                  string     `json:"id"`
 	MaxID               string     `json:"maxId"`
@@ -136,13 +149,13 @@ type lastSaleResponse struct {
 }
 
 type nameViewResponse struct {
-	MaxID          string            `json:"maxId"`
-	Handle         string            `json:"handle"`
-	Listable       bool              `json:"listable"`
-	Reason         string            `json:"reason,omitempty"`
-	Listing        *listingResponse  `json:"listing,omitempty"`
-	LiveOfferCount int64             `json:"liveOfferCount"`
-	LastSale       *lastSaleResponse `json:"lastSale,omitempty"`
+	MaxID          string                 `json:"maxId"`
+	Handle         string                 `json:"handle"`
+	Listable       bool                   `json:"listable"`
+	Reason         string                 `json:"reason,omitempty"`
+	Listing        *publicListingResponse `json:"listing,omitempty"`
+	LiveOfferCount int64                  `json:"liveOfferCount"`
+	LastSale       *lastSaleResponse      `json:"lastSale,omitempty"`
 }
 
 type eligibilityResponse struct {
@@ -248,8 +261,12 @@ func toCardResponse(c ListingCard) cardResponse {
 func toNameViewResponse(v NameView) nameViewResponse {
 	out := nameViewResponse{MaxID: v.MaxID.String(), Handle: handle(v.Name), Listable: v.Listable, Reason: v.Reason, LiveOfferCount: v.LiveOfferCount}
 	if v.Listing != nil {
-		l := toListingResponse(*v.Listing)
-		out.Listing = &l
+		l := *v.Listing
+		asset, sym := assetLabel(l.Chain, l.AssetAddress)
+		out.Listing = &publicListingResponse{
+			ID: l.ID.String(), Chain: l.Chain, Asset: asset, Symbol: sym, Price: amount(l.PriceBaseUnits, l.AssetDecimals),
+			Status: l.Status, ExpiresAt: l.ExpiresAt, CreatedAt: l.CreatedAt,
+		}
 	}
 	if s := v.LastSale; s != nil {
 		asset, sym := assetLabel(s.Chain, s.AssetAddress)

@@ -11,7 +11,19 @@ const (
 	ReasonRenameCooldown = "rename_cooldown"
 	ReasonRenamePending  = "rename_pending"
 	ReasonMarketBanned   = "market_banned"
+	// ReasonUnavailable replaces moderation reasons in public views.
+	ReasonUnavailable = "unavailable"
 )
+
+// PublicReason hides moderation outcomes (bans, account suspension) from
+// anyone but the owner.
+func PublicReason(reason string) string {
+	switch reason {
+	case ReasonMarketBanned, ReasonOwnerSuspended:
+		return ReasonUnavailable
+	}
+	return reason
+}
 
 // NameFacts are the stored facts about a MAX ID needed to decide listability.
 type NameFacts struct {

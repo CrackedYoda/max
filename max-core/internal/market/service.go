@@ -558,7 +558,14 @@ func (s *Service) NameView(ctx context.Context, rawName string) (NameView, error
 	if err != nil {
 		return NameView{}, err
 	}
-	v.Listable, v.Reason = Listable(v.Facts, s.now())
+	now := s.now()
+	ok, reason := Listable(v.Facts, now)
+	v.Listable, v.Reason = ok, PublicReason(reason)
+	// An active listing past its expiry is dead even before the worker closes
+	// it; a locked one still has a sale in progress.
+	if l := v.Listing; l != nil && l.Status == ListingActive && l.ExpiresAt != nil && !l.ExpiresAt.After(now) {
+		v.Listing = nil
+	}
 	return v, nil
 }
 

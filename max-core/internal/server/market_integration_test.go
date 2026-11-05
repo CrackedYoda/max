@@ -541,8 +541,14 @@ func TestMarket_BuyNowHappyPath(t *testing.T) {
 	if memo := ins[len(ins)-1].(map[string]any)["memo"]; memo != "max:sale:"+saleID {
 		t.Fatalf("memo %v", memo)
 	}
-	// Replay with the same key returns the same sale.
+	// The public name view never exposes the payout wallet or internal reasons.
+	_, body = anon.do("GET", "/v1/market/names/yoda", nil)
+	pub := data(t, body)["listing"].(map[string]any)
+	if _, ok := pub["payoutAddress"]; ok || pub["statusReason"] != nil || pub["status"] != "locked" || pub["price"] != "25" {
+		t.Fatalf("public listing leaks or is wrong: %v", pub)
+	}
 	code, body = buyListing(bob, listingID, "happy-buy-0001")
+	// Replay with the same key returns the same sale.
 	if code != http.StatusOK || saleOf(t, body)["id"] != saleID {
 		t.Fatalf("replay: %d %v", code, body)
 	}
@@ -844,5 +850,42 @@ func TestMarket_SnapshotImmutable(t *testing.T) {
 		FROM market_sales WHERE id = $1`, saleID)
 	if err == nil {
 		t.Error("fee + seller != price accepted")
+	}
+}
+
+func TestMarket_PublicNameViewHidesModerationAndExpiry(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	ctx := context.Background()
+	alice := newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	anon := &client{t: t, h: env.handler}
+
+	if _, err := env.pool.Exec(ctx, `UPDATE market_listings SET expires_at = now() - interval '1 minute' WHERE id = $1`, listingID); err != nil {
+		t.Fatal(err)
+	}
+	_, body := anon.do("GET", "/v1/market/names/yoda", nil)
+	if nv := data(t, body); nv["listing"] != nil {
+		t.Fatalf("expired listing shown as live: %v", body)
+	}
+
+	if _, err := env.pool.Exec(ctx, `INSERT INTO market_restrictions (account_id, kind, reason) VALUES ($1, 'ban', 'fraud')`, alice.account); err != nil {
+		t.Fatal(err)
+	}
+	_, body = anon.do("GET", "/v1/market/names/yoda", nil)
+	if nv := data(t, body); nv["listable"] != false || nv["reason"] != "unavailable" {
+		t.Fatalf("public ban reason: %v", body)
+	}
+	_, body = alice.c.do("GET", "/v1/market/eligibility/"+id.String(), nil)
+	if e := data(t, body); e["reason"] != "market_banned" {
+		t.Fatalf("owner eligibility reason: %v", body)
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE accounts SET status = 'suspended' WHERE id = $1`, alice.account); err != nil {
+		t.Fatal(err)
+	}
+	_, body = anon.do("GET", "/v1/market/names/yoda", nil)
+	if nv := data(t, body); nv["reason"] != "unavailable" {
+		t.Fatalf("public suspension reason: %v", body)
 	}
 }

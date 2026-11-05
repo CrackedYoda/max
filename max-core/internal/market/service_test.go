@@ -29,14 +29,15 @@ func solAddr() string {
 }
 
 type fakeRepo struct {
-	facts      NameFacts
-	owner      uuid.UUID
-	party      PartyFacts
-	wallets    map[string]uuid.UUID // account|address
-	restricted map[uuid.UUID]bool
-	listings   map[uuid.UUID]Listing
-	sales      map[uuid.UUID]Sale
-	opened     int
+	facts       NameFacts
+	owner       uuid.UUID
+	party       PartyFacts
+	wallets     map[string]uuid.UUID // account|address
+	restricted  map[uuid.UUID]bool
+	listings    map[uuid.UUID]Listing
+	sales       map[uuid.UUID]Sale
+	opened      int
+	nameListing *Listing
 }
 
 func newFakeRepo() *fakeRepo {
@@ -137,8 +138,10 @@ func (f *fakeRepo) GetSale(_ context.Context, id uuid.UUID) (Sale, error) {
 func (f *fakeRepo) SearchListings(context.Context, ListingQuery) ([]ListingCard, string, error) {
 	return nil, "", nil
 }
-func (f *fakeRepo) NameView(context.Context, string) (NameView, error) { return NameView{}, nil }
-func (f *fakeRepo) Inbox(context.Context, uuid.UUID) (Inbox, error)    { return Inbox{}, nil }
+func (f *fakeRepo) NameView(context.Context, string) (NameView, error) {
+	return NameView{Facts: f.facts, Listing: f.nameListing}, nil
+}
+func (f *fakeRepo) Inbox(context.Context, uuid.UUID) (Inbox, error) { return Inbox{}, nil }
 
 type fakeAdapter struct {
 	fundsErr error
@@ -536,5 +539,47 @@ func TestNewConfig_Startup(t *testing.T) {
 	off := config.MarketConfig{MinOffer: "1"}
 	if _, err := NewConfig(off, nil); err != nil {
 		t.Errorf("disabled with no assets: %v", err)
+	}
+}
+
+func TestNameView_HidesModerationReasons(t *testing.T) {
+	for facts, want := range map[NameFacts]string{
+		{Status: "active", OwnerStatus: "active", OwnerBanned: true}:   ReasonUnavailable,
+		{Status: "active", OwnerStatus: "suspended"}:                   ReasonUnavailable,
+		{Status: "active", OwnerStatus: "active", RenamePending: true}: ReasonRenamePending,
+	} {
+		h := newHarness(t, nil)
+		h.repo.facts = facts
+		v, err := h.svc.NameView(context.Background(), "yoda")
+		if err != nil || v.Listable || v.Reason != want {
+			t.Errorf("%+v: got %q %v, want %q", facts, v.Reason, err, want)
+		}
+	}
+	// The owner's own eligibility keeps the real reason.
+	h := newHarness(t, nil)
+	h.repo.facts = NameFacts{Status: "active", OwnerStatus: "active", OwnerBanned: true}
+	if e, err := h.svc.Eligibility(context.Background(), human(h.seller), h.maxID); err != nil || e.Reason != ReasonMarketBanned {
+		t.Errorf("eligibility reason %q %v", e.Reason, err)
+	}
+}
+
+func TestNameView_HidesExpiredListing(t *testing.T) {
+	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
+	for _, c := range []struct {
+		status  string
+		expires *time.Time
+		shown   bool
+	}{
+		{ListingActive, &past, false},
+		{ListingActive, &future, true},
+		{ListingActive, nil, true},
+		{ListingLocked, &past, true}, // an open sale is still in progress
+	} {
+		h := newHarness(t, nil)
+		h.repo.nameListing = &Listing{ID: uuid.New(), Status: c.status, ExpiresAt: c.expires}
+		v, err := h.svc.NameView(context.Background(), "yoda")
+		if err != nil || (v.Listing != nil) != c.shown {
+			t.Errorf("%s expires %v: shown=%v err=%v", c.status, c.expires, v.Listing != nil, err)
+		}
 	}
 }
