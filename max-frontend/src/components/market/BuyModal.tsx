@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { max } from "@/api/client";
 import { marketErrorMessage } from "@/error/market";
 import { SALE_TERMINAL, useInvalidateMarket, useSale, useTrustedDecimals, useWallets } from "@/hooks/queries";
-import { findSaleSignature, MaybeSentError, signSale } from "@/services/market";
+import { attemptExpired, findSaleSignature, MaybeSentError, signSale, type SignAttempt } from "@/services/market";
 import { useSession } from "@/store/session";
 import { shortAddress } from "@/utils/format";
 import { displayDecimal, pinnedPriceBase } from "@/utils/money";
@@ -40,8 +40,12 @@ type Phase =
   | { k: "review"; view: SaleView }
   | { k: "held"; saleId: string }
   | { k: "record_failed"; view: SaleView; txHash: string; error: string }
-  /** The wallet errored after signing began: the payment may be on chain. Never offer a plain re-sign. */
-  | { k: "uncertain"; view: SaleView; lookup: "checking" | "not_found" | "failed" }
+  /**
+   * The wallet errored after signing began: the payment may be on chain. A
+   * second signature is offered only once the first attempt's blockhash has
+   * expired (it can no longer land) and a last look found no payment.
+   */
+  | { k: "uncertain"; view: SaleView; attempt: SignAttempt; expired: boolean; lookup: "checking" | "not_found" | "failed" }
   | { k: "watching"; saleId: string };
 
 const STEP: Record<"connect" | "lock" | "sign" | "record", string> = {
@@ -83,6 +87,29 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     window.addEventListener("beforeunload", h);
     return () => window.removeEventListener("beforeunload", h);
   }, [busy]);
+
+  // Wait out the uncertain attempt: once its blockhash expires it can't land,
+  // so one last look decides whether signing again is safe.
+  const waiting = phase.k === "uncertain" && !phase.expired && phase.lookup !== "checking" ? phase : null;
+  useEffect(() => {
+    if (!waiting) return;
+    let stop = false;
+    const id = window.setInterval(async () => {
+      try {
+        if (!(await attemptExpired(waiting.attempt)) || stop) return;
+      } catch {
+        return; // RPC hiccup: ask again on the next beat
+      }
+      stop = true;
+      window.clearInterval(id);
+      void lookForPayment(waiting.view, waiting.attempt, true);
+    }, 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting?.attempt.blockhash, waiting?.lookup]);
 
   const terminal = sale.data && SALE_TERMINAL.includes(sale.data.sale.status);
   useEffect(() => {
@@ -136,8 +163,8 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
       await record(view, sig);
     } catch (err) {
       if (err instanceof MaybeSentError) {
-        setError(err);
-        await lookForPayment(view);
+        setError(err.message);
+        await lookForPayment(view, err.attempt, false);
         return;
       }
       setPhase({ k: "review", view });
@@ -146,16 +173,16 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
   }
 
   /** After an uncertain wallet error: find the sale's tx on chain before anyone signs again. */
-  async function lookForPayment(view: SaleView) {
-    setPhase({ k: "uncertain", view, lookup: "checking" });
+  async function lookForPayment(view: SaleView, attempt: SignAttempt, expired: boolean) {
+    setPhase({ k: "uncertain", view, attempt, expired, lookup: "checking" });
     try {
       const sig = await findSaleSignature(view);
       if (sig) {
         setError(null);
         await record(view, sig);
-      } else setPhase({ k: "uncertain", view, lookup: "not_found" });
+      } else setPhase({ k: "uncertain", view, attempt, expired, lookup: "not_found" });
     } catch {
-      setPhase({ k: "uncertain", view, lookup: "failed" });
+      setPhase({ k: "uncertain", view, attempt, expired, lookup: "failed" });
     }
   }
 
@@ -218,12 +245,20 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
                     ? "We couldn’t reach the network to check. Check your wallet before retrying: open Phantom’s activity and look for this payment."
                     : `No payment for this sale shows up yet among ${shortAddress(phase.view.sale.buyerAddress)}’s last 20 transactions. A payment can take a minute to appear: check Phantom’s activity, then check again.`}
                 </p>
-                <Button variant="secondary" onClick={() => lookForPayment(phase.view)}>Check again</Button>
-                <label className="flex items-start gap-2.5 text-sm">
-                  <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
-                  I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
-                </label>
-                <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view)}>Sign again</Button>
+                <Button variant="secondary" onClick={() => lookForPayment(phase.view, phase.attempt, phase.expired)}>Check again</Button>
+                {phase.expired ? (
+                  <>
+                    <label className="flex items-start gap-2.5 text-sm">
+                      <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
+                      I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
+                    </label>
+                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view)}>Sign again</Button>
+                  </>
+                ) : (
+                  <p className="m-0 flex items-center gap-2 text-sm text-muted">
+                    <Spinner />Waiting for the first attempt to expire. A signed payment can still land for about a minute; after that MAX checks once more and you can sign again safely.
+                  </p>
+                )}
               </>
             )}
           </>

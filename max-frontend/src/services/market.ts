@@ -34,23 +34,47 @@ export async function signSale(view: SaleView, wallet: ConnectedWallet, expect: 
     throw new WalletError(`Connect ${short(view.sale.buyerAddress)} in Phantom to pay for this sale.`);
   }
   const conn = connection(view.sale.chain);
-  const { blockhash } = await conn.getLatestBlockhash("confirmed");
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   // Throws AuthorizationError unless the transfers pay exactly the agreed
   // price, in the agreed asset, from this wallet. Nothing is signed then.
-  const tx = buildVerifiedSolanaSaleTransaction(view, wallet.address, blockhash, { buyer: wallet.address, ...expect });
+  // With NEXT_PUBLIC_MARKET_TREASURY set, the fee must go to that treasury.
+  const treasury = getEnv().marketTreasury;
+  const tx = buildVerifiedSolanaSaleTransaction(view, wallet.address, blockhash, { buyer: wallet.address, ...expect, ...(treasury ? { treasury } : {}) });
   try {
     const { signature } = await (wallet.provider as unknown as Phantom).signAndSendTransaction(tx);
     return signature;
   } catch (err) {
     if (isRejection(err)) throw new WalletError("Rejected in Phantom. Nothing was sent.", true);
     // Anything else may have happened after the broadcast: never treat it as "not paid".
-    throw new MaybeSentError(`Phantom reported an error${view.sale.chain.includes("devnet") ? " (is Phantom set to Devnet?)" : ""}, but the payment may still have been sent.`);
+    throw new MaybeSentError(
+      `Phantom reported an error${view.sale.chain.includes("devnet") ? " (is Phantom set to Devnet?)" : ""}, but the payment may still have been sent.`,
+      { chain: view.sale.chain, blockhash, lastValidBlockHeight },
+    );
   }
 }
+
+/**
+ * The blockhash a signed transaction was built with. Until the chain passes
+ * lastValidBlockHeight that transaction can still land, so signing a second
+ * one before then could pay twice.
+ */
+export type SignAttempt = { chain: string; blockhash: string; lastValidBlockHeight: number };
 
 /** The wallet failed after signing started: the transaction may or may not be on chain. */
 export class MaybeSentError extends Error {
   override readonly name = "MaybeSentError";
+  constructor(message: string, readonly attempt: SignAttempt) {
+    super(message);
+  }
+}
+
+/**
+ * Whether a signed attempt can no longer land: the finalized block height is
+ * past its lastValidBlockHeight. Throws when the RPC can't be asked.
+ */
+export async function attemptExpired(attempt: SignAttempt): Promise<boolean> {
+  const height = await connection(attempt.chain).getBlockHeight("finalized");
+  return height > attempt.lastValidBlockHeight;
 }
 
 /**

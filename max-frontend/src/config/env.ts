@@ -9,6 +9,12 @@ const schema = z.object({
    * price is never converted with decimals that came from the API.
    */
   marketAssets: z.array(z.object({ chain: z.string().min(1), asset: z.string().min(1), decimals: z.number().int().min(0).max(30).optional() })),
+  /**
+   * NEXT_PUBLIC_MARKET_TREASURY: the MAX Solana treasury (max-core
+   * TREASURY_SOLANA). When set, a sale whose fee goes anywhere else is
+   * refused before signing.
+   */
+  marketTreasury: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "NEXT_PUBLIC_MARKET_TREASURY must be a Solana address").optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -43,6 +49,7 @@ export function getEnv(): Env {
       return { chain, asset, decimals: dec && /^\d+$/.test(dec) ? Number(dec) : undefined };
     })
     .filter((a) => a.chain && a.asset);
-  cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc, marketAssets });
+  const marketTreasury = process.env.NEXT_PUBLIC_MARKET_TREASURY?.trim() || undefined;
+  cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc, marketAssets, marketTreasury });
   return cached;
 }
