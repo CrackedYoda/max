@@ -2,7 +2,7 @@ import { isMaxApiError, isPendingApproval, type SaleView } from '@max/sdk';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Redirect, router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -16,7 +16,7 @@ import { max } from '@/api/client';
 import { marketErrorMessage } from '@/error/market';
 import { fetchTrustedDecimals, SALE_TERMINAL, useChains, useInvalidateMarket, useSale, useTrustedDecimals } from '@/hooks/queries';
 import { useCountdown } from '@/hooks/useCountdown';
-import { broadcastSale, ChainError, findSalePayment, hasRpc, signSale } from '@/services/chain';
+import { broadcastSale, ChainError, findSalePayment, hasRpc, saleAttemptExpired, signSale } from '@/services/chain';
 import { assertSaleChain, shouldRotateSaleKey } from '@/services/saleTx';
 import { stepUp } from '@/services/session';
 import * as vault from '@/services/vault';
@@ -36,8 +36,12 @@ type Phase =
   | { k: 'held'; saleId: string }
   | { k: 'review'; view: SaleView }
   | { k: 'working'; view: SaleView; step: 'sign' | 'broadcast' | 'record' }
-  /** The send may have gone out: find it on chain before anything is signed again. */
-  | { k: 'uncertain'; view: SaleView; lookup: 'checking' | 'not_found' | 'failed' }
+  /**
+   * The send may have gone out: find it on chain before anything is signed
+   * again. `expired` is set once the signed bytes' blockhash has expired (they
+   * can no longer land); only then may a new payment be signed.
+   */
+  | { k: 'uncertain'; view: SaleView; expired: boolean; lookup: 'checking' | 'not_found' | 'failed' }
   | { k: 'record_failed'; view: SaleView; txHash: string; error: string }
   | { k: 'watching'; saleId: string };
 
@@ -52,8 +56,9 @@ const STEP = { sign: 'Signing…', broadcast: 'Sending…', record: 'Recording w
  * A definite "not sent" goes back to review. An uncertain send is never
  * followed by a plain re-sign: the phone looks for the payment on chain (its
  * own signature, then the `max:sale:<id>` memo) and records it if found;
- * otherwise only the same signed bytes may be re-sent, or the user must
- * confirm they checked their wallet before a new signature.
+ * otherwise the same signed bytes may be re-sent, and a new signature is
+ * offered only after the first one's blockhash has expired (a last look then
+ * finds nothing) and the user confirms they checked their wallet.
  */
 export function SaleReview() {
   const target = useSaleDraft((s) => s.target);
@@ -97,17 +102,17 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
   }
 
   /** After an uncertain send: find this sale's payment on chain before anyone signs again. */
-  async function lookForPayment(view: SaleView) {
+  async function lookForPayment(view: SaleView, expired = false) {
     setChecked(false);
-    setPhase({ k: 'uncertain', view, lookup: 'checking' });
+    setPhase({ k: 'uncertain', view, expired, lookup: 'checking' });
     const known = useSaleDraft.getState().signed[view.sale.id]?.hash;
     try {
       assertSaleChain(view.sale.chain, t.chain);
       const sig = await findSalePayment(t.chain, t.fromAddress, view.sale.id, known);
       if (sig) await record(view, sig);
-      else setPhase({ k: 'uncertain', view, lookup: 'not_found' });
+      else setPhase({ k: 'uncertain', view, expired, lookup: 'not_found' });
     } catch {
-      setPhase({ k: 'uncertain', view, lookup: 'failed' });
+      setPhase({ k: 'uncertain', view, expired, lookup: 'failed' });
     }
   }
 
@@ -171,6 +176,30 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Wait out an uncertain send: once its blockhash expires it can't land, and
+  // one last look decides whether a new signature is safe.
+  const waiting = rawPhase.k === 'uncertain' && !rawPhase.expired && rawPhase.lookup !== 'checking' ? rawPhase : null;
+  useEffect(() => {
+    if (!waiting) return;
+    let stop = false;
+    const id = setInterval(async () => {
+      try {
+        const earlier = useSaleDraft.getState().signed[waiting.view.sale.id];
+        if (!(await saleAttemptExpired(t.chain, earlier)) || stop) return;
+      } catch {
+        return; // network hiccup: ask again on the next beat
+      }
+      stop = true;
+      clearInterval(id);
+      void lookForPayment(waiting.view, true);
+    }, 5000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting?.view.sale.id, waiting?.lookup]);
+
   const terminal = !!sale.data && SALE_TERMINAL.includes(sale.data.sale.status);
   useEffect(() => {
     if (!terminal) return;
@@ -201,10 +230,22 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     await record(view, s.hash);
   }
 
-  /** Confirm it's you, pin the price, sign once, send. `replace` re-signs after the wallet check. */
+  // One confirm at a time: a double tap must never sign twice.
+  const confirming = useRef(false);
   async function confirm(view: SaleView, replace = false) {
+    if (confirming.current) return;
+    confirming.current = true;
+    try {
+      await confirmOnce(view, replace);
+    } finally {
+      confirming.current = false;
+    }
+  }
+
+  /** Confirm it's you, pin the price, sign once, send. `replace` re-signs after the wallet check. */
+  async function confirmOnce(view: SaleView, replace: boolean) {
     setFailure(null);
-    const back = () => setPhase(replace ? { k: 'uncertain', view, lookup: 'not_found' } : { k: 'review', view });
+    const back = () => setPhase(replace ? { k: 'uncertain', view, expired: true, lookup: 'not_found' } : { k: 'review', view });
     // Before Face ID: a held-then-approved sale reaches review without start()'s check.
     try {
       assertSaleChain(view.sale.chain, t.chain);
@@ -226,6 +267,19 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     } catch (err) {
       setFailure(err);
       return back();
+    }
+    // A new signature only once the earlier one can no longer land.
+    if (replace) {
+      let gone = false;
+      try {
+        gone = await saleAttemptExpired(t.chain, useSaleDraft.getState().signed[view.sale.id]);
+      } catch {
+        gone = false;
+      }
+      if (!gone) {
+        setFailure('The first attempt could still land. Wait for it to expire, then check again. Nothing was signed.');
+        return setPhase({ k: 'uncertain', view, expired: false, lookup: 'not_found' });
+      }
     }
     const ok = await stepUp(`Approve paying ${displayDecimal(t.price)} ${t.symbol} for ${t.handle}.`);
     if (!ok) return;
@@ -373,7 +427,7 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
           trustedError={!!trusted.error}
           onStart={() => void start()}
           onConfirm={(v, replace) => void confirm(v, replace)}
-          onCheckAgain={(v) => void lookForPayment(v)}
+          onCheckAgain={(v, expired) => void lookForPayment(v, expired)}
           onResend={(v) => void sendSigned(v, true)}
           onRecord={(v, h) => void record(v, h)}
           onClose={close}
@@ -422,7 +476,7 @@ function Footer({
   trustedError: boolean;
   onStart: () => void;
   onConfirm: (v: SaleView, replace?: boolean) => void;
-  onCheckAgain: (v: SaleView) => void;
+  onCheckAgain: (v: SaleView, expired: boolean) => void;
   onResend: (v: SaleView) => void;
   onRecord: (v: SaleView, txHash: string) => void;
   onClose: () => void;
@@ -457,12 +511,23 @@ function Footer({
       if (phase.lookup === 'checking') return <Button label="Checking…" loading />;
       return (
         <View style={{ gap: 10 }}>
-          <Button label="Check again" variant="secondary" onPress={() => onCheckAgain(phase.view)} />
-          <Button label="Send the same signed payment again" variant="ghost" size="md" disabled={expired} onPress={() => onResend(phase.view)} />
-          <CheckRow checked={checked} onChange={setChecked}>
-            I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
-          </CheckRow>
-          <Button label="Sign a new payment" variant="danger" disabled={!checked || expired} onPress={() => onConfirm(phase.view, true)} />
+          <Button label="Check again" variant="secondary" onPress={() => onCheckAgain(phase.view, phase.expired)} />
+          <Button label="Send the same signed payment again" variant="ghost" size="md" disabled={expired || phase.expired} onPress={() => onResend(phase.view)} />
+          {phase.expired ? (
+            <>
+              <CheckRow checked={checked} onChange={setChecked}>
+                I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
+              </CheckRow>
+              <Button label="Sign a new payment" variant="danger" disabled={!checked || expired} onPress={() => onConfirm(phase.view, true)} />
+            </>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <ActivityIndicator size="small" color={colors.muted} />
+              <AppText variant="small" style={{ flex: 1 }}>
+                Waiting for the first attempt to expire. It can still land for about a minute; after that the phone checks once more and a new payment can be signed safely.
+              </AppText>
+            </View>
+          )}
         </View>
       );
     }

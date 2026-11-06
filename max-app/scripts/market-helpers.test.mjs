@@ -169,3 +169,23 @@ test('sale chain must equal the tapped chain', () => {
   tx.assertSaleChain('solana-devnet', 'solana-devnet');
   assert.throws(() => tx.assertSaleChain('solana', 'solana-devnet'), /different network/);
 });
+
+test('a new sale signature waits until the earlier one can no longer land', () => {
+  // Nothing signed before: nothing to wait for.
+  assert.equal(tx.canSignNewSale(undefined, null), true);
+  assert.equal(tx.canSignNewSale(null, 5), true);
+  const earlier = { lastValidBlockHeight: 1000 };
+  assert.equal(tx.canSignNewSale(earlier, 999), false);
+  assert.equal(tx.canSignNewSale(earlier, 1000), false); // still valid at its last height
+  assert.equal(tx.canSignNewSale(earlier, 1001), true);
+  // Height unknown, or an older signature without one: re-send the bytes instead.
+  assert.equal(tx.canSignNewSale(earlier, null), false);
+  assert.equal(tx.canSignNewSale({}, 10_000), false);
+});
+
+test('EXPO_PUBLIC_MARKET_TREASURY pin refuses a sale paying another treasury', () => {
+  const kp = () => web3.Keypair.generate().publicKey.toBase58();
+  const mint = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+  const sale = { buyerAddress: kp(), asset: mint, priceBaseUnits: '25000000', treasuryAddress: kp() };
+  assert.throws(() => sdk.assertSaleInstructionsMatch(sale, { solana: [] }, { treasury: kp() }), /treasury/);
+});

@@ -20,7 +20,7 @@ import {
 
 import { getEnv, USDC } from '@/config/env';
 import type { EvmKey, SolanaKey } from '@/services/keys';
-import { assertSaleChain, matchSaleSignature, saleInstructions } from '@/services/saleTx';
+import { assertSaleChain, canSignNewSale, matchSaleSignature, saleInstructions } from '@/services/saleTx';
 import * as vault from '@/services/vault';
 import type { SignedTx } from '@/store/flows';
 
@@ -256,18 +256,34 @@ export async function mintDecimals(chainKey: string, mint: string): Promise<numb
 export async function signSale(view: SaleView, chainKey: string, expect: Required<Pick<SaleExpectations, 'buyer' | 'asset' | 'priceBaseUnits'>>): Promise<SignedTx> {
   // `chainKey` is the tapped listing/offer's chain: the RPC is chosen by it, never by the sale.
   assertSaleChain(view.sale.chain, chainKey);
-  assertSaleInstructionsMatch(view.sale, view.instructions, expect);
+  // With EXPO_PUBLIC_MARKET_TREASURY set, the fee must go to that treasury.
+  const treasury = getEnv().marketTreasury;
+  assertSaleInstructionsMatch(view.sale, view.instructions, treasury ? { ...expect, treasury } : expect);
   const key = vault.keyFor('solana', expect.buyer);
   if (!key || key.namespace !== 'solana') throw new ChainError('The paying account isn’t on this phone.');
   const payer = key.keypair.publicKey;
   const tx = new Transaction();
   tx.add(...saleInstructions(view.instructions?.solana, payer));
-  tx.recentBlockhash = (await solConnForKey(chainKey).getLatestBlockhash('confirmed')).blockhash;
+  const { blockhash, lastValidBlockHeight } = await solConnForKey(chainKey).getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
   tx.feePayer = payer;
   tx.sign(key.keypair);
   const sig = tx.signature;
   if (!sig) throw new ChainError('Signing failed.');
-  return { namespace: 'solana', raw: tx.serialize().toString('base64'), hash: bs58.encode(sig) };
+  // The blockhash travels with the bytes: a new signature waits until it expires.
+  return { namespace: 'solana', raw: tx.serialize().toString('base64'), hash: bs58.encode(sig), blockhash, lastValidBlockHeight };
+}
+
+/**
+ * Whether a new sale payment may be signed in place of `earlier`, whose fate
+ * is unknown: the finalized block height must be past its
+ * lastValidBlockHeight, so it can never land. Throws when the network can't
+ * be asked.
+ */
+export async function saleAttemptExpired(chainKey: string, earlier: SignedTx | null | undefined): Promise<boolean> {
+  if (!earlier) return true;
+  if (earlier.lastValidBlockHeight == null) return false;
+  return canSignNewSale(earlier, await solConnForKey(chainKey).getBlockHeight('finalized'));
 }
 
 /** Sends a signed sale payment; same definite/ambiguous classification as `broadcast`. */

@@ -81,6 +81,19 @@ export function assertSaleChain(saleChain: string, expected: string): void {
   if (saleChain !== expected) throw new Error('This sale is on a different network than the one you chose, so nothing was signed or sent.');
 }
 
+/**
+ * Whether a new sale payment may be signed while an earlier signature's fate
+ * is unknown: only once the chain's (finalized) block height has passed the
+ * earlier transaction's lastValidBlockHeight, so it can never land. With no
+ * earlier signature there is nothing to wait for; with no recorded height,
+ * or no height read, the answer is no (re-send the same bytes instead).
+ */
+export function canSignNewSale(earlier: { lastValidBlockHeight?: number } | null | undefined, blockHeight: number | null | undefined): boolean {
+  if (!earlier) return true;
+  if (earlier.lastValidBlockHeight == null || blockHeight == null) return false;
+  return blockHeight > earlier.lastValidBlockHeight;
+}
+
 /** The memo every sale payment carries. */
 export const saleMemo = (saleId: string) => `max:sale:${saleId}`;
 

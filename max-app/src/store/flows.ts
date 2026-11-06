@@ -36,8 +36,13 @@ export type SendTerms = {
   senderAddress: string;
 };
 
-/** A signed transaction kept so retries re-broadcast it instead of signing twice. */
-export type SignedTx = { hash: string; raw: string; namespace: 'evm' | 'solana' };
+/**
+ * A signed transaction kept so retries re-broadcast it instead of signing
+ * twice. A Solana sale payment also keeps the blockhash it was signed with
+ * and that blockhash's lastValidBlockHeight: until the chain passes it the
+ * bytes can still land, so a new signature must wait.
+ */
+export type SignedTx = { hash: string; raw: string; namespace: 'evm' | 'solana'; blockhash?: string; lastValidBlockHeight?: number };
 
 type SendState = {
   terms: SendTerms | null;
