@@ -3,6 +3,8 @@ import { z } from "zod";
 const schema = z.object({
   apiUrl: z.url(),
   rpc: z.record(z.string(), z.url()),
+  /** `chain:asset` pairs offers can be made in when a name has no listing (mirrors max-core MARKET_ASSETS). */
+  marketAssets: z.array(z.object({ chain: z.string().min(1), asset: z.string().min(1) })),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -28,6 +30,15 @@ export function getEnv(): Env {
     ["solana-devnet", process.env.NEXT_PUBLIC_RPC_SOLANA_DEVNET],
   ];
   for (const [k, v] of entries) if (v) rpc[k] = v;
-  cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc });
+  const marketAssets = (process.env.NEXT_PUBLIC_MARKET_ASSETS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const i = pair.indexOf(":");
+      return i > 0 ? { chain: pair.slice(0, i), asset: pair.slice(i + 1) } : { chain: "", asset: "" };
+    })
+    .filter((a) => a.chain && a.asset);
+  cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc, marketAssets });
   return cached;
 }
