@@ -32,6 +32,14 @@ type policyRequest struct {
 	Limits            []limitRequest `json:"limits" binding:"max=50,dive"`
 	AllowedRecipients []string       `json:"allowedRecipients" binding:"max=100"`
 	AllowAnyRecipient bool           `json:"allowAnyRecipient"`
+	// Market is omitted to keep the current selling policy.
+	Market *marketPolicyJSON `json:"market"`
+}
+
+// marketPolicyJSON is the selling policy on the wire and in agent_policies.market.
+type marketPolicyJSON struct {
+	CanSell      bool   `json:"canSell"`
+	MinSalePrice string `json:"minSalePrice" binding:"max=78"`
 }
 
 type credentialRequest struct {
@@ -91,11 +99,12 @@ type limitResponse struct {
 }
 
 type policyResponse struct {
-	Version           int             `json:"version"`
-	Limits            []limitResponse `json:"limits"`
-	AllowedRecipients []string        `json:"allowedRecipients"`
-	AllowAnyRecipient bool            `json:"allowAnyRecipient"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
+	Version           int              `json:"version"`
+	Limits            []limitResponse  `json:"limits"`
+	AllowedRecipients []string         `json:"allowedRecipients"`
+	AllowAnyRecipient bool             `json:"allowAnyRecipient"`
+	Market            marketPolicyJSON `json:"market"`
+	UpdatedAt         time.Time        `json:"updatedAt"`
 }
 
 type credentialResponse struct {
@@ -142,7 +151,13 @@ func toAgentResponse(a Agent) agentResponse {
 }
 
 func toPolicyResponse(p Policy) policyResponse {
-	out := policyResponse{Version: p.Version, AllowedRecipients: orEmpty(p.AllowedRecipients), AllowAnyRecipient: p.AllowAnyRecipient, UpdatedAt: p.UpdatedAt, Limits: []limitResponse{}}
+	out := policyResponse{
+		Version: p.Version, AllowedRecipients: orEmpty(p.AllowedRecipients), AllowAnyRecipient: p.AllowAnyRecipient, UpdatedAt: p.UpdatedAt,
+		Limits: []limitResponse{}, Market: marketPolicyJSON{CanSell: p.Market.CanSell, MinSalePrice: p.Market.MinSalePrice},
+	}
+	if out.Market.MinSalePrice == "" {
+		out.Market.MinSalePrice = "0"
+	}
 	for i := range out.AllowedRecipients {
 		out.AllowedRecipients[i] = maxids.Handle(out.AllowedRecipients[i])
 	}

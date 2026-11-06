@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,22 +67,53 @@ func (s *Service) trading() error {
 	return nil
 }
 
-func (s *Service) authorize(ctx context.Context, p shared.Principal, action string, amount *big.Int, a Asset, ref AuthRef) error {
-	d, err := s.agents.Authorize(ctx, p, action, amount, a.Chain.Key, a.Address, ref)
+// authorize asks the agent policy whether p may act now. On go-ahead it
+// returns finish, which the caller must run with what the action created or
+// the error that stopped it. Held actions return ErrPendingApproval and must
+// not run.
+func (s *Service) authorize(ctx context.Context, p shared.Principal, action string, amount *big.Int, a Asset, ref AuthRef, in ActionInput) (func(AuthRef, error), error) {
+	d, err := s.agents.Authorize(ctx, p, action, amount, a.Chain.Key, a.Address, ref, in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch d.Outcome {
 	case DecisionApproved:
-		return nil
+		return s.finisher(ctx, d.AuthorizationID), nil
 	case DecisionPending:
-		details := map[string]any{"reasons": d.Reasons}
+		details := map[string]any{"reasons": orEmpty(d.Reasons)}
 		if d.AuthorizationID != nil {
 			details["authorizationId"] = d.AuthorizationID.String()
 		}
-		return ErrPendingApproval.WithDetails(details)
+		return nil, ErrPendingApproval.WithDetails(details)
 	}
-	return shared.ErrForbidden.WithMessage("the agent policy denies this market action")
+	msg := "the agent policy denies this market action"
+	if len(d.Reasons) > 0 {
+		msg += ": " + strings.Join(d.Reasons, "; ")
+	}
+	return nil, shared.ErrForbidden.WithMessage(msg)
+}
+
+// finisher records an authorized action's outcome on its authorization.
+// Humans have no authorization, so it does nothing for them.
+func (s *Service) finisher(ctx context.Context, id *uuid.UUID) func(AuthRef, error) {
+	return func(ref AuthRef, err error) {
+		if id == nil {
+			return
+		}
+		if err != nil {
+			ref = AuthRef{}
+		}
+		if ferr := s.agents.Finish(ctx, *id, ref, err); ferr != nil {
+			s.log.Warn("market agent authorization finish", zap.String("authorization_id", id.String()), zap.Error(ferr))
+		}
+	}
+}
+
+func orEmpty(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
 }
 
 // Eligibility reports whether the owner can list maxID now and on what terms.
@@ -138,14 +170,17 @@ func (s *Service) List(ctx context.Context, p shared.Principal, in ListInput) (L
 	if in.ExpiresAt != nil && !in.ExpiresAt.After(s.now()) {
 		return Listing{}, shared.ErrValidation.WithMessage("expiresAt must be in the future")
 	}
-	maxID := in.MaxID
-	if err := s.authorize(ctx, p, ActionList, price, a, AuthRef{MaxID: &maxID}); err != nil {
+	maxID, stored := in.MaxID, in
+	finish, err := s.authorize(ctx, p, ActionList, price, a, AuthRef{MaxID: &maxID}, ActionInput{Op: OpList, List: &stored})
+	if err != nil {
 		return Listing{}, err
 	}
-	return s.repo.CreateListing(ctx, NewListing{
+	l, err := s.repo.CreateListing(ctx, NewListing{
 		MaxID: in.MaxID, Seller: p.AccountID, Chain: a.Chain.Key, AssetAddress: a.Address, AssetDecimals: a.Decimals,
 		PriceBaseUnits: price.String(), PayoutAddress: payout, ExpiresAt: in.ExpiresAt,
 	})
+	finish(AuthRef{ListingID: &l.ID}, err)
+	return l, err
 }
 
 // price parses a listing price and enforces the marketplace minimum.
@@ -192,10 +227,14 @@ func (s *Service) UpdatePrice(ctx context.Context, p shared.Principal, id uuid.U
 		return Listing{}, err
 	}
 	maxID := l.MaxID
-	if err := s.authorize(ctx, p, ActionList, price, a, AuthRef{MaxID: &maxID, ListingID: &id}); err != nil {
+	finish, err := s.authorize(ctx, p, ActionList, price, a, AuthRef{MaxID: &maxID, ListingID: &id},
+		ActionInput{Op: OpUpdatePrice, ListingID: &id, Price: rawPrice})
+	if err != nil {
 		return Listing{}, err
 	}
-	return s.repo.UpdateListingPrice(ctx, id, p.AccountID, price.String())
+	out, err := s.repo.UpdateListingPrice(ctx, id, p.AccountID, price.String())
+	finish(AuthRef{ListingID: &id}, err)
+	return out, err
 }
 
 // Delist cancels an active listing.
@@ -271,11 +310,20 @@ func (s *Service) Buy(ctx context.Context, p shared.Principal, listingID uuid.UU
 	if !ok || price.Sign() <= 0 {
 		return SaleView{}, shared.ErrInternal.WithMessage("listing price is corrupt")
 	}
-	maxID := l.MaxID
-	if err := s.authorize(ctx, p, ActionBuy, price, a, AuthRef{MaxID: &maxID, ListingID: &listingID}); err != nil {
+	maxID, stored := l.MaxID, in
+	finish, err := s.authorize(ctx, p, ActionBuy, price, a, AuthRef{MaxID: &maxID, ListingID: &listingID},
+		ActionInput{Op: OpBuy, ListingID: &listingID, Buy: &stored})
+	if err != nil {
 		return SaleView{}, err
 	}
+	v, err := s.openBuy(ctx, p, l, a, payer, price, in)
+	finish(AuthRef{SaleID: &v.Sale.ID}, err)
+	return v, err
+}
 
+// openBuy quotes, checks funds and opens the sale of an authorized buy.
+func (s *Service) openBuy(ctx context.Context, p shared.Principal, l Listing, a Asset, payer string, price *big.Int, in BuyInput) (SaleView, error) {
+	listingID := l.ID
 	fee, sellerAmt := SplitFee(price, s.cfg.FeeBPS)
 	treasury := s.cfg.Treasury[a.Chain.Namespace]
 	adapter, ok := s.adapters[a.Chain.Namespace]

@@ -144,12 +144,20 @@ func (r *repository) UpdatePolicy(ctx context.Context, agentID uuid.UUID, p Poli
 	if recipients == nil {
 		recipients = []string{}
 	}
+	market := marketPolicyJSON{CanSell: p.Market.CanSell, MinSalePrice: p.Market.MinSalePrice}
+	if market.MinSalePrice == "" {
+		market.MinSalePrice = "0"
+	}
+	mb, err := json.Marshal(market)
+	if err != nil {
+		return Policy{}, err
+	}
 
 	var out Policy
 	err = database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.UpdateAgentPolicy(ctx, generated.UpdateAgentPolicyParams{
-			AgentAccountID: agentID, Limits: b, AllowedRecipients: recipients, AllowAnyRecipient: p.AllowAnyRecipient,
+			AgentAccountID: agentID, Limits: b, AllowedRecipients: recipients, AllowAnyRecipient: p.AllowAnyRecipient, Market: mb,
 		})
 		if err != nil {
 			return err
@@ -159,7 +167,7 @@ func (r *repository) UpdatePolicy(ctx context.Context, agentID uuid.UUID, p Poli
 		}
 		return audit.Write(ctx, q, audit.Entry{
 			Actor: &actor, Action: "agent.policy_updated", ResourceType: "agent", ResourceID: agentID.String(),
-			Metadata: map[string]any{"version": out.Version, "limits": limits, "allowed_recipients": recipients, "allow_any_recipient": p.AllowAnyRecipient},
+			Metadata: map[string]any{"version": out.Version, "limits": limits, "allowed_recipients": recipients, "allow_any_recipient": p.AllowAnyRecipient, "market": market},
 		})
 	})
 	if err != nil {
@@ -270,32 +278,11 @@ func (r *repository) DecideUnderLock(ctx context.Context, agentID uuid.UUID, dec
 	var out TransferAuthorization
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		if err := q.LockAgentBudget(ctx, agentID.String()); err != nil {
-			return err
-		}
-		rows, err := q.ListAgentSpend24h(ctx, agentID)
+		spent, err := LockSpend(ctx, q, agentID)
 		if err != nil {
 			return err
 		}
-		spent := map[string]*big.Int{}
-		for _, row := range rows {
-			v, ok := new(big.Int).SetString(row.AmountBaseUnits, 10)
-			if !ok {
-				return fmt.Errorf("invalid committed amount %q", row.AmountBaseUnits)
-			}
-			key := row.Chain + "|" + row.AssetAddress
-			if spent[key] == nil {
-				spent[key] = new(big.Int)
-			}
-			spent[key].Add(spent[key], v)
-		}
-
-		a := decide(func(chain, asset string) *big.Int {
-			if v := spent[chain+"|"+asset]; v != nil {
-				return new(big.Int).Set(v)
-			}
-			return new(big.Int)
-		})
+		a := decide(spent)
 		reasons, err := json.Marshal(orEmpty(a.Reasons))
 		if err != nil {
 			return err
@@ -315,6 +302,38 @@ func (r *repository) DecideUnderLock(ctx context.Context, agentID uuid.UUID, dec
 		return TransferAuthorization{}, shared.ErrInternal.WithError(err)
 	}
 	return out, nil
+}
+
+// LockSpend takes the agent's budget lock for the rest of q's transaction
+// and returns its committed spend over the rolling 24h window: transfers and
+// marketplace buys and payments together. Both the transfer and the market
+// policy decide under this lock, so neither can push the other past a limit.
+func LockSpend(ctx context.Context, q *generated.Queries, agentID uuid.UUID) (SpendFunc, error) {
+	if err := q.LockAgentBudget(ctx, agentID.String()); err != nil {
+		return nil, err
+	}
+	rows, err := q.ListAgentSpend24h(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	spent := map[string]*big.Int{}
+	for _, row := range rows {
+		v, ok := new(big.Int).SetString(row.AmountBaseUnits, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid committed amount %q", row.AmountBaseUnits)
+		}
+		key := row.Chain + "|" + row.AssetAddress
+		if spent[key] == nil {
+			spent[key] = new(big.Int)
+		}
+		spent[key].Add(spent[key], v)
+	}
+	return func(chain, asset string) *big.Int {
+		if v := spent[chain+"|"+asset]; v != nil {
+			return new(big.Int).Set(v)
+		}
+		return new(big.Int)
+	}, nil
 }
 
 func (r *repository) GetAuthorization(ctx context.Context, paymentID uuid.UUID) (TransferAuthorization, error) {
@@ -387,6 +406,16 @@ func toPolicy(r generated.AgentPolicy) (Policy, error) {
 		return Policy{}, err
 	}
 	p := Policy{Version: int(r.Version), AllowedRecipients: r.AllowedRecipients, AllowAnyRecipient: r.AllowAnyRecipient, UpdatedAt: r.UpdatedAt}
+	var m marketPolicyJSON
+	if len(r.Market) > 0 {
+		if err := json.Unmarshal(r.Market, &m); err != nil {
+			return Policy{}, err
+		}
+	}
+	p.Market = MarketPolicy{CanSell: m.CanSell, MinSalePrice: m.MinSalePrice}
+	if p.Market.MinSalePrice == "" {
+		p.Market.MinSalePrice = "0"
+	}
 	for _, l := range raw {
 		perTx, ok1 := new(big.Int).SetString(l.MaxPerTransfer, 10)
 		perDay, ok2 := new(big.Int).SetString(l.MaxPer24h, 10)

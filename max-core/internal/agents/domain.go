@@ -16,11 +16,15 @@ const (
 	ScopeAuthorizationsRead Scope = "authorizations:read" // for the agent's signer
 	ScopeWalletsLink        Scope = "wallets:link"
 	ScopeIDsWrite           Scope = "ids:write"
+	ScopeMarketRead         Scope = "market:read"
+	ScopeMarketSell         Scope = "market:sell"
+	ScopeMarketBuy          Scope = "market:buy"
 )
 
 var AllScopes = []Scope{
 	ScopePaymentsRead, ScopePaymentsPropose, ScopePaymentsSubmit,
 	ScopeAuthorizationsRead, ScopeWalletsLink, ScopeIDsWrite,
+	ScopeMarketRead, ScopeMarketSell, ScopeMarketBuy,
 }
 
 func ValidScope(s string) bool {
@@ -61,7 +65,16 @@ type Policy struct {
 	Limits            []AssetLimit
 	AllowedRecipients []string // canonical MAX ID names
 	AllowAnyRecipient bool
+	Market            MarketPolicy
 	UpdatedAt         time.Time
+}
+
+// MarketPolicy governs selling on the marketplace (spec §8). Buying is
+// governed by Limits, like transfers.
+type MarketPolicy struct {
+	CanSell bool
+	// MinSalePrice is in the sale asset's base units; "0" means no minimum.
+	MinSalePrice string
 }
 
 type Credential struct {

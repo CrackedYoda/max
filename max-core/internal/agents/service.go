@@ -3,6 +3,8 @@ package agents
 import (
 	"context"
 	"errors"
+	"math/big"
+	"regexp"
 	"strings"
 	"time"
 
@@ -111,6 +113,13 @@ func (s *service) SetPolicy(ctx context.Context, admin, agentID uuid.UUID, in Po
 	if err != nil {
 		return Policy{}, err
 	}
+	if in.Market == nil {
+		cur, err := s.Repo.GetPolicy(ctx, agentID)
+		if err != nil {
+			return Policy{}, err
+		}
+		p.Market = cur.Market
+	}
 	return s.Repo.UpdatePolicy(ctx, agentID, p, admin)
 }
 
@@ -157,6 +166,15 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 		p.Limits = append(p.Limits, AssetLimit{Chain: chain.Key, Asset: asset, MaxPerTransfer: perTx, MaxPer24h: perDay})
 	}
 
+	p.Market = MarketPolicy{MinSalePrice: "0"}
+	if in.Market != nil {
+		m, err := buildMarketPolicy(*in.Market)
+		if err != nil {
+			return Policy{}, err
+		}
+		p.Market = m
+	}
+
 	if len(in.AllowedRecipients) > maxAllowlistLength {
 		return Policy{}, ErrInvalidPolicy.WithMessage("allowlist is too long")
 	}
@@ -171,6 +189,22 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 	}
 	return p, nil
 }
+
+// buildMarketPolicy validates the selling policy. minSalePrice is an exact
+// base-unit integer, so no decimals lookup can be spoofed.
+func buildMarketPolicy(in MarketPolicyInput) (MarketPolicy, error) {
+	raw := in.MinSalePrice
+	if raw == "" {
+		raw = "0"
+	}
+	if !baseUnitsRe.MatchString(raw) {
+		return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrice must be a whole number of base units")
+	}
+	v, _ := new(big.Int).SetString(raw, 10)
+	return MarketPolicy{CanSell: in.CanSell, MinSalePrice: v.String()}, nil
+}
+
+var baseUnitsRe = regexp.MustCompile(`^[0-9]{1,78}$`)
 
 func (s *service) IssueCredential(ctx context.Context, admin, agentID uuid.UUID, name string, scopes []string, ttl time.Duration) (IssuedCredential, error) {
 	if _, err := s.Repo.GetForAdministrator(ctx, agentID, admin); err != nil {

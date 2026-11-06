@@ -24,9 +24,10 @@ var (
 	ErrOfferUnfunded     = shared.NewAppError("OFFER_UNFUNDED", http.StatusUnprocessableEntity, "the buyer wallet does not currently cover this offer")
 	ErrSaleExpired       = shared.NewAppError("SALE_EXPIRED", http.StatusConflict, "this sale has expired")
 	ErrTxMismatch        = shared.NewAppError("TX_MISMATCH", http.StatusUnprocessableEntity, "the transaction does not match the sale terms")
-	// Agent approval responses elsewhere are a 200/202 body, not an error;
-	// as an AppError this uses 409.
-	ErrPendingApproval = shared.NewAppError("PENDING_APPROVAL", http.StatusConflict, "this action is awaiting human approval")
+	// ErrPendingApproval means an agent's action is held for its
+	// administrator. Nothing happened; the handler answers 202 with
+	// {status: "pending_approval", authorizationId}.
+	ErrPendingApproval = shared.NewAppError("PENDING_APPROVAL", http.StatusAccepted, "this action is awaiting human approval")
 )
 
 // NotListable returns ErrNotListable carrying {reason: code}.

@@ -59,6 +59,9 @@ type AgentMarketAuthorization struct {
 	DecidedBy       *uuid.UUID
 	DecidedAt       *time.Time
 	CreatedAt       time.Time
+	Payload         []byte
+	Failure         *string
+	FinishedAt      *time.Time
 }
 
 type AgentPolicy struct {

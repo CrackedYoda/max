@@ -314,15 +314,17 @@ type Repository interface {
 	ExpireListings(ctx context.Context, cutoff time.Time, limit int) (int, error)
 }
 
-// Agent policy actions.
+// Agent policy actions (agent_market_authorizations.action).
 const (
 	ActionBuy    = "buy"
 	ActionOffer  = "offer"
 	ActionList   = "list"
 	ActionAccept = "accept"
+	ActionPay    = "pay"
 )
 
-// Decision outcomes.
+// Decision outcomes. DecisionApproved means "go ahead": a human, an
+// agent within policy, or an administrator's approval.
 const (
 	DecisionApproved = "approved"
 	DecisionPending  = "pending_approval"
@@ -341,16 +343,87 @@ type Decision struct {
 }
 
 // AgentPolicy decides whether a principal may perform a market action now
-// (spec §8). Task 10 implements it for agent credentials.
+// (spec §8).
 type AgentPolicy interface {
-	Authorize(ctx context.Context, p shared.Principal, action string, amount *big.Int, chain, asset string, ref AuthRef) (Decision, error)
+	// Authorize decides an action. in is everything needed to replay the
+	// action if it is held for approval. A decision with an AuthorizationID
+	// must be followed by Finish once the action has run.
+	Authorize(ctx context.Context, p shared.Principal, action string, amount *big.Int, chain, asset string, ref AuthRef, in ActionInput) (Decision, error)
+	// Finish records what an authorized action created, or the error that
+	// stopped it (a failed action never counts toward spend).
+	Finish(ctx context.Context, authorizationID uuid.UUID, ref AuthRef, failure error) error
+	// Resolve moves a pending authorization to approved or denied for the
+	// agent's administrator; anyone else gets ErrAgentAuthorizationNotFound.
+	Resolve(ctx context.Context, admin, authorizationID uuid.UUID, decision string) (AgentAuthorization, error)
 }
 
-// AllowAll approves every action. It is the policy for human sessions.
+// AllowAll approves every action and has no authorizations. Tests and
+// deployments without agents use it.
 type AllowAll struct{}
 
-func (AllowAll) Authorize(context.Context, shared.Principal, string, *big.Int, string, string, AuthRef) (Decision, error) {
+func (AllowAll) Authorize(context.Context, shared.Principal, string, *big.Int, string, string, AuthRef, ActionInput) (Decision, error) {
 	return Decision{Outcome: DecisionApproved}, nil
+}
+
+func (AllowAll) Finish(context.Context, uuid.UUID, AuthRef, error) error { return nil }
+
+func (AllowAll) Resolve(context.Context, uuid.UUID, uuid.UUID, string) (AgentAuthorization, error) {
+	return AgentAuthorization{}, ErrAgentAuthorizationNotFound
+}
+
+// Replayable operations stored in an authorization's payload.
+const (
+	OpList        = "list"
+	OpUpdatePrice = "update_price"
+	OpBuy         = "buy"
+	OpAccept      = "accept"
+	OpPay         = "pay"
+)
+
+// ActionInput is an agent action's full input, stored with its authorization
+// so an administrator's approval can replay it exactly.
+type ActionInput struct {
+	Op            string     `json:"op"`
+	List          *ListInput `json:"list,omitempty"`
+	ListingID     *uuid.UUID `json:"listingId,omitempty"`
+	OfferID       *uuid.UUID `json:"offerId,omitempty"`
+	Price         string     `json:"price,omitempty"`
+	Buy           *BuyInput  `json:"buy,omitempty"`
+	PayoutAddress string     `json:"payoutAddress,omitempty"`
+	// IdempotencyKey is pay's key (accepted for API symmetry).
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+// AgentAuthorization is an agent_market_authorizations row.
+type AgentAuthorization struct {
+	ID, AgentID, CredentialID   uuid.UUID
+	Action, Decision            string
+	Reasons                     []string
+	PolicyVersion               int
+	Chain, AssetAddress, Amount string
+	SaleID, OfferID, ListingID  *uuid.UUID
+	Input                       ActionInput
+	Failure                     string
+	DecidedBy                   *uuid.UUID
+	DecidedAt, FinishedAt       *time.Time
+	CreatedAt                   time.Time
+}
+
+type NewAgentAuthorization struct {
+	AgentID, CredentialID uuid.UUID
+	Action, Decision      string
+	Reasons               []string
+	PolicyVersion         int
+	Chain, Asset, Amount  string
+	Ref                   AuthRef
+	Input                 ActionInput
+}
+
+// AgentActionResult is an approved agent action after its replay.
+type AgentActionResult struct {
+	Authorization AgentAuthorization
+	Listing       *Listing
+	Sale          *SaleView
 }
 
 // QuoteView is the buyer-facing cost of a sale as decimal strings.
@@ -369,11 +442,15 @@ type SaleView struct {
 }
 
 type ListInput struct {
-	MaxID                           uuid.UUID
-	Price, Chain, Asset, PayoutAddr string
-	ExpiresAt                       *time.Time
+	MaxID      uuid.UUID  `json:"maxId"`
+	Price      string     `json:"price"`
+	Chain      string     `json:"chain"`
+	Asset      string     `json:"asset"`
+	PayoutAddr string     `json:"payoutAddress"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 }
 
 type BuyInput struct {
-	FromAddress, IdempotencyKey string
+	FromAddress    string `json:"fromAddress"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }

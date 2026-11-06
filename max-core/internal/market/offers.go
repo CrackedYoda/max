@@ -111,9 +111,8 @@ func (s *Service) MakeOffer(ctx context.Context, p shared.Principal, in OfferInp
 	} else if n >= maxOpenOffers {
 		return Offer{}, ErrOfferLimit.WithMessage(fmt.Sprintf("you already have %d open offers", maxOpenOffers))
 	}
-	if err := s.authorize(ctx, p, ActionOffer, amount, a, AuthRef{MaxID: &maxID}); err != nil {
-		return Offer{}, err
-	}
+	// An offer spends nothing until it is paid (spec §8): an agent's pay is
+	// policy-checked, its offer is not.
 	newOffer := NewOffer{
 		MaxID: maxID, Buyer: p.AccountID, FromAddress: payer, Chain: a.Chain.Key, AssetAddress: a.Address,
 		AssetDecimals: a.Decimals, AmountBaseUnits: amount.String(), ExpiresAt: expires,
@@ -213,9 +212,20 @@ func (s *Service) AcceptOffer(ctx context.Context, p shared.Principal, id uuid.U
 		return SaleView{}, shared.ErrInternal.WithMessage("offer amount is corrupt")
 	}
 	maxID := o.MaxID
-	if err := s.authorize(ctx, p, ActionAccept, price, a, AuthRef{MaxID: &maxID, OfferID: &id}); err != nil {
+	finish, err := s.authorize(ctx, p, ActionAccept, price, a, AuthRef{MaxID: &maxID, OfferID: &id},
+		ActionInput{Op: OpAccept, OfferID: &id, PayoutAddress: payoutAddress})
+	if err != nil {
 		return SaleView{}, err
 	}
+	v, err := s.openOfferSale(ctx, p, o, a, payout, price)
+	finish(AuthRef{SaleID: &v.Sale.ID}, err)
+	return v, err
+}
+
+// openOfferSale re-checks the buyer's funds and opens the sale of an
+// authorized accept.
+func (s *Service) openOfferSale(ctx context.Context, p shared.Principal, o Offer, a Asset, payout string, price *big.Int) (SaleView, error) {
+	id := o.ID
 	quote, err := s.offerFunds(ctx, o, a, payout)
 	if err != nil {
 		var short *settle.FundsShortfall
@@ -281,7 +291,7 @@ func (s *Service) offerPayout(ctx context.Context, p shared.Principal, o Offer, 
 // instructions to sign, after re-checking funds. Like submit, it works while
 // trading is paused: the sale is already open. The idempotency key is
 // accepted for API symmetry; paying creates nothing, so repeats are harmless.
-func (s *Service) PayOffer(ctx context.Context, p shared.Principal, id uuid.UUID, _ string) (SaleView, error) {
+func (s *Service) PayOffer(ctx context.Context, p shared.Principal, id uuid.UUID, idempotencyKey string) (SaleView, error) {
 	if err := s.enabled(); err != nil {
 		return SaleView{}, err
 	}
@@ -305,6 +315,29 @@ func (s *Service) PayOffer(ctx context.Context, p shared.Principal, id uuid.UUID
 	case sale.Status != SaleLocked, sale.TxHash != nil:
 		return SaleView{Sale: sale}, nil // awaiting review, or already paid
 	}
+	// Paying is where an offer's spend counts (spec §8).
+	a, ok := s.cfg.asset(sale.Chain, sale.AssetAddress)
+	if !ok {
+		return SaleView{}, ErrAssetNotAccepted
+	}
+	price, ok := new(big.Int).SetString(sale.PriceBaseUnits, 10)
+	if !ok || price.Sign() <= 0 {
+		return SaleView{}, shared.ErrInternal.WithMessage("sale price is corrupt")
+	}
+	maxID, saleID := sale.MaxID, sale.ID
+	finish, err := s.authorize(ctx, p, ActionPay, price, a, AuthRef{MaxID: &maxID, OfferID: &id, SaleID: &saleID},
+		ActionInput{Op: OpPay, OfferID: &id, IdempotencyKey: idempotencyKey})
+	if err != nil {
+		return SaleView{}, err
+	}
+	v, err := s.payInstructions(ctx, sale)
+	finish(AuthRef{SaleID: &saleID}, err)
+	return v, err
+}
+
+// payInstructions quotes a locked sale, checks the buyer's funds and builds
+// the transaction to sign.
+func (s *Service) payInstructions(ctx context.Context, sale Sale) (SaleView, error) {
 	adapter, order, err := s.order(sale)
 	if err != nil {
 		return SaleView{}, err

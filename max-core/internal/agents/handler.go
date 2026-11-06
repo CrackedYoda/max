@@ -88,6 +88,9 @@ func (h *Handler) SetPolicy(c *gin.Context) {
 		return
 	}
 	in := PolicyInput{AllowedRecipients: req.AllowedRecipients, AllowAnyRecipient: req.AllowAnyRecipient}
+	if req.Market != nil {
+		in.Market = &MarketPolicyInput{CanSell: req.Market.CanSell, MinSalePrice: req.Market.MinSalePrice}
+	}
 	for _, l := range req.Limits {
 		in.Limits = append(in.Limits, LimitInput{Chain: l.Chain, Asset: l.Asset, MaxPerTransfer: l.MaxPerTransfer, MaxPer24h: l.MaxPer24h})
 	}

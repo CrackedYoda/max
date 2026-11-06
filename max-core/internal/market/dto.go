@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
@@ -379,4 +381,44 @@ func toInboxResponse(in Inbox) inboxResponse {
 		out.Sales = append(out.Sales, toSaleResponse(s))
 	}
 	return out
+}
+
+type agentAuthorizationResponse struct {
+	ID              string     `json:"id"`
+	AgentID         string     `json:"agentId"`
+	Action          string     `json:"action"`
+	Decision        string     `json:"decision"`
+	Reasons         []string   `json:"reasons"`
+	PolicyVersion   int        `json:"policyVersion"`
+	Chain           string     `json:"chain"`
+	Asset           string     `json:"asset"`
+	AmountBaseUnits string     `json:"amountBaseUnits"`
+	SaleID          *string    `json:"saleId,omitempty"`
+	OfferID         *string    `json:"offerId,omitempty"`
+	ListingID       *string    `json:"listingId,omitempty"`
+	Failure         string     `json:"failure,omitempty"`
+	DecidedAt       *time.Time `json:"decidedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+}
+
+type agentActionResponse struct {
+	Authorization agentAuthorizationResponse `json:"authorization"`
+	Listing       *listingResponse           `json:"listing,omitempty"`
+	Sale          *saleViewResponse          `json:"sale,omitempty"`
+}
+
+func toAgentAuthorizationResponse(a AgentAuthorization) agentAuthorizationResponse {
+	idStr := func(id *uuid.UUID) *string {
+		if id == nil {
+			return nil
+		}
+		s := id.String()
+		return &s
+	}
+	return agentAuthorizationResponse{
+		ID: a.ID.String(), AgentID: a.AgentID.String(), Action: a.Action, Decision: a.Decision, Reasons: orEmpty(a.Reasons),
+		PolicyVersion: a.PolicyVersion, Chain: a.Chain, Asset: a.AssetAddress, AmountBaseUnits: a.Amount,
+		SaleID: idStr(a.SaleID), OfferID: idStr(a.OfferID), ListingID: idStr(a.ListingID), Failure: a.Failure,
+		DecidedAt: a.DecidedAt, CreatedAt: a.CreatedAt,
+	}
 }

@@ -426,3 +426,43 @@ SELECT * FROM market_restrictions
 WHERE account_id = $1 AND kind = $2 AND lifted_at IS NULL AND (until IS NULL OR until > now())
 ORDER BY until DESC NULLS FIRST
 LIMIT 1;
+
+-- Agent market authorizations (Task 10, spec §8).
+
+-- name: CreateAgentMarketAuthorization :one
+INSERT INTO agent_market_authorizations (
+    agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons,
+    policy_version, chain, asset_address, amount_base_units, payload
+) VALUES (
+    sqlc.arg(agent_account_id), sqlc.arg(credential_id), sqlc.arg(action), sqlc.narg(sale_id), sqlc.narg(offer_id),
+    sqlc.narg(listing_id), sqlc.arg(decision), sqlc.arg(reasons), sqlc.arg(policy_version), sqlc.arg(chain),
+    sqlc.arg(asset_address), sqlc.arg(amount_base_units), sqlc.arg(payload)
+)
+RETURNING *;
+
+-- name: GetAgentMarketAuthorization :one
+SELECT * FROM agent_market_authorizations WHERE id = $1;
+
+-- name: GetLatestAgentMarketPay :one
+-- The live authorization to pay a sale: approved or pending, not failed.
+SELECT * FROM agent_market_authorizations
+WHERE agent_account_id = $1 AND sale_id = $2 AND action = 'pay'
+  AND decision IN ('auto_approved', 'approved', 'pending_approval') AND failure IS NULL
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: DecideAgentMarketAuthorization :one
+UPDATE agent_market_authorizations
+SET decision = $2, decided_by = $3, decided_at = now()
+WHERE id = $1 AND decision = 'pending_approval'
+RETURNING *;
+
+-- name: FinishAgentMarketAuthorization :one
+UPDATE agent_market_authorizations
+SET sale_id = coalesce(sqlc.narg(sale_id), sale_id),
+    offer_id = coalesce(sqlc.narg(offer_id), offer_id),
+    listing_id = coalesce(sqlc.narg(listing_id), listing_id),
+    failure = sqlc.narg(failure),
+    finished_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;

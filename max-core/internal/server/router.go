@@ -170,25 +170,30 @@ func NewRouter(d Deps) *gin.Engine {
 	mkt := v1.Group("/market", d.Market.Gate())
 	mkt.GET("/listings", lookupLimit, d.Market.Search)
 	mkt.GET("/names/:name", lookupLimit, d.Market.Name)
-	// TODO(Task 10): accept agent keys here with scope(agents.ScopeMarketRead),
-	// scope(agents.ScopeMarketSell) and scope(agents.ScopeMarketBuy) per route
-	// (spec §9) instead of sessionOnly, and wire the agent policy.
-	mine := mkt.Group("", required, sessionOnly)
+	// Session or agent key (spec §8, §9): agents act under their scopes and
+	// the agent market policy.
+	mine := mkt.Group("", required)
 	trade := d.Market.Trading()
-	mine.GET("/eligibility/:maxId", d.Market.Eligibility)
-	mine.POST("/listings", listLimit, trade, d.Market.CreateListing)
-	mine.PATCH("/listings/:id", listLimit, trade, d.Market.UpdateListing)
-	mine.DELETE("/listings/:id", listLimit, trade, d.Market.DeleteListing)
-	mine.POST("/listings/:id/buy", payLimit, trade, d.Market.Buy)
-	mine.POST("/offers", listLimit, trade, d.Market.MakeOffer)
-	mine.DELETE("/offers/:id", listLimit, trade, d.Market.WithdrawOffer)
-	mine.POST("/offers/:id/accept", listLimit, trade, d.Market.AcceptOffer)
-	mine.POST("/offers/:id/decline", listLimit, trade, d.Market.DeclineOffer)
+	read, sell, buy := scope(agents.ScopeMarketRead), scope(agents.ScopeMarketSell), scope(agents.ScopeMarketBuy)
+	mine.GET("/eligibility/:maxId", read, d.Market.Eligibility)
+	mine.POST("/listings", sell, listLimit, trade, d.Market.CreateListing)
+	mine.PATCH("/listings/:id", sell, listLimit, trade, d.Market.UpdateListing)
+	mine.DELETE("/listings/:id", sell, listLimit, trade, d.Market.DeleteListing)
+	mine.POST("/listings/:id/buy", buy, payLimit, trade, d.Market.Buy)
+	mine.POST("/offers", buy, listLimit, trade, d.Market.MakeOffer)
+	mine.DELETE("/offers/:id", buy, listLimit, trade, d.Market.WithdrawOffer)
+	mine.POST("/offers/:id/accept", sell, listLimit, trade, d.Market.AcceptOffer)
+	mine.POST("/offers/:id/decline", sell, listLimit, trade, d.Market.DeclineOffer)
 	// Paying an accepted offer, like submit, stays open while paused.
-	mine.POST("/offers/:id/pay", payLimit, d.Market.PayOffer)
-	mine.POST("/sales/:id/submit", payLimit, d.Market.Submit)
-	mine.GET("/sales/:id", d.Market.GetSale)
-	mine.GET("/me", d.Market.Me)
+	mine.POST("/offers/:id/pay", buy, payLimit, d.Market.PayOffer)
+	mine.POST("/sales/:id/submit", buy, payLimit, d.Market.Submit)
+	mine.GET("/sales/:id", read, d.Market.GetSale)
+	mine.GET("/me", read, d.Market.Me)
+
+	// Held agent market actions: the agent's administrator (session) decides.
+	approvals := admin.Group("/agent-approvals/market", d.Market.Gate())
+	approvals.POST("/:authorizationId/approve", d.Market.ApproveAgentAction)
+	approvals.POST("/:authorizationId/deny", d.Market.DenyAgentAction)
 
 	// Agent runtime: API keys only.
 	agent := v1.Group("/agent", required, agentOnly)

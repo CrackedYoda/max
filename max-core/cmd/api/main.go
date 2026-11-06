@@ -200,8 +200,8 @@ func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.
 	if !mcfg.Enabled {
 		log.Info("MARKET_ENABLED=false: marketplace routes return 404")
 	}
-	// TODO(Task 10): replace AllowAll with the agent market policy.
-	return market.NewService(market.NewRepository(pool), adapters, mcfg, market.AllowAll{}, log), nil
+	policy := market.NewAgentPolicy(agents.NewRepository(pool), market.NewAgentStore(pool))
+	return market.NewService(market.NewRepository(pool), adapters, mcfg, policy, log), nil
 }
 
 // newRegistrationGate builds the MAX ID claim balance gate. It counts wallets

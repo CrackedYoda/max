@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/max/max-core/db/generated"
+	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/market"
@@ -428,7 +429,8 @@ func newTestMarket(t *testing.T, pool *pgxpool.Pool, ec envConfig) (*market.Serv
 	}
 	fs := &fakeSettle{obs: settle.Observation{Status: settle.StatusConfirmed, Matches: true, Confirmations: 32}}
 	adapters := map[chains.Namespace]settle.Adapter{chains.NamespaceSolana: fs}
-	return market.NewService(market.NewRepository(pool), adapters, cfg, market.AllowAll{}, zap.NewNop()), fs
+	policy := market.NewAgentPolicy(agents.NewRepository(pool), market.NewAgentStore(pool))
+	return market.NewService(market.NewRepository(pool), adapters, cfg, policy, zap.NewNop()), fs
 }
 
 // fakeSettle stands in for the Solana settlement adapter; its matching logic

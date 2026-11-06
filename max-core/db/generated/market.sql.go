@@ -407,6 +407,77 @@ func (q *Queries) CountOpenMarketOffersByBuyer(ctx context.Context, buyerAccount
 	return count, err
 }
 
+const createAgentMarketAuthorization = `-- name: CreateAgentMarketAuthorization :one
+
+INSERT INTO agent_market_authorizations (
+    agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons,
+    policy_version, chain, asset_address, amount_base_units, payload
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12, $13
+)
+RETURNING id, agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons, policy_version, chain, asset_address, amount_base_units, decided_by, decided_at, created_at, payload, failure, finished_at
+`
+
+type CreateAgentMarketAuthorizationParams struct {
+	AgentAccountID  uuid.UUID
+	CredentialID    uuid.UUID
+	Action          string
+	SaleID          *uuid.UUID
+	OfferID         *uuid.UUID
+	ListingID       *uuid.UUID
+	Decision        string
+	Reasons         []byte
+	PolicyVersion   int32
+	Chain           string
+	AssetAddress    string
+	AmountBaseUnits string
+	Payload         []byte
+}
+
+// Agent market authorizations (Task 10, spec §8).
+func (q *Queries) CreateAgentMarketAuthorization(ctx context.Context, arg CreateAgentMarketAuthorizationParams) (AgentMarketAuthorization, error) {
+	row := q.db.QueryRow(ctx, createAgentMarketAuthorization,
+		arg.AgentAccountID,
+		arg.CredentialID,
+		arg.Action,
+		arg.SaleID,
+		arg.OfferID,
+		arg.ListingID,
+		arg.Decision,
+		arg.Reasons,
+		arg.PolicyVersion,
+		arg.Chain,
+		arg.AssetAddress,
+		arg.AmountBaseUnits,
+		arg.Payload,
+	)
+	var i AgentMarketAuthorization
+	err := row.Scan(
+		&i.ID,
+		&i.AgentAccountID,
+		&i.CredentialID,
+		&i.Action,
+		&i.SaleID,
+		&i.OfferID,
+		&i.ListingID,
+		&i.Decision,
+		&i.Reasons,
+		&i.PolicyVersion,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AmountBaseUnits,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Failure,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const createMarketListing = `-- name: CreateMarketListing :one
 
 INSERT INTO market_listings (
@@ -638,6 +709,46 @@ func (q *Queries) CreateMarketSale(ctx context.Context, arg CreateMarketSalePara
 	return i, err
 }
 
+const decideAgentMarketAuthorization = `-- name: DecideAgentMarketAuthorization :one
+UPDATE agent_market_authorizations
+SET decision = $2, decided_by = $3, decided_at = now()
+WHERE id = $1 AND decision = 'pending_approval'
+RETURNING id, agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons, policy_version, chain, asset_address, amount_base_units, decided_by, decided_at, created_at, payload, failure, finished_at
+`
+
+type DecideAgentMarketAuthorizationParams struct {
+	ID        uuid.UUID
+	Decision  string
+	DecidedBy *uuid.UUID
+}
+
+func (q *Queries) DecideAgentMarketAuthorization(ctx context.Context, arg DecideAgentMarketAuthorizationParams) (AgentMarketAuthorization, error) {
+	row := q.db.QueryRow(ctx, decideAgentMarketAuthorization, arg.ID, arg.Decision, arg.DecidedBy)
+	var i AgentMarketAuthorization
+	err := row.Scan(
+		&i.ID,
+		&i.AgentAccountID,
+		&i.CredentialID,
+		&i.Action,
+		&i.SaleID,
+		&i.OfferID,
+		&i.ListingID,
+		&i.Decision,
+		&i.Reasons,
+		&i.PolicyVersion,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AmountBaseUnits,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Failure,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const declineMarketOffer = `-- name: DeclineMarketOffer :one
 UPDATE market_offers
 SET status = 'declined', decline_note = $1, updated_at = now()
@@ -770,6 +881,58 @@ func (q *Queries) ExpireMarketOffers(ctx context.Context, rowLimit int32) ([]Exp
 	return items, nil
 }
 
+const finishAgentMarketAuthorization = `-- name: FinishAgentMarketAuthorization :one
+UPDATE agent_market_authorizations
+SET sale_id = coalesce($1, sale_id),
+    offer_id = coalesce($2, offer_id),
+    listing_id = coalesce($3, listing_id),
+    failure = $4,
+    finished_at = now()
+WHERE id = $5
+RETURNING id, agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons, policy_version, chain, asset_address, amount_base_units, decided_by, decided_at, created_at, payload, failure, finished_at
+`
+
+type FinishAgentMarketAuthorizationParams struct {
+	SaleID    *uuid.UUID
+	OfferID   *uuid.UUID
+	ListingID *uuid.UUID
+	Failure   *string
+	ID        uuid.UUID
+}
+
+func (q *Queries) FinishAgentMarketAuthorization(ctx context.Context, arg FinishAgentMarketAuthorizationParams) (AgentMarketAuthorization, error) {
+	row := q.db.QueryRow(ctx, finishAgentMarketAuthorization,
+		arg.SaleID,
+		arg.OfferID,
+		arg.ListingID,
+		arg.Failure,
+		arg.ID,
+	)
+	var i AgentMarketAuthorization
+	err := row.Scan(
+		&i.ID,
+		&i.AgentAccountID,
+		&i.CredentialID,
+		&i.Action,
+		&i.SaleID,
+		&i.OfferID,
+		&i.ListingID,
+		&i.Decision,
+		&i.Reasons,
+		&i.PolicyVersion,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AmountBaseUnits,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Failure,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const getActiveMarketRestriction = `-- name: GetActiveMarketRestriction :one
 SELECT id, account_id, kind, until, reason, created_by, created_at, lifted_at FROM market_restrictions
 WHERE account_id = $1 AND kind = $2 AND lifted_at IS NULL AND (until IS NULL OR until > now())
@@ -808,6 +971,37 @@ func (q *Queries) GetAgentAdministratorID(ctx context.Context, accountID uuid.UU
 	var administrator_account_id uuid.UUID
 	err := row.Scan(&administrator_account_id)
 	return administrator_account_id, err
+}
+
+const getAgentMarketAuthorization = `-- name: GetAgentMarketAuthorization :one
+SELECT id, agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons, policy_version, chain, asset_address, amount_base_units, decided_by, decided_at, created_at, payload, failure, finished_at FROM agent_market_authorizations WHERE id = $1
+`
+
+func (q *Queries) GetAgentMarketAuthorization(ctx context.Context, id uuid.UUID) (AgentMarketAuthorization, error) {
+	row := q.db.QueryRow(ctx, getAgentMarketAuthorization, id)
+	var i AgentMarketAuthorization
+	err := row.Scan(
+		&i.ID,
+		&i.AgentAccountID,
+		&i.CredentialID,
+		&i.Action,
+		&i.SaleID,
+		&i.OfferID,
+		&i.ListingID,
+		&i.Decision,
+		&i.Reasons,
+		&i.PolicyVersion,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AmountBaseUnits,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Failure,
+		&i.FinishedAt,
+	)
+	return i, err
 }
 
 const getLastCompletedMarketSale = `-- name: GetLastCompletedMarketSale :one
@@ -849,6 +1043,47 @@ func (q *Queries) GetLastCompletedMarketSale(ctx context.Context, maxID uuid.UUI
 		&i.NextCheckAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getLatestAgentMarketPay = `-- name: GetLatestAgentMarketPay :one
+SELECT id, agent_account_id, credential_id, action, sale_id, offer_id, listing_id, decision, reasons, policy_version, chain, asset_address, amount_base_units, decided_by, decided_at, created_at, payload, failure, finished_at FROM agent_market_authorizations
+WHERE agent_account_id = $1 AND sale_id = $2 AND action = 'pay'
+  AND decision IN ('auto_approved', 'approved', 'pending_approval') AND failure IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestAgentMarketPayParams struct {
+	AgentAccountID uuid.UUID
+	SaleID         *uuid.UUID
+}
+
+// The live authorization to pay a sale: approved or pending, not failed.
+func (q *Queries) GetLatestAgentMarketPay(ctx context.Context, arg GetLatestAgentMarketPayParams) (AgentMarketAuthorization, error) {
+	row := q.db.QueryRow(ctx, getLatestAgentMarketPay, arg.AgentAccountID, arg.SaleID)
+	var i AgentMarketAuthorization
+	err := row.Scan(
+		&i.ID,
+		&i.AgentAccountID,
+		&i.CredentialID,
+		&i.Action,
+		&i.SaleID,
+		&i.OfferID,
+		&i.ListingID,
+		&i.Decision,
+		&i.Reasons,
+		&i.PolicyVersion,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AmountBaseUnits,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Failure,
+		&i.FinishedAt,
 	)
 	return i, err
 }

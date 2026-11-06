@@ -1,6 +1,8 @@
 package market
 
 import (
+	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -23,7 +25,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) Gate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !h.svc.cfg.Enabled {
-			shared.Fail(c, ErrMarketDisabled)
+			fail(c, ErrMarketDisabled)
 			return
 		}
 		c.Next()
@@ -35,7 +37,7 @@ func (h *Handler) Gate() gin.HandlerFunc {
 func (h *Handler) Trading() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h.svc.cfg.TradingPaused {
-			shared.Fail(c, ErrMarketPaused)
+			fail(c, ErrMarketPaused)
 			return
 		}
 		c.Next()
@@ -49,7 +51,7 @@ func (h *Handler) Search(c *gin.Context) {
 		Sort: c.Query("sort"), Cursor: c.Query("cursor"), Limit: limit,
 	})
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	out := searchResponse{Listings: make([]cardResponse, 0, len(cards)), NextCursor: next}
@@ -62,7 +64,7 @@ func (h *Handler) Search(c *gin.Context) {
 func (h *Handler) Name(c *gin.Context) {
 	v, err := h.svc.NameView(c.Request.Context(), c.Param("name"))
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.OK(c, toNameViewResponse(v))
@@ -75,7 +77,7 @@ func (h *Handler) Eligibility(c *gin.Context) {
 	}
 	e, err := h.svc.Eligibility(c.Request.Context(), shared.MustPrincipal(c), id)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.OK(c, toEligibilityResponse(e))
@@ -84,12 +86,12 @@ func (h *Handler) Eligibility(c *gin.Context) {
 func (h *Handler) CreateListing(c *gin.Context) {
 	var req createListingRequest
 	if err := shared.BindJSON(c, &req); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	maxID, err := uuid.Parse(req.MaxID)
 	if err != nil {
-		shared.Fail(c, maxids.ErrMaxIDNotFound)
+		fail(c, maxids.ErrMaxIDNotFound)
 		return
 	}
 	l, err := h.svc.List(c.Request.Context(), shared.MustPrincipal(c), ListInput{
@@ -97,7 +99,7 @@ func (h *Handler) CreateListing(c *gin.Context) {
 		PayoutAddr: req.PayoutAddress, ExpiresAt: req.ExpiresAt,
 	})
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.Created(c, toListingResponse(l))
@@ -110,12 +112,12 @@ func (h *Handler) UpdateListing(c *gin.Context) {
 	}
 	var req updateListingRequest
 	if err := shared.BindJSON(c, &req); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	l, err := h.svc.UpdatePrice(c.Request.Context(), shared.MustPrincipal(c), id, req.Price)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.OK(c, toListingResponse(l))
@@ -127,7 +129,7 @@ func (h *Handler) DeleteListing(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delist(c.Request.Context(), shared.MustPrincipal(c), id); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.NoContent(c)
@@ -140,12 +142,12 @@ func (h *Handler) Buy(c *gin.Context) {
 	}
 	var req buyRequest
 	if err := shared.BindJSON(c, &req); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	v, err := h.svc.Buy(c.Request.Context(), shared.MustPrincipal(c), id, BuyInput{FromAddress: req.FromAddress, IdempotencyKey: req.IdempotencyKey})
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -163,12 +165,12 @@ func (h *Handler) Submit(c *gin.Context) {
 	}
 	var req submitRequest
 	if err := shared.BindJSON(c, &req); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	v, err := h.svc.Submit(c.Request.Context(), shared.MustPrincipal(c), id, req.TxHash)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.OK(c, toSaleViewResponse(v))
@@ -181,7 +183,7 @@ func (h *Handler) GetSale(c *gin.Context) {
 	}
 	v, err := h.svc.GetSale(c.Request.Context(), shared.MustPrincipal(c), id)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -191,7 +193,7 @@ func (h *Handler) GetSale(c *gin.Context) {
 func (h *Handler) Me(c *gin.Context) {
 	in, err := h.svc.Inbox(c.Request.Context(), shared.MustPrincipal(c))
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -201,7 +203,7 @@ func (h *Handler) Me(c *gin.Context) {
 func param(c *gin.Context, name string, notFound error) (uuid.UUID, bool) {
 	id, err := uuid.Parse(c.Param(name))
 	if err != nil {
-		shared.Fail(c, notFound)
+		fail(c, notFound)
 		return uuid.Nil, false
 	}
 	return id, true
@@ -210,14 +212,14 @@ func param(c *gin.Context, name string, notFound error) (uuid.UUID, bool) {
 func (h *Handler) MakeOffer(c *gin.Context) {
 	var req makeOfferRequest
 	if err := shared.BindJSON(c, &req); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	o, err := h.svc.MakeOffer(c.Request.Context(), shared.MustPrincipal(c), OfferInput{
 		Name: req.Name, Amount: req.Amount, Chain: req.Chain, Asset: req.Asset, FromAddress: req.FromAddress, ExpiresAt: req.ExpiresAt,
 	})
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.Created(c, toOfferResponse(o))
@@ -229,7 +231,7 @@ func (h *Handler) WithdrawOffer(c *gin.Context) {
 		return
 	}
 	if err := h.svc.WithdrawOffer(c.Request.Context(), shared.MustPrincipal(c), id); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.NoContent(c)
@@ -246,7 +248,7 @@ func (h *Handler) AcceptOffer(c *gin.Context) {
 	}
 	v, err := h.svc.AcceptOffer(c.Request.Context(), shared.MustPrincipal(c), id, req.PayoutAddress)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.Created(c, toSaleViewResponse(v))
@@ -262,7 +264,7 @@ func (h *Handler) DeclineOffer(c *gin.Context) {
 		return
 	}
 	if err := h.svc.DeclineOffer(c.Request.Context(), shared.MustPrincipal(c), id, strings.TrimSpace(req.Note)); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	shared.NoContent(c)
@@ -279,7 +281,7 @@ func (h *Handler) PayOffer(c *gin.Context) {
 	}
 	v, err := h.svc.PayOffer(c.Request.Context(), shared.MustPrincipal(c), id, req.IdempotencyKey)
 	if err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -292,8 +294,60 @@ func bindOptional(c *gin.Context, dst any) bool {
 		return true
 	}
 	if err := shared.BindJSON(c, dst); err != nil {
-		shared.Fail(c, err)
+		fail(c, err)
 		return false
 	}
 	return true
+}
+
+// fail writes an error. A held agent action is not an error: nothing
+// happened, and the agent's administrator decides (spec §8). It answers 202
+// with {status: "pending_approval", authorizationId, reasons}.
+func fail(c *gin.Context, err error) {
+	var app *shared.AppError
+	if errors.As(err, &app) && app.Code == ErrPendingApproval.Code {
+		body := gin.H{"status": DecisionPending, "authorizationId": app.Details["authorizationId"], "reasons": app.Details["reasons"]}
+		c.AbortWithStatusJSON(http.StatusAccepted, gin.H{"data": body})
+		return
+	}
+	shared.Fail(c, err)
+}
+
+// ApproveAgentAction is POST /v1/agent-approvals/market/:authorizationId/approve
+// (session, the agent's administrator).
+func (h *Handler) ApproveAgentAction(c *gin.Context) {
+	id, ok := param(c, "authorizationId", ErrAgentAuthorizationNotFound)
+	if !ok {
+		return
+	}
+	res, err := h.svc.ApproveAgentAction(c.Request.Context(), shared.MustPrincipal(c).AccountID, id)
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	out := agentActionResponse{Authorization: toAgentAuthorizationResponse(res.Authorization)}
+	if res.Listing != nil {
+		l := toListingResponse(*res.Listing)
+		out.Listing = &l
+	}
+	if res.Sale != nil {
+		v := toSaleViewResponse(*res.Sale)
+		out.Sale = &v
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
+}
+
+// DenyAgentAction is POST /v1/agent-approvals/market/:authorizationId/deny.
+func (h *Handler) DenyAgentAction(c *gin.Context) {
+	id, ok := param(c, "authorizationId", ErrAgentAuthorizationNotFound)
+	if !ok {
+		return
+	}
+	a, err := h.svc.DenyAgentAction(c.Request.Context(), shared.MustPrincipal(c).AccountID, id)
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.OK(c, agentActionResponse{Authorization: toAgentAuthorizationResponse(a)})
 }
