@@ -50,7 +50,13 @@ type AgentStore interface {
 	Finish(ctx context.Context, id uuid.UUID, ref AuthRef, failure string) error
 	// Administrator returns the agent's administrator, or nil for a non-agent.
 	Administrator(ctx context.Context, agentID uuid.UUID) (*uuid.UUID, error)
+	// List returns the agent's authorizations, newest first; decision ""
+	// means all. Name is filled in.
+	List(ctx context.Context, agentID uuid.UUID, decision string, limit int) ([]AgentAuthorization, error)
 }
+
+// agentAuthorizationListLimit caps the administrator's list.
+const agentAuthorizationListLimit = 100
 
 type agentPolicy struct {
 	dir   AgentDirectory
@@ -75,10 +81,11 @@ func (ap *agentPolicy) Authorize(ctx context.Context, p shared.Principal, action
 	if !p.IsAgentCredential() {
 		return Decision{Outcome: DecisionApproved}, nil
 	}
+	terms := Terms{Amount: amount.String(), Chain: chain, Asset: asset}
 	if r, ok := ctx.Value(replayKey{}).(replay); ok && r.agent == p.AccountID && r.action == action {
-		id := r.id
-		return Decision{Outcome: DecisionApproved, AuthorizationID: &id}, nil
+		return ap.replayDecision(ctx, r, terms)
 	}
+	in.Terms = &terms
 	// Paying the same sale again (to fetch fresh instructions) is not new
 	// spend: reuse the live authorization rather than count it twice.
 	if action == ActionPay && ref.SaleID != nil {
@@ -111,6 +118,35 @@ func (ap *agentPolicy) Authorize(ctx context.Context, p shared.Principal, action
 		return Decision{}, err
 	}
 	return decisionOf(a), nil
+}
+
+// replayDecision approves a replay only on the terms the administrator
+// approved: a listing repriced meanwhile must not spend (or sell) beyond
+// what was evaluated.
+func (ap *agentPolicy) replayDecision(ctx context.Context, r replay, now Terms) (Decision, error) {
+	a, err := ap.store.GetAuthorization(ctx, r.id)
+	if err != nil {
+		return Decision{}, err
+	}
+	approved := Terms{Amount: a.Amount, Chain: a.Chain, Asset: a.AssetAddress}
+	if a.Input.Terms != nil {
+		approved = *a.Input.Terms
+	}
+	if now != approved {
+		return Decision{}, changedSinceApproval(r.action)
+	}
+	id := r.id
+	return Decision{Outcome: DecisionApproved, AuthorizationID: &id}, nil
+}
+
+func changedSinceApproval(action string) error {
+	switch action {
+	case ActionBuy:
+		return ErrListingNotActive.WithMessage("the listing changed since approval was requested")
+	case ActionAccept, ActionPay:
+		return shared.ErrConflict.WithMessage("the offer changed since approval was requested")
+	}
+	return shared.ErrConflict.WithMessage("the listing terms changed since approval was requested")
 }
 
 func decisionOf(a AgentAuthorization) Decision {
@@ -160,6 +196,31 @@ func (ap *agentPolicy) Resolve(ctx context.Context, admin, id uuid.UUID, decisio
 	return ap.store.Resolve(ctx, id, decision, admin)
 }
 
+func (ap *agentPolicy) List(ctx context.Context, admin, agentID uuid.UUID, decision string) ([]AgentAuthorization, error) {
+	owner, err := ap.store.Administrator(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if owner == nil || *owner != admin {
+		return nil, agents.ErrAgentNotFound
+	}
+	return ap.store.List(ctx, agentID, decision, agentAuthorizationListLimit)
+}
+
+// ListAgentAuthorizations lets an agent's administrator find and inspect its
+// market authorizations, e.g. those pending approval.
+func (s *Service) ListAgentAuthorizations(ctx context.Context, admin, agentID uuid.UUID, decision string) ([]AgentAuthorization, error) {
+	if err := s.enabled(); err != nil {
+		return nil, err
+	}
+	switch agents.DecisionOutcome(decision) {
+	case "", agents.DecisionAutoApproved, agents.DecisionPendingApproval, agents.DecisionApproved, agents.DecisionDenied:
+	default:
+		return nil, shared.ErrValidation.WithMessage("decision must be auto_approved, pending_approval, approved or denied")
+	}
+	return s.agents.List(ctx, admin, agentID, decision)
+}
+
 // ApproveAgentAction lets an agent's administrator approve a held action. The
 // action is replayed as the agent with its stored input through the normal
 // service path, so every market check runs again; only the policy check is
@@ -175,6 +236,9 @@ func (s *Service) ApproveAgentAction(ctx context.Context, admin, id uuid.UUID) (
 	}
 	cred := a.CredentialID
 	p := shared.Principal{AccountID: a.AgentID, AccountType: "agent", CredentialID: &cred}
+	// The approval is committed: run the replay and record its outcome even
+	// if the administrator's request is cancelled meanwhile.
+	ctx = context.WithoutCancel(ctx)
 	rctx := context.WithValue(ctx, replayKey{}, replay{id: a.ID, agent: a.AgentID, action: a.Action})
 
 	res := AgentActionResult{Authorization: a}
@@ -359,6 +423,37 @@ func (r *agentStore) Administrator(ctx context.Context, agentID uuid.UUID) (*uui
 		return nil, shared.ErrInternal.WithError(err)
 	}
 	return &id, nil
+}
+
+func (r *agentStore) List(ctx context.Context, agentID uuid.UUID, decision string, limit int) ([]AgentAuthorization, error) {
+	var d *string
+	if decision != "" {
+		d = &decision
+	}
+	rows, err := r.q.ListAgentMarketAuthorizations(ctx, generated.ListAgentMarketAuthorizationsParams{
+		AgentAccountID: agentID, Decision: d, RowLimit: int32(limit),
+	})
+	if err != nil {
+		return nil, shared.ErrInternal.WithError(err)
+	}
+	out := make([]AgentAuthorization, 0, len(rows))
+	for _, row := range rows {
+		a, err := wrapInternal(toAgentAuthorization(generated.AgentMarketAuthorization{
+			ID: row.ID, AgentAccountID: row.AgentAccountID, CredentialID: row.CredentialID, Action: row.Action,
+			SaleID: row.SaleID, OfferID: row.OfferID, ListingID: row.ListingID, Decision: row.Decision, Reasons: row.Reasons,
+			PolicyVersion: row.PolicyVersion, Chain: row.Chain, AssetAddress: row.AssetAddress, AmountBaseUnits: row.AmountBaseUnits,
+			DecidedBy: row.DecidedBy, DecidedAt: row.DecidedAt, CreatedAt: row.CreatedAt, Payload: row.Payload,
+			Failure: row.Failure, FinishedAt: row.FinishedAt,
+		}))
+		if err != nil {
+			return nil, err
+		}
+		if row.Name != nil {
+			a.Name = *row.Name
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 func toAgentAuthorization(r generated.AgentMarketAuthorization) (AgentAuthorization, error) {

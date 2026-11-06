@@ -73,8 +73,16 @@ type Policy struct {
 // governed by Limits, like transfers.
 type MarketPolicy struct {
 	CanSell bool
-	// MinSalePrice is in the sale asset's base units; "0" means no minimum.
-	MinSalePrice string
+	// MinSalePrices are per (chain, asset). Selling in an asset with no
+	// minimum needs approval.
+	MinSalePrices []SaleMinimum
+}
+
+// SaleMinimum is the lowest price an agent may sell at without approval.
+type SaleMinimum struct {
+	Chain  string
+	Asset  string // canonical; "" = native
+	Amount string // base units
 }
 
 type Credential struct {

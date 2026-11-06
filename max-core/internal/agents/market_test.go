@@ -13,7 +13,7 @@ func usdc(n int64) *big.Int { return new(big.Int).Mul(big.NewInt(n), big.NewInt(
 func marketPolicy() Policy {
 	return Policy{
 		Limits: []AssetLimit{{Chain: "solana-devnet", Asset: usdcMint, MaxPerTransfer: usdc(50), MaxPer24h: usdc(100)}},
-		Market: MarketPolicy{CanSell: true, MinSalePrice: usdc(20).String()},
+		Market: MarketPolicy{CanSell: true, MinSalePrices: []SaleMinimum{{Chain: "solana-devnet", Asset: usdcMint, Amount: usdc(20).String()}}},
 	}
 }
 
@@ -91,20 +91,56 @@ func TestEvaluateMarket_SellBelowMinPending(t *testing.T) {
 	}
 }
 
+func TestEvaluateMarket_SellNoMinimumForAssetPending(t *testing.T) {
+	for _, action := range []string{MarketActionList, MarketActionAccept} {
+		ev := EvaluateMarket(marketPolicy(), StatusActive, action, usdc(30), "solana", "", nil)
+		if ev.Outcome != DecisionPendingApproval || !strings.Contains(strings.Join(ev.Reasons, ";"), "no minimum sale price") {
+			t.Fatalf("%s in an asset without a minimum: %+v", action, ev)
+		}
+	}
+}
+
+func TestEvaluateMarket_MinMisconfiguredFailsClosed(t *testing.T) {
+	for _, bad := range []string{"", "abc", "-1", "1.5"} {
+		p := marketPolicy()
+		p.Market.MinSalePrices[0].Amount = bad
+		ev := EvaluateMarket(p, StatusActive, MarketActionList, usdc(1000), "solana-devnet", usdcMint, nil)
+		if ev.Outcome != DecisionPendingApproval || !strings.Contains(strings.Join(ev.Reasons, ";"), "minimum sale price misconfigured") {
+			t.Fatalf("minimum %q: %+v", bad, ev)
+		}
+	}
+}
+
 func TestBuildMarketPolicy(t *testing.T) {
-	ok := []MarketPolicyInput{{CanSell: true, MinSalePrice: "20000000"}, {CanSell: false}, {MinSalePrice: "0"}}
-	for _, in := range ok {
-		if _, err := buildMarketPolicy(in); err != nil {
-			t.Fatalf("%+v: %v", in, err)
+	m, err := buildMarketPolicy(MarketPolicyInput{CanSell: true, MinSalePrices: []SaleMinimumInput{
+		{Chain: "solana-devnet", Asset: usdcMint, Amount: "20000000"},
+		{Chain: "solana", Asset: "native", Amount: "0"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.CanSell || len(m.MinSalePrices) != 2 || m.MinSalePrices[0] != (SaleMinimum{Chain: "solana-devnet", Asset: usdcMint, Amount: "20000000"}) ||
+		m.MinSalePrices[1] != (SaleMinimum{Chain: "solana", Asset: "", Amount: "0"}) {
+		t.Fatalf("market policy %+v", m)
+	}
+	if m, err := buildMarketPolicy(MarketPolicyInput{}); err != nil || m.CanSell || len(m.MinSalePrices) != 0 {
+		t.Fatalf("empty: %+v %v", m, err)
+	}
+	bad := []SaleMinimumInput{
+		{Chain: "nochain", Asset: usdcMint, Amount: "1"},
+		{Chain: "solana-devnet", Asset: "not-an-address", Amount: "1"},
+		{Chain: "solana-devnet", Asset: "So11111111111111111111111111111111111111112", Amount: "1"}, // unverified
+	}
+	for _, a := range []string{"-1", "1.5", "abc", " 1", "", strings.Repeat("9", 79)} {
+		bad = append(bad, SaleMinimumInput{Chain: "solana-devnet", Asset: usdcMint, Amount: a})
+	}
+	for _, in := range bad {
+		if _, err := buildMarketPolicy(MarketPolicyInput{CanSell: true, MinSalePrices: []SaleMinimumInput{in}}); err == nil {
+			t.Fatalf("accepted %+v", in)
 		}
 	}
-	m, _ := buildMarketPolicy(MarketPolicyInput{CanSell: true})
-	if m.MinSalePrice != "0" {
-		t.Fatalf("default min: %+v", m)
-	}
-	for _, bad := range []string{"-1", "1.5", "abc", " 1", strings.Repeat("9", 79)} {
-		if _, err := buildMarketPolicy(MarketPolicyInput{CanSell: true, MinSalePrice: bad}); err == nil {
-			t.Fatalf("accepted minSalePrice %q", bad)
-		}
+	dup := SaleMinimumInput{Chain: "solana-devnet", Asset: usdcMint, Amount: "1"}
+	if _, err := buildMarketPolicy(MarketPolicyInput{MinSalePrices: []SaleMinimumInput{dup, dup}}); err == nil {
+		t.Fatal("accepted a duplicate minimum")
 	}
 }

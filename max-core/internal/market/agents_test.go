@@ -82,7 +82,10 @@ func (f *fakeAgents) Resolve(_ context.Context, id uuid.UUID, decision string, b
 	f.authz[id] = a
 	return a, nil
 }
-func (f *fakeAgents) Finish(_ context.Context, id uuid.UUID, ref AuthRef, failure string) error {
+func (f *fakeAgents) Finish(ctx context.Context, id uuid.UUID, ref AuthRef, failure string) error {
+	if err := ctx.Err(); err != nil {
+		return err // like a query on a cancelled request
+	}
 	a := f.authz[id]
 	if ref.SaleID != nil {
 		a.SaleID = ref.SaleID
@@ -93,6 +96,15 @@ func (f *fakeAgents) Finish(_ context.Context, id uuid.UUID, ref AuthRef, failur
 	a.Failure = failure
 	f.authz[id] = a
 	return nil
+}
+func (f *fakeAgents) List(_ context.Context, agentID uuid.UUID, decision string, _ int) ([]AgentAuthorization, error) {
+	var out []AgentAuthorization
+	for _, a := range f.authz {
+		if a.AgentID == agentID && (decision == "" || a.Decision == decision) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 func (f *fakeAgents) Administrator(_ context.Context, id uuid.UUID) (*uuid.UUID, error) {
 	if id != f.agent.AccountID {
@@ -276,7 +288,8 @@ func TestApprove_OnlyAdministrator(t *testing.T) {
 func TestAgentPolicy_SellNeedsCanSell(t *testing.T) {
 	h := newHarness(t, nil)
 	admin, cred := uuid.New(), uuid.New()
-	fa := newFakeAgents(h.seller, admin, agents.Policy{Market: agents.MarketPolicy{CanSell: false, MinSalePrice: "0"}})
+	fa := newFakeAgents(h.seller, admin, agents.Policy{Market: agents.MarketPolicy{
+		CanSell: false, MinSalePrices: []agents.SaleMinimum{{Chain: "solana-devnet", Asset: devnetUSDC, Amount: "0"}}}})
 	h.svc = NewService(h.repo, map[chains.Namespace]settle.Adapter{chains.NamespaceSolana: h.adapter}, h.svc.cfg, NewAgentPolicy(fa, fa), zap.NewNop())
 	seller := shared.Principal{AccountID: h.seller, AccountType: "agent", CredentialID: &cred}
 	before := len(h.repo.listings)
@@ -337,5 +350,49 @@ func TestMakeOffer_AgentNotSpend(t *testing.T) {
 	})
 	if err != nil || o.Status != OfferLive || len(ah.agents.authz) != 0 {
 		t.Fatalf("offer: %+v %v", o, err)
+	}
+}
+
+func TestApprove_RefusesChangedTerms(t *testing.T) {
+	ah := newAgentHarness(t)
+	l := ah.repo.listings[ah.listing]
+	l.PriceBaseUnits = "40000000"
+	ah.repo.listings[ah.listing] = l
+	_, err := ah.agentBuy("agent-buy-0006")
+	id := pendingID(t, err)
+	if terms := ah.agents.authz[id].Input.Terms; terms == nil || terms.Amount != "40000000" || terms.Chain != "solana-devnet" || terms.Asset != devnetUSDC {
+		t.Fatalf("evaluated terms not stored: %+v", terms)
+	}
+
+	// The seller raises the price before the administrator approves.
+	l.PriceBaseUnits = "45000000"
+	ah.repo.listings[ah.listing] = l
+	if _, err := ah.svc.ApproveAgentAction(context.Background(), ah.admin, id); !errors.Is(err, ErrListingNotActive) {
+		t.Fatalf("replay at a changed price: %v", err)
+	}
+	if ah.repo.opened != 0 {
+		t.Fatal("a sale opened at a price the administrator never saw")
+	}
+	if a := ah.agents.authz[id]; a.Failure == "" {
+		t.Fatalf("failure not recorded: %+v", a)
+	}
+}
+
+func TestApprove_FinishSurvivesCancelledRequest(t *testing.T) {
+	ah := newAgentHarness(t)
+	l := ah.repo.listings[ah.listing]
+	l.PriceBaseUnits = "40000000"
+	ah.repo.listings[ah.listing] = l
+	_, err := ah.agentBuy("agent-buy-0007")
+	id := pendingID(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := ah.svc.ApproveAgentAction(ctx, ah.admin, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := ah.agents.authz[id]; a.SaleID == nil || *a.SaleID != res.Sale.Sale.ID {
+		t.Fatalf("outcome not recorded after the request ended: %+v", a)
 	}
 }

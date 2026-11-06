@@ -82,9 +82,14 @@ type PolicyInput struct {
 }
 
 type MarketPolicyInput struct {
-	CanSell bool
-	// MinSalePrice is in base units; "" means "0".
-	MinSalePrice string
+	CanSell       bool
+	MinSalePrices []SaleMinimumInput
+}
+
+type SaleMinimumInput struct {
+	Chain  string
+	Asset  string // contract/mint, or "" / "native"
+	Amount string // base units
 }
 
 type AgentDetail struct {

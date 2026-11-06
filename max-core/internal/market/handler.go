@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/shared"
 )
@@ -333,6 +334,26 @@ func (h *Handler) ApproveAgentAction(c *gin.Context) {
 	if res.Sale != nil {
 		v := toSaleViewResponse(*res.Sale)
 		out.Sale = &v
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
+}
+
+// ListAgentAuthorizations is GET /v1/agents/:agentId/market-authorizations
+// ?decision= (session, the agent's administrator).
+func (h *Handler) ListAgentAuthorizations(c *gin.Context) {
+	agentID, ok := param(c, "agentId", agents.ErrAgentNotFound)
+	if !ok {
+		return
+	}
+	as, err := h.svc.ListAgentAuthorizations(c.Request.Context(), shared.MustPrincipal(c).AccountID, agentID, c.Query("decision"))
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	out := make([]agentAuthorizationResponse, 0, len(as))
+	for _, a := range as {
+		out = append(out, toAgentAuthorizationResponse(a))
 	}
 	c.Header("Cache-Control", "no-store")
 	shared.OK(c, out)

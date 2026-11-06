@@ -38,8 +38,38 @@ type policyRequest struct {
 
 // marketPolicyJSON is the selling policy on the wire and in agent_policies.market.
 type marketPolicyJSON struct {
-	CanSell      bool   `json:"canSell"`
-	MinSalePrice string `json:"minSalePrice" binding:"max=78"`
+	CanSell       bool              `json:"canSell"`
+	MinSalePrices []saleMinimumJSON `json:"minSalePrices" binding:"max=50,dive"`
+}
+
+type saleMinimumJSON struct {
+	Chain  string `json:"chain" binding:"required,max=32"`
+	Asset  string `json:"asset" binding:"max=128"`
+	Amount string `json:"amount" binding:"required,max=78"` // base units
+}
+
+func toMarketPolicyJSON(m MarketPolicy, display bool) marketPolicyJSON {
+	out := marketPolicyJSON{CanSell: m.CanSell, MinSalePrices: []saleMinimumJSON{}}
+	for _, sm := range m.MinSalePrices {
+		asset := sm.Asset
+		if display {
+			asset = "native"
+			if sm.Asset != "" {
+				chain, _ := chains.Lookup(sm.Chain)
+				asset = chains.DisplayAddress(chain.Namespace, sm.Asset)
+			}
+		}
+		out.MinSalePrices = append(out.MinSalePrices, saleMinimumJSON{Chain: sm.Chain, Asset: asset, Amount: sm.Amount})
+	}
+	return out
+}
+
+func fromMarketPolicyJSON(j marketPolicyJSON) MarketPolicy {
+	m := MarketPolicy{CanSell: j.CanSell}
+	for _, sm := range j.MinSalePrices {
+		m.MinSalePrices = append(m.MinSalePrices, SaleMinimum{Chain: sm.Chain, Asset: sm.Asset, Amount: sm.Amount})
+	}
+	return m
 }
 
 type credentialRequest struct {
@@ -153,10 +183,7 @@ func toAgentResponse(a Agent) agentResponse {
 func toPolicyResponse(p Policy) policyResponse {
 	out := policyResponse{
 		Version: p.Version, AllowedRecipients: orEmpty(p.AllowedRecipients), AllowAnyRecipient: p.AllowAnyRecipient, UpdatedAt: p.UpdatedAt,
-		Limits: []limitResponse{}, Market: marketPolicyJSON{CanSell: p.Market.CanSell, MinSalePrice: p.Market.MinSalePrice},
-	}
-	if out.Market.MinSalePrice == "" {
-		out.Market.MinSalePrice = "0"
+		Limits: []limitResponse{}, Market: toMarketPolicyJSON(p.Market, true),
 	}
 	for i := range out.AllowedRecipients {
 		out.AllowedRecipients[i] = maxids.Handle(out.AllowedRecipients[i])

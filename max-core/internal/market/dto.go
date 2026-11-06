@@ -399,6 +399,20 @@ type agentAuthorizationResponse struct {
 	Failure         string     `json:"failure,omitempty"`
 	DecidedAt       *time.Time `json:"decidedAt,omitempty"`
 	CreatedAt       time.Time  `json:"createdAt"`
+	// Summary says what the held action would do.
+	Summary agentActionSummary `json:"summary"`
+}
+
+// agentActionSummary is the readable part of an authorization's payload.
+// Price (buy, list) and Amount (accept, pay) are in base units.
+type agentActionSummary struct {
+	Op        string  `json:"op"`
+	Name      string  `json:"name,omitempty"`
+	ListingID *string `json:"listingId,omitempty"`
+	OfferID   *string `json:"offerId,omitempty"`
+	SaleID    *string `json:"saleId,omitempty"`
+	Price     string  `json:"price,omitempty"`
+	Amount    string  `json:"amount,omitempty"`
 }
 
 type agentActionResponse struct {
@@ -419,6 +433,27 @@ func toAgentAuthorizationResponse(a AgentAuthorization) agentAuthorizationRespon
 		ID: a.ID.String(), AgentID: a.AgentID.String(), Action: a.Action, Decision: a.Decision, Reasons: orEmpty(a.Reasons),
 		PolicyVersion: a.PolicyVersion, Chain: a.Chain, Asset: a.AssetAddress, AmountBaseUnits: a.Amount,
 		SaleID: idStr(a.SaleID), OfferID: idStr(a.OfferID), ListingID: idStr(a.ListingID), Failure: a.Failure,
-		DecidedAt: a.DecidedAt, CreatedAt: a.CreatedAt,
+		DecidedAt: a.DecidedAt, CreatedAt: a.CreatedAt, Summary: summarize(a, idStr),
 	}
+}
+
+func summarize(a AgentAuthorization, idStr func(*uuid.UUID) *string) agentActionSummary {
+	in := a.Input
+	sum := agentActionSummary{Op: in.Op, Name: a.Name}
+	listingID, offerID := in.ListingID, in.OfferID
+	if listingID == nil {
+		listingID = a.ListingID
+	}
+	if offerID == nil {
+		offerID = a.OfferID
+	}
+	switch in.Op {
+	case OpBuy, OpList, OpUpdatePrice:
+		sum.ListingID, sum.Price = idStr(listingID), a.Amount
+	case OpAccept:
+		sum.OfferID, sum.Amount = idStr(offerID), a.Amount
+	case OpPay:
+		sum.OfferID, sum.SaleID, sum.Amount = idStr(offerID), idStr(a.SaleID), a.Amount
+	}
+	return sum
 }

@@ -191,6 +191,7 @@ func NewRouter(d Deps) *gin.Engine {
 	mine.GET("/me", read, d.Market.Me)
 
 	// Held agent market actions: the agent's administrator (session) decides.
+	admin.GET("/agents/:agentId/market-authorizations", d.Market.Gate(), d.Market.ListAgentAuthorizations)
 	approvals := admin.Group("/agent-approvals/market", d.Market.Gate())
 	approvals.POST("/:authorizationId/approve", d.Market.ApproveAgentAction)
 	approvals.POST("/:authorizationId/deny", d.Market.DenyAgentAction)

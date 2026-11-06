@@ -103,7 +103,8 @@ func (s *Service) finisher(ctx context.Context, id *uuid.UUID) func(AuthRef, err
 		if err != nil {
 			ref = AuthRef{}
 		}
-		if ferr := s.agents.Finish(ctx, *id, ref, err); ferr != nil {
+		// A cancelled request must not leave an authorized action unrecorded.
+		if ferr := s.agents.Finish(context.WithoutCancel(ctx), *id, ref, err); ferr != nil {
 			s.log.Warn("market agent authorization finish", zap.String("authorization_id", id.String()), zap.Error(ferr))
 		}
 	}

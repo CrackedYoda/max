@@ -466,3 +466,16 @@ SET sale_id = coalesce(sqlc.narg(sale_id), sale_id),
     finished_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
+
+-- name: ListAgentMarketAuthorizations :many
+-- An agent's market authorizations, newest first, with the name each is about.
+SELECT m.*, n.canonical_name AS name
+FROM agent_market_authorizations m
+LEFT JOIN market_listings l ON l.id = m.listing_id
+LEFT JOIN market_offers o ON o.id = m.offer_id
+LEFT JOIN market_sales s ON s.id = m.sale_id
+LEFT JOIN max_ids n ON n.id = coalesce(l.max_id, o.max_id, s.max_id, (m.payload -> 'list' ->> 'maxId')::uuid)
+WHERE m.agent_account_id = sqlc.arg(agent_account_id)
+  AND (sqlc.narg(decision)::text IS NULL OR m.decision = sqlc.narg(decision))
+ORDER BY m.created_at DESC
+LIMIT sqlc.arg(row_limit);

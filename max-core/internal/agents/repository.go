@@ -144,10 +144,7 @@ func (r *repository) UpdatePolicy(ctx context.Context, agentID uuid.UUID, p Poli
 	if recipients == nil {
 		recipients = []string{}
 	}
-	market := marketPolicyJSON{CanSell: p.Market.CanSell, MinSalePrice: p.Market.MinSalePrice}
-	if market.MinSalePrice == "" {
-		market.MinSalePrice = "0"
-	}
+	market := toMarketPolicyJSON(p.Market, false)
 	mb, err := json.Marshal(market)
 	if err != nil {
 		return Policy{}, err
@@ -412,10 +409,7 @@ func toPolicy(r generated.AgentPolicy) (Policy, error) {
 			return Policy{}, err
 		}
 	}
-	p.Market = MarketPolicy{CanSell: m.CanSell, MinSalePrice: m.MinSalePrice}
-	if p.Market.MinSalePrice == "" {
-		p.Market.MinSalePrice = "0"
-	}
+	p.Market = fromMarketPolicyJSON(m)
 	for _, l := range raw {
 		perTx, ok1 := new(big.Int).SetString(l.MaxPerTransfer, 10)
 		perDay, ok2 := new(big.Int).SetString(l.MaxPer24h, 10)

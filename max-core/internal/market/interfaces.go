@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/shared"
@@ -355,6 +356,10 @@ type AgentPolicy interface {
 	// Resolve moves a pending authorization to approved or denied for the
 	// agent's administrator; anyone else gets ErrAgentAuthorizationNotFound.
 	Resolve(ctx context.Context, admin, authorizationID uuid.UUID, decision string) (AgentAuthorization, error)
+	// List returns an agent's authorizations to its administrator, newest
+	// first, optionally filtered by decision; anyone else gets
+	// agents.ErrAgentNotFound.
+	List(ctx context.Context, admin, agentID uuid.UUID, decision string) ([]AgentAuthorization, error)
 }
 
 // AllowAll approves every action and has no authorizations. Tests and
@@ -369,6 +374,10 @@ func (AllowAll) Finish(context.Context, uuid.UUID, AuthRef, error) error { retur
 
 func (AllowAll) Resolve(context.Context, uuid.UUID, uuid.UUID, string) (AgentAuthorization, error) {
 	return AgentAuthorization{}, ErrAgentAuthorizationNotFound
+}
+
+func (AllowAll) List(context.Context, uuid.UUID, uuid.UUID, string) ([]AgentAuthorization, error) {
+	return nil, agents.ErrAgentNotFound
 }
 
 // Replayable operations stored in an authorization's payload.
@@ -392,6 +401,15 @@ type ActionInput struct {
 	PayoutAddress string     `json:"payoutAddress,omitempty"`
 	// IdempotencyKey is pay's key (accepted for API symmetry).
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	// Terms are what the policy evaluated. A replay must meet them exactly.
+	Terms *Terms `json:"terms,omitempty"`
+}
+
+// Terms are an action's amount (base units), chain and asset.
+type Terms struct {
+	Amount string `json:"amount"`
+	Chain  string `json:"chain"`
+	Asset  string `json:"asset"`
 }
 
 // AgentAuthorization is an agent_market_authorizations row.
@@ -404,9 +422,11 @@ type AgentAuthorization struct {
 	SaleID, OfferID, ListingID  *uuid.UUID
 	Input                       ActionInput
 	Failure                     string
-	DecidedBy                   *uuid.UUID
-	DecidedAt, FinishedAt       *time.Time
-	CreatedAt                   time.Time
+	// Name is the MAX ID the action is about, where the list query joins it.
+	Name                  string
+	DecidedBy             *uuid.UUID
+	DecidedAt, FinishedAt *time.Time
+	CreatedAt             time.Time
 }
 
 type NewAgentAuthorization struct {

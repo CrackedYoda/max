@@ -232,7 +232,9 @@ func TestMarket_AgentListWithoutCanSellDenied(t *testing.T) {
 
 	// With canSell and a price at the minimum, the same listing goes straight through.
 	if code, body = dev.c.do("PUT", "/v1/agents/"+agentID.String()+"/policy", map[string]any{
-		"allowAnyRecipient": true, "market": map[string]any{"canSell": true, "minSalePrice": "25000000"},
+		"allowAnyRecipient": true, "market": map[string]any{"canSell": true, "minSalePrices": []map[string]any{
+			{"chain": "solana-devnet", "asset": devnetUSDC, "amount": "25000000"},
+		}},
 	}); code != http.StatusOK || data(t, body)["market"].(map[string]any)["canSell"] != true {
 		t.Fatalf("policy: %d %v", code, body)
 	}
@@ -249,5 +251,92 @@ func TestMarket_AgentListWithoutCanSellDenied(t *testing.T) {
 	dev.c.do("PUT", "/v1/agents/"+agentID.String()+"/policy", map[string]any{"allowAnyRecipient": true})
 	if _, body = dev.c.do("GET", "/v1/agents/"+agentID.String(), nil); data(t, body)["policy"].(map[string]any)["market"].(map[string]any)["canSell"] != true {
 		t.Fatalf("market policy reset: %v", body)
+	}
+}
+
+func TestMarket_AgentApprovalRefusesRepricedListing(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, dev := newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "40")
+	_, wallet, agent := agentBuyer(t, env, dev, "pricebot", allMarketScopes)
+	code, body := agentBuy(agent, wallet, listingID, "agent-buy-0005")
+	authID := pendingAuthorization(t, code, body)
+
+	// The seller reprices before the administrator approves the 40 USDC buy.
+	if code, body = alice.c.do("PATCH", "/v1/market/listings/"+listingID, map[string]any{"price": "45"}); code != http.StatusOK {
+		t.Fatalf("reprice: %d %v", code, body)
+	}
+	code, body = dev.c.do("POST", "/v1/agent-approvals/market/"+authID+"/approve", nil)
+	if errCode(body) != "LISTING_NOT_ACTIVE" {
+		t.Fatalf("replay at a new price: %d %v", code, body)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sales`); n != 0 {
+		t.Fatalf("%d sales opened at a price nobody approved", n)
+	}
+	if _, _, failure := authorization(t, env, authID); failure == nil || *failure == "" {
+		t.Fatal("failure not recorded")
+	}
+}
+
+func TestMarket_AdministratorListsHeldActions(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, dev, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "40")
+	agentID, wallet, agent := agentBuyer(t, env, dev, "heldbot", allMarketScopes)
+	code, body := agentBuy(agent, wallet, listingID, "agent-buy-0006")
+	authID := pendingAuthorization(t, code, body)
+
+	// Carol's own agent has a held buy too; it must never show up in dev's list.
+	carolAgentID, carolWallet, carolAgent := agentBuyer(t, env, carol, "otherbot", allMarketScopes)
+	code, body = agentBuy(carolAgent, carolWallet, listingID, "agent-buy-0007")
+	otherID := pendingAuthorization(t, code, body)
+
+	path := "/v1/agents/" + agentID.String() + "/market-authorizations?decision=pending_approval"
+	code, body = dev.c.do("GET", path, nil)
+	if code != http.StatusOK {
+		t.Fatalf("list: %d %v", code, body)
+	}
+	rows := body["data"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows %v", rows)
+	}
+	row := rows[0].(map[string]any)
+	sum := row["summary"].(map[string]any)
+	if row["id"] != authID || row["action"] != "buy" || row["decision"] != "pending_approval" || row["amountBaseUnits"] != "40000000" ||
+		row["chain"] != "solana-devnet" || row["asset"] != devnetUSDC || len(row["reasons"].([]any)) == 0 || row["createdAt"] == nil ||
+		sum["op"] != "buy" || sum["name"] != "yoda" || sum["listingId"] != listingID || sum["price"] != "40000000" {
+		t.Fatalf("row %v", row)
+	}
+	for _, r := range rows {
+		if r.(map[string]any)["id"] == otherID {
+			t.Fatal("another administrator's agent row leaked")
+		}
+	}
+
+	// Other people, the agent itself and bad filters are refused.
+	if code, _ = carol.c.do("GET", path, nil); code != http.StatusNotFound {
+		t.Fatalf("other administrator: %d", code)
+	}
+	if code, _ = dev.c.do("GET", "/v1/agents/"+carolAgentID.String()+"/market-authorizations", nil); code != http.StatusNotFound {
+		t.Fatalf("dev reads carol's agent: %d", code)
+	}
+	if code, _ = agent.do("GET", path, nil); code != http.StatusForbidden {
+		t.Fatalf("agent key: %d", code)
+	}
+	if code, body = dev.c.do("GET", "/v1/agents/"+agentID.String()+"/market-authorizations?decision=bogus", nil); errCode(body) != "VALIDATION_FAILED" {
+		t.Fatalf("bad decision filter: %d %v", code, body)
+	}
+
+	// Once denied, it leaves the pending list but stays in the full one.
+	dev.c.do("POST", "/v1/agent-approvals/market/"+authID+"/deny", nil)
+	if _, body = dev.c.do("GET", path, nil); len(body["data"].([]any)) != 0 {
+		t.Fatalf("pending after deny: %v", body)
+	}
+	if _, body = dev.c.do("GET", "/v1/agents/"+agentID.String()+"/market-authorizations", nil); len(body["data"].([]any)) != 1 {
+		t.Fatalf("all after deny: %v", body)
 	}
 }

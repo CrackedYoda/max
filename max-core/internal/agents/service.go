@@ -166,7 +166,6 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 		p.Limits = append(p.Limits, AssetLimit{Chain: chain.Key, Asset: asset, MaxPerTransfer: perTx, MaxPer24h: perDay})
 	}
 
-	p.Market = MarketPolicy{MinSalePrice: "0"}
 	if in.Market != nil {
 		m, err := buildMarketPolicy(*in.Market)
 		if err != nil {
@@ -190,18 +189,39 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 	return p, nil
 }
 
-// buildMarketPolicy validates the selling policy. minSalePrice is an exact
-// base-unit integer, so no decimals lookup can be spoofed.
+// buildMarketPolicy validates the selling policy. Minimums are per verified
+// asset, like limits, and exact base-unit integers.
 func buildMarketPolicy(in MarketPolicyInput) (MarketPolicy, error) {
-	raw := in.MinSalePrice
-	if raw == "" {
-		raw = "0"
+	m := MarketPolicy{CanSell: in.CanSell}
+	seen := map[string]bool{}
+	for _, sm := range in.MinSalePrices {
+		chain, ok := chains.Lookup(sm.Chain)
+		if !ok {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: unknown chain " + sm.Chain)
+		}
+		asset := ""
+		if a := strings.TrimSpace(sm.Asset); a != "" && !strings.EqualFold(a, "native") {
+			norm, err := chains.NormalizeAddress(chain.Namespace, a)
+			if err != nil {
+				return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: invalid asset address for " + chain.Key)
+			}
+			if _, ok := chains.LookupVerifiedToken(chain.Key, norm); !ok {
+				return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: only native coins and verified tokens are supported")
+			}
+			asset = norm
+		}
+		key := chain.Key + "|" + asset
+		if seen[key] {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: duplicate minimum for " + key)
+		}
+		seen[key] = true
+		if !baseUnitsRe.MatchString(sm.Amount) {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: amount must be a whole number of base units")
+		}
+		v, _ := new(big.Int).SetString(sm.Amount, 10)
+		m.MinSalePrices = append(m.MinSalePrices, SaleMinimum{Chain: chain.Key, Asset: asset, Amount: v.String()})
 	}
-	if !baseUnitsRe.MatchString(raw) {
-		return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrice must be a whole number of base units")
-	}
-	v, _ := new(big.Int).SetString(raw, 10)
-	return MarketPolicy{CanSell: in.CanSell, MinSalePrice: v.String()}, nil
+	return m, nil
 }
 
 var baseUnitsRe = regexp.MustCompile(`^[0-9]{1,78}$`)

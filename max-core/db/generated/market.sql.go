@@ -1721,6 +1721,90 @@ func (q *Queries) ListActiveMarketListings(ctx context.Context, arg ListActiveMa
 	return items, nil
 }
 
+const listAgentMarketAuthorizations = `-- name: ListAgentMarketAuthorizations :many
+SELECT m.id, m.agent_account_id, m.credential_id, m.action, m.sale_id, m.offer_id, m.listing_id, m.decision, m.reasons, m.policy_version, m.chain, m.asset_address, m.amount_base_units, m.decided_by, m.decided_at, m.created_at, m.payload, m.failure, m.finished_at, n.canonical_name AS name
+FROM agent_market_authorizations m
+LEFT JOIN market_listings l ON l.id = m.listing_id
+LEFT JOIN market_offers o ON o.id = m.offer_id
+LEFT JOIN market_sales s ON s.id = m.sale_id
+LEFT JOIN max_ids n ON n.id = coalesce(l.max_id, o.max_id, s.max_id, (m.payload -> 'list' ->> 'maxId')::uuid)
+WHERE m.agent_account_id = $1
+  AND ($2::text IS NULL OR m.decision = $2)
+ORDER BY m.created_at DESC
+LIMIT $3
+`
+
+type ListAgentMarketAuthorizationsParams struct {
+	AgentAccountID uuid.UUID
+	Decision       *string
+	RowLimit       int32
+}
+
+type ListAgentMarketAuthorizationsRow struct {
+	ID              uuid.UUID
+	AgentAccountID  uuid.UUID
+	CredentialID    uuid.UUID
+	Action          string
+	SaleID          *uuid.UUID
+	OfferID         *uuid.UUID
+	ListingID       *uuid.UUID
+	Decision        string
+	Reasons         []byte
+	PolicyVersion   int32
+	Chain           string
+	AssetAddress    string
+	AmountBaseUnits string
+	DecidedBy       *uuid.UUID
+	DecidedAt       *time.Time
+	CreatedAt       time.Time
+	Payload         []byte
+	Failure         *string
+	FinishedAt      *time.Time
+	Name            *string
+}
+
+// An agent's market authorizations, newest first, with the name each is about.
+func (q *Queries) ListAgentMarketAuthorizations(ctx context.Context, arg ListAgentMarketAuthorizationsParams) ([]ListAgentMarketAuthorizationsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentMarketAuthorizations, arg.AgentAccountID, arg.Decision, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentMarketAuthorizationsRow
+	for rows.Next() {
+		var i ListAgentMarketAuthorizationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentAccountID,
+			&i.CredentialID,
+			&i.Action,
+			&i.SaleID,
+			&i.OfferID,
+			&i.ListingID,
+			&i.Decision,
+			&i.Reasons,
+			&i.PolicyVersion,
+			&i.Chain,
+			&i.AssetAddress,
+			&i.AmountBaseUnits,
+			&i.DecidedBy,
+			&i.DecidedAt,
+			&i.CreatedAt,
+			&i.Payload,
+			&i.Failure,
+			&i.FinishedAt,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExpiredLockedMarketSales = `-- name: ListExpiredLockedMarketSales :many
 SELECT id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at FROM market_sales
 WHERE status = 'locked' AND tx_hash IS NULL AND lock_expires_at IS NOT NULL AND lock_expires_at <= $1::timestamptz

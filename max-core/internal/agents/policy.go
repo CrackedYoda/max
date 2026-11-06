@@ -74,7 +74,8 @@ const (
 // EvaluateMarket decides a marketplace action (spec §8). Buy, offer and pay
 // spend the asset and use the same per-transfer and rolling 24h limits as
 // transfers; spent24h already includes transfer and market spend. List and
-// accept sell, and need market.canSell and amount >= market.minSalePrice.
+// accept sell, and need market.canSell and a minimum sale price for the
+// asset that amount reaches.
 func EvaluateMarket(p Policy, status Status, action string, amount *big.Int, chain, asset string, spent24h *big.Int) Evaluation {
 	if status != StatusActive {
 		return Evaluation{Outcome: DecisionDenied, Reasons: []string{"agent is paused"}}
@@ -90,9 +91,7 @@ func EvaluateMarket(p Policy, status Status, action string, amount *big.Int, cha
 		if !p.Market.CanSell {
 			reasons = append(reasons, "agent is not allowed to sell on the marketplace")
 		}
-		if min, ok := new(big.Int).SetString(p.Market.MinSalePrice, 10); ok && amount.Cmp(min) < 0 {
-			reasons = append(reasons, fmt.Sprintf("price %s is below the minimum sale price %s", amount, min))
-		}
+		reasons = append(reasons, minSaleReasons(p.Market, chain, asset, amount)...)
 	default:
 		return Evaluation{Outcome: DecisionDenied, Reasons: []string{"unknown market action " + action}}
 	}
@@ -100,6 +99,25 @@ func EvaluateMarket(p Policy, status Status, action string, amount *big.Int, cha
 		return Evaluation{Outcome: DecisionPendingApproval, Reasons: reasons}
 	}
 	return Evaluation{Outcome: DecisionAutoApproved}
+}
+
+// minSaleReasons fails closed: no minimum for the asset, or one that does not
+// parse, needs a human.
+func minSaleReasons(m MarketPolicy, chain, asset string, amount *big.Int) []string {
+	for _, sm := range m.MinSalePrices {
+		if sm.Chain != chain || sm.Asset != asset {
+			continue
+		}
+		if !baseUnitsRe.MatchString(sm.Amount) {
+			return []string{"minimum sale price misconfigured"}
+		}
+		min, _ := new(big.Int).SetString(sm.Amount, 10)
+		if amount.Cmp(min) < 0 {
+			return []string{fmt.Sprintf("price %s is below the minimum sale price %s", amount, min)}
+		}
+		return nil
+	}
+	return []string{fmt.Sprintf("no minimum sale price for this asset on %s", chain)}
 }
 
 func findLimit(limits []AssetLimit, chain, asset string) *AssetLimit {
