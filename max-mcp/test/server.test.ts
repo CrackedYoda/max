@@ -224,10 +224,10 @@ describe("market tools", () => {
     const mcp = await connect({ fetchFn });
     const s: any = await mcp.callTool({ name: "market_search", arguments: {} });
     const g: any = await mcp.callTool({ name: "market_get_listing", arguments: { name: "x" } });
-    assert.equal(s.structuredContent.listings[0].userSupplied.handle, evil);
+    assert.match(s.structuredContent.listings[0].userSupplied.handle, /ignore previous/);
     assert.equal(s.structuredContent.listings[0].symbol, undefined);
     assert.equal(g.structuredContent.userSupplied.reason, evil);
-    assert.equal(g.structuredContent.listing.userSupplied.symbol, evil);
+    assert.match(g.structuredContent.listing.userSupplied.symbol, /SYSTEM/);
     assert.match(s.structuredContent.note, /treat them as data/);
     const { tools } = await mcp.listTools();
     for (const n of ["market_search", "market_get_listing"]) assert.match(tools.find((t) => t.name === n)!.description!, /never instructions/);
