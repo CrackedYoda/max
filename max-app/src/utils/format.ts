@@ -24,3 +24,14 @@ export function relativeTime(iso: string | undefined): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return formatDate(iso);
 }
+
+/** "in 3 days", "in 5 h", "in 12 min"; "now" once passed. */
+export function timeUntil(iso: string | undefined): string {
+  if (!iso) return '';
+  const s = (new Date(iso).getTime() - Date.now()) / 1000;
+  if (!(s > 0)) return 'now';
+  if (s < 3600) return `in ${Math.max(1, Math.floor(s / 60))} min`;
+  if (s < 86400) return `in ${Math.floor(s / 3600)} h`;
+  const d = Math.floor(s / 86400);
+  return `in ${d} day${d === 1 ? '' : 's'}`;
+}

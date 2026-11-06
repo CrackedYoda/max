@@ -1,4 +1,4 @@
-import type { Payment, RenameView } from '@max/sdk';
+import type { Payment, RenameView, SaleView } from '@max/sdk';
 import * as Crypto from 'expo-crypto';
 import { create } from 'zustand';
 
@@ -101,6 +101,72 @@ export const useRenameDraft = create<RenameState>((set, get) => ({
   setView: (view) => set({ view }),
   setSigned: (signed) => set({ signed }),
   reset: () => set({ fingerprint: null, idempotencyKey: null, view: null, signed: null }),
+}));
+
+// ---- marketplace: buy a listing / pay an accepted offer or a held sale ----
+
+/**
+ * What the user tapped. The transaction is checked against these values
+ * before signing, so they come from the listing/offer shown, never from the
+ * sale MAX returns. `price` is the decimal amount shown; it is converted with
+ * trusted decimals, and `priceBaseUnits` (when the API sent it with the
+ * listing/offer) must agree with that conversion.
+ */
+export type SaleTarget = {
+  kind: 'listing' | 'offer' | 'sale';
+  /** listingId | offerId | saleId */
+  id: string;
+  handle: string;
+  chain: string;
+  asset: string;
+  symbol: string;
+  price: string;
+  priceBaseUnits?: string;
+  /** The Solana account on this phone that pays (and must be the sale's buyer). */
+  fromAddress: string;
+};
+
+type SaleState = {
+  target: SaleTarget | null;
+  /** Idempotency keys per exact terms, so reopening never locks a second sale. */
+  keys: Record<string, string>;
+  view: SaleView | null;
+  /**
+   * Signed payments per sale id, kept for the whole app session: a retry
+   * re-sends these bytes, and a sale with one is never signed again without
+   * an explicit wallet check.
+   */
+  signed: Record<string, SignedTx>;
+  setTarget(t: SaleTarget): void;
+  keyFor(fingerprint: string): string;
+  setView(v: SaleView | null): void;
+  setSigned(saleId: string, s: SignedTx | null): void;
+  /** Closes the flow; keeps signatures and keys. */
+  close(): void;
+};
+
+export const useSaleDraft = create<SaleState>((set, get) => ({
+  target: null,
+  keys: {},
+  view: null,
+  signed: {},
+  setTarget: (target) => set({ target, view: null }),
+  keyFor: (fingerprint) => {
+    const k = get().keys[fingerprint];
+    if (k) return k;
+    const key = Crypto.randomUUID();
+    set((s) => ({ keys: { ...s.keys, [fingerprint]: key } }));
+    return key;
+  },
+  setView: (view) => set({ view }),
+  setSigned: (saleId, signed) =>
+    set((s) => {
+      const next = { ...s.signed };
+      if (signed) next[saleId] = signed;
+      else delete next[saleId];
+      return { signed: next };
+    }),
+  close: () => set({ target: null, view: null }),
 }));
 
 // ---- toasts ----

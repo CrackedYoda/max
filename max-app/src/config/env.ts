@@ -4,6 +4,12 @@ const schema = z.object({
   apiUrl: z.url(),
   webUrl: z.url(),
   rpc: z.record(z.string(), z.url()),
+  /**
+   * `chain:mint[:decimals]` entries mirroring max-core MARKET_ASSETS. The
+   * decimals pin is what a market price is converted with before signing, so
+   * it never comes from the API; it is cross-checked against the mint on chain.
+   */
+  marketAssets: z.array(z.object({ chain: z.string().min(1), asset: z.string().min(1), decimals: z.number().int().min(0).max(30).optional() })),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -31,11 +37,25 @@ export function getEnv(): Env {
   ];
   for (const [k, v] of entries) if (v) rpc[k] = v;
   cached = schema.parse({
+    marketAssets: parseMarketAssets(process.env.EXPO_PUBLIC_MARKET_ASSETS),
     apiUrl: process.env.EXPO_PUBLIC_MAX_API_URL ?? 'http://localhost:8080',
     webUrl: process.env.EXPO_PUBLIC_WEB_URL ?? 'http://localhost:3000',
     rpc,
   });
   return cached;
+}
+
+/** `solana-devnet:<mint>:6,…` → entries; malformed pairs are dropped. */
+export function parseMarketAssets(raw: string | undefined): { chain: string; asset: string; decimals?: number }[] {
+  return (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [chain = '', asset = '', dec] = pair.split(':');
+      return { chain, asset, decimals: dec && /^\d+$/.test(dec) ? Number(dec) : undefined };
+    })
+    .filter((a) => a.chain && a.asset);
 }
 
 /**
