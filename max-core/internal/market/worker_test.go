@@ -383,11 +383,20 @@ func TestSubmit_LateOnlyForUnpaidExpiry(t *testing.T) {
 	if _, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); !errors.Is(err, ErrTxMismatch) {
 		t.Fatalf("second tx on an expired paid sale: %v", err)
 	}
+	// Only a sale an admin cancelled (Task 11) takes a transaction late: it
+	// is recorded and parked in manual_review. Other closed sales refuse.
 	c := h.repo.sales[s.ID]
 	c.Status, c.TxHash = SaleCancelled, nil
 	h.repo.sales[s.ID] = c
-	if _, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); !errors.Is(err, ErrSaleExpired) {
-		t.Fatalf("cancelled sale: %v", err)
+	if v, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); err != nil || v.Sale.Status != SaleManualReview || v.Sale.TxHash == nil {
+		t.Fatalf("cancelled sale: %+v %v", v.Sale, err)
+	}
+	for _, st := range []string{SaleReversed, SaleManualReview, SaleCompleted} {
+		c.Status, c.TxHash = st, nil
+		h.repo.sales[s.ID] = c
+		if _, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); !errors.Is(err, ErrSaleExpired) {
+			t.Fatalf("%s sale: %v", st, err)
+		}
 	}
 }
 

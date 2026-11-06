@@ -136,6 +136,12 @@ func (f *fakeRepo) SaleByIdempotencyKey(_ context.Context, buyer uuid.UUID, key 
 func (f *fakeRepo) AttachTx(_ context.Context, id, _ uuid.UUID, h string) (Sale, error) {
 	s := f.sales[id]
 	now := f.now()
+	if s.Status == SaleCancelled { // admin-cancelled: parked for review (repository.attachAfterCancel)
+		s.Status, s.TxHash, s.SubmittedAt = SaleManualReview, &h, &now
+		f.sales[id] = s
+		f.record(id, "tx_after_cancel", SaleCancelled, SaleManualReview)
+		return s, nil
+	}
 	s.Status, s.TxHash, s.SubmittedAt, s.NextCheckAt = SaleSubmitted, &h, &now, &now
 	f.sales[id] = s
 	f.record(id, "submitted", SaleLocked, SaleSubmitted)

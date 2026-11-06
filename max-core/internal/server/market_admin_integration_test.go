@@ -557,3 +557,167 @@ func TestMarketAdmin_BanBlocksListOfferBuyAndLiftRestores(t *testing.T) {
 		t.Fatalf("lift suspension: %d", code)
 	}
 }
+
+// A payment broadcast before an admin cancel and submitted after it is kept:
+// the sale goes to manual_review with the tx recorded.
+func TestMarketAdmin_SubmitAfterCancelGoesToManualReview(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol, ops := newParty(t, env), newParty(t, env), newParty(t, env), newAdmin(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	_, body := buyListing(bob, listingID, "cancel-pay-0001")
+	saleID := saleOf(t, body)["id"].(string)
+	if code, body := ops.c.do("POST", "/v1/admin/market/sales/"+saleID+"/cancel", map[string]any{"reason": "buyer asked"}); code != http.StatusOK {
+		t.Fatalf("cancel: %d %v", code, body)
+	}
+	// Only the buyer may attach a transaction.
+	if code, body := carol.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(61)}); code != http.StatusNotFound {
+		t.Fatalf("stranger submit: %d %v", code, body)
+	}
+	code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(62)})
+	if code != http.StatusOK || saleOf(t, body)["status"] != "manual_review" {
+		t.Fatalf("submit after cancel: %d %v", code, body)
+	}
+	if saleStatus(t, env, saleID) != "manual_review" || str(t, env, `SELECT tx_hash FROM market_sales WHERE id = $1`, saleID) != solSigFor(62) {
+		t.Fatal("the tx must be stored and the sale parked for review")
+	}
+	var note, hash string
+	_ = env.pool.QueryRow(context.Background(), `SELECT detail->>'note', detail->>'tx_hash' FROM market_sale_events
+		WHERE sale_id = $1 AND event_type = 'tx_after_cancel' AND from_status = 'cancelled' AND to_status = 'manual_review'`, saleID).Scan(&note, &hash)
+	if note != "tx submitted after admin cancel" || hash != solSigFor(62) {
+		t.Fatalf("event note %q hash %q", note, hash)
+	}
+	// Same hash again is idempotent; another hash is refused.
+	if code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(62)}); code != http.StatusOK {
+		t.Fatalf("repeat submit: %d %v", code, body)
+	}
+	if _, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(63)}); errCode(body) != "TX_MISMATCH" {
+		t.Fatalf("second hash: %v", body)
+	}
+	// The listing released by the cancel stays for sale.
+	if listingStatus(t, env, listingID) != "active" {
+		t.Fatal("listing must stay active")
+	}
+	// A completed sale still refuses a transaction.
+	_, _, done := completeSale(t, env, alice, bob, "jedi", 64)
+	if _, body = bob.c.do("POST", "/v1/market/sales/"+done+"/submit", map[string]any{"txHash": solSigFor(65)}); errCode(body) != "TX_MISMATCH" {
+		t.Fatalf("submit on completed: %v", body)
+	}
+}
+
+func TestMarketAdmin_ReverseClosesBuyersListingAndOffers(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol, ops := newParty(t, env), newParty(t, env), newParty(t, env), newAdmin(t, env)
+	id, _, saleID := completeSale(t, env, alice, bob, "yoda", 71)
+	makeListable(t, env, id)
+	bobListing := listName(t, bob, id, "40")
+	code, body := makeOffer(carol, "yoda", "35")
+	if code != http.StatusCreated {
+		t.Fatalf("carol offer: %d %v", code, body)
+	}
+	carolOffer := data(t, body)["id"].(string)
+	if code, body = ops.c.do("POST", "/v1/admin/market/sales/"+saleID+"/reverse", map[string]any{"reason": "fraud"}); code != http.StatusOK {
+		t.Fatalf("reverse: %d %v", code, body)
+	}
+	if owner(t, env, id) != alice.account.String() || listingStatus(t, env, bobListing) != "cancelled" || offerStatus(t, env, carolOffer) != "superseded" {
+		t.Fatalf("after reverse: owner alice=%v listing %s offer %s", owner(t, env, id) == alice.account.String(),
+			listingStatus(t, env, bobListing), offerStatus(t, env, carolOffer))
+	}
+	if r := str(t, env, `SELECT status_reason FROM market_listings WHERE id = $1`, bobListing); r != "ownership reversed by admin" {
+		t.Fatalf("listing reason %q", r)
+	}
+}
+
+func TestMarketAdmin_ReverseRefusedWhileBuyersResaleOpen(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol, ops := newParty(t, env), newParty(t, env), newParty(t, env), newAdmin(t, env)
+	id, _, saleID := completeSale(t, env, alice, bob, "yoda", 72)
+	makeListable(t, env, id)
+	bobListing := listName(t, bob, id, "40")
+	code, body := buyListing(carol, bobListing, "resale-buy-0001")
+	if code != http.StatusCreated {
+		t.Fatalf("carol buy: %d %v", code, body)
+	}
+	carolSale := saleOf(t, body)["id"].(string)
+	code, body = ops.c.do("POST", "/v1/admin/market/sales/"+saleID+"/reverse", map[string]any{"reason": "fraud"})
+	if code != http.StatusConflict || errCode(body) != "NAME_LOCKED" {
+		t.Fatalf("reverse with open resale: %d %v", code, body)
+	}
+	if owner(t, env, id) != bob.account.String() || saleStatus(t, env, saleID) != "completed" ||
+		listingStatus(t, env, bobListing) != "locked" || saleStatus(t, env, carolSale) != "locked" {
+		t.Fatal("a refused reversal changed state")
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'reversed'`, saleID); n != 0 {
+		t.Fatal("a refused reversal wrote an event")
+	}
+}
+
+// Cancelling a manual_review sale whose seller lost the name cancels the
+// stale locked listing instead of putting a stranger's name up for sale.
+func TestMarketAdmin_CancelManualReviewAfterOwnerChangeCancelsListing(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	alice, bob, carol, ops := newParty(t, env), newParty(t, env), newParty(t, env), newAdmin(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	_, body := buyListing(bob, listingID, "mr-owner-0001")
+	saleID := saleOf(t, body)["id"].(string)
+	if code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(73)}); code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	if err := transfer(t, env, maxids.TransferParams{MaxID: id, From: alice.account, To: carol.account}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := env.market.ObserveSale(context.Background(), uuid.MustParse(saleID)); err != nil || s.Status != "manual_review" {
+		t.Fatalf("observe: %v %+v", err, s)
+	}
+	if listingStatus(t, env, listingID) != "locked" {
+		t.Fatalf("listing before cancel: %s", listingStatus(t, env, listingID))
+	}
+	if code, body := ops.c.do("POST", "/v1/admin/market/sales/"+saleID+"/cancel", map[string]any{"reason": "refunded"}); code != http.StatusOK {
+		t.Fatalf("cancel: %d %v", code, body)
+	}
+	if st := listingStatus(t, env, listingID); st != "cancelled" {
+		t.Fatalf("listing after cancel: %s, want cancelled", st)
+	}
+	if owner(t, env, id) != carol.account.String() {
+		t.Fatal("cancel must not move the name")
+	}
+}
+
+func TestMarketAdmin_DuplicateActiveRestrictionRefused(t *testing.T) {
+	env := newTestEnv(t, withMarket(nil))
+	bob, ops := newParty(t, env), newAdmin(t, env)
+	ban := restrict(t, ops, bob.account, "ban")
+	req := map[string]any{"accountId": bob.account.String(), "kind": "ban", "reason": "again"}
+	if code, body := ops.c.do("POST", "/v1/admin/market/restrictions", req); code != http.StatusConflict {
+		t.Fatalf("second ban: %d %v", code, body)
+	}
+	// Another kind is independent.
+	restrict(t, ops, bob.account, "offer_suspension")
+	// Concurrent creates: exactly one wins.
+	if code, _ := ops.c.do("DELETE", "/v1/admin/market/restrictions/"+ban, nil); code != http.StatusOK {
+		t.Fatal("lift")
+	}
+	results := make(chan int, 5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			c := &client{t: t, h: env.handler, cookie: ops.c.cookie}
+			code, _ := c.do("POST", "/v1/admin/market/restrictions", req)
+			results <- code
+		}()
+	}
+	created := 0
+	for i := 0; i < 5; i++ {
+		if <-results == http.StatusCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("concurrent bans created %d, want 1", created)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_restrictions WHERE account_id = $1 AND kind = 'ban' AND lifted_at IS NULL`, bob.account); n != 1 {
+		t.Fatalf("active bans = %d", n)
+	}
+}

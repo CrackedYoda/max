@@ -349,6 +349,64 @@ func (q *Queries) ApproveMarketSale(ctx context.Context, arg ApproveMarketSalePa
 	return i, err
 }
 
+const attachCancelledMarketSaleTx = `-- name: AttachCancelledMarketSaleTx :one
+UPDATE market_sales
+SET status = 'manual_review', status_reason = $1, tx_hash = $2, submitted_at = now(),
+    next_check_at = NULL, updated_at = now()
+WHERE id = $3 AND buyer_account_id = $4 AND status = 'cancelled' AND tx_hash IS NULL
+RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
+`
+
+type AttachCancelledMarketSaleTxParams struct {
+	Reason string
+	TxHash *string
+	ID     uuid.UUID
+	Buyer  uuid.UUID
+}
+
+// A transaction submitted for a sale an admin cancelled: the buyer may have
+// paid, so the sale goes to manual_review with the tx recorded.
+func (q *Queries) AttachCancelledMarketSaleTx(ctx context.Context, arg AttachCancelledMarketSaleTxParams) (MarketSale, error) {
+	row := q.db.QueryRow(ctx, attachCancelledMarketSaleTx,
+		arg.Reason,
+		arg.TxHash,
+		arg.ID,
+		arg.Buyer,
+	)
+	var i MarketSale
+	err := row.Scan(
+		&i.ID,
+		&i.MaxID,
+		&i.ListingID,
+		&i.OfferID,
+		&i.SellerAccountID,
+		&i.BuyerAccountID,
+		&i.BuyerAddress,
+		&i.SellerPayoutAddress,
+		&i.TreasuryAddress,
+		&i.Chain,
+		&i.AssetAddress,
+		&i.AssetDecimals,
+		&i.PriceBaseUnits,
+		&i.FeeBps,
+		&i.FeeBaseUnits,
+		&i.SellerBaseUnits,
+		&i.QuotedNetworkFee,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.StatusReason,
+		&i.LockExpiresAt,
+		&i.TxHash,
+		&i.Confirmations,
+		&i.SubmittedAt,
+		&i.CompletedAt,
+		&i.NextCheckAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const attachLateMarketSaleTx = `-- name: AttachLateMarketSaleTx :one
 UPDATE market_sales
 SET status = $1, status_reason = $2, tx_hash = $3, submitted_at = now(),
@@ -2774,6 +2832,21 @@ SELECT pg_advisory_xact_lock(hashtextextended('market_offers:' || $1::text, 0))
 // Serialises offer creation per buyer so the open-offer limit holds.
 func (q *Queries) LockMarketOfferBuyer(ctx context.Context, buyer string) error {
 	_, err := q.db.Exec(ctx, lockMarketOfferBuyer, buyer)
+	return err
+}
+
+const lockMarketRestrictionKind = `-- name: LockMarketRestrictionKind :exec
+SELECT pg_advisory_xact_lock(hashtextextended('market_restrictions:' || $1::text || ':' || $2::text, 0))
+`
+
+type LockMarketRestrictionKindParams struct {
+	AccountID string
+	Kind      string
+}
+
+// Serialises restriction creation per (account, kind).
+func (q *Queries) LockMarketRestrictionKind(ctx context.Context, arg LockMarketRestrictionKindParams) error {
+	_, err := q.db.Exec(ctx, lockMarketRestrictionKind, arg.AccountID, arg.Kind)
 	return err
 }
 

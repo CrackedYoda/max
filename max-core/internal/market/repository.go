@@ -329,6 +329,12 @@ func (r *repository) AttachTx(ctx context.Context, saleID, buyer uuid.UUID, txHa
 			if cur.Status == SaleExpired && cur.BuyerAccountID == buyer {
 				return errExpiredMeanwhile
 			}
+			if cur.Status == SaleCancelled && cur.BuyerAccountID == buyer {
+				// An admin cancelled the sale; the buyer may have paid anyway.
+				row, err := attachAfterCancel(ctx, q, saleID, buyer, txHash)
+				out = toSale(row, "")
+				return err
+			}
 			return ErrSaleExpired.WithMessage("this sale is " + cur.Status + " and no longer accepts a transaction")
 		}
 		if err != nil {

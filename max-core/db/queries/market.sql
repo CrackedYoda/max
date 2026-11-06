@@ -543,3 +543,16 @@ WHERE (sqlc.narg(account_id)::uuid IS NULL OR account_id = sqlc.narg(account_id)
   AND (sqlc.arg(include_inactive)::boolean OR (lifted_at IS NULL AND (until IS NULL OR until > now())))
 ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(row_limit);
+
+-- name: AttachCancelledMarketSaleTx :one
+-- A transaction submitted for a sale an admin cancelled: the buyer may have
+-- paid, so the sale goes to manual_review with the tx recorded.
+UPDATE market_sales
+SET status = 'manual_review', status_reason = sqlc.arg(reason), tx_hash = sqlc.arg(tx_hash), submitted_at = now(),
+    next_check_at = NULL, updated_at = now()
+WHERE id = sqlc.arg(id) AND buyer_account_id = sqlc.arg(buyer) AND status = 'cancelled' AND tx_hash IS NULL
+RETURNING *;
+
+-- name: LockMarketRestrictionKind :exec
+-- Serialises restriction creation per (account, kind).
+SELECT pg_advisory_xact_lock(hashtextextended('market_restrictions:' || sqlc.arg(account_id)::text || ':' || sqlc.arg(kind)::text, 0));

@@ -16,7 +16,36 @@ import (
 	"github.com/max/max-core/internal/shared"
 )
 
-var errAccountNotFound = shared.ErrNotFound.WithMessage("account not found")
+var (
+	errAccountNotFound   = shared.ErrNotFound.WithMessage("account not found")
+	errAlreadyRestricted = shared.ErrConflict.WithMessage("this account already has an active restriction of this kind; lift it first")
+)
+
+// noteTxAfterCancel marks a payment that arrived after an admin cancel.
+const noteTxAfterCancel = "tx submitted after admin cancel"
+
+// attachAfterCancel records a transaction submitted for a sale an admin
+// cancelled while it was locked. Like a late payment to a name that moved
+// on, it goes to manual_review: the buyer may have paid and a human must
+// sort out the refund. Runs inside AttachTx's transaction.
+func attachAfterCancel(ctx context.Context, q *generated.Queries, saleID, buyer uuid.UUID, txHash string) (generated.MarketSale, error) {
+	row, err := q.AttachCancelledMarketSaleTx(ctx, generated.AttachCancelledMarketSaleTxParams{
+		ID: saleID, Buyer: buyer, TxHash: &txHash, Reason: noteTxAfterCancel,
+	})
+	if err != nil {
+		return row, err
+	}
+	from := SaleCancelled
+	if err := event(ctx, q, saleID, "tx_after_cancel", &from, SaleManualReview, map[string]any{
+		"tx_hash": txHash, "note": noteTxAfterCancel,
+	}); err != nil {
+		return row, err
+	}
+	return row, audit.Write(ctx, q, audit.Entry{
+		Action: "market.sale_manual_review", ResourceType: "market_sale", ResourceID: saleID.String(),
+		Metadata: map[string]any{"max_id": row.MaxID.String(), "reason": noteTxAfterCancel, "tx_hash": txHash},
+	})
+}
 
 func optional(s string) *string {
 	if s == "" {
@@ -365,8 +394,18 @@ func (r *repository) AdminReverseSale(ctx context.Context, actor, saleID uuid.UU
 func (r *repository) AdminRestrict(ctx context.Context, actor, account uuid.UUID, in NewRestriction) (Restriction, error) {
 	var out Restriction
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
-		var err error
-		out, err = restrict(ctx, r.q.WithTx(tx), account, in, &actor)
+		q := r.q.WithTx(tx)
+		if err := q.LockMarketRestrictionKind(ctx, generated.LockMarketRestrictionKindParams{AccountID: account.String(), Kind: in.Kind}); err != nil {
+			return err
+		}
+		active, err := q.HasActiveMarketRestriction(ctx, generated.HasActiveMarketRestrictionParams{AccountID: account, Kind: in.Kind})
+		if err != nil {
+			return err
+		}
+		if active {
+			return errAlreadyRestricted
+		}
+		out, err = restrict(ctx, q, account, in, &actor)
 		return err
 	})
 	var pgErr *pgconn.PgError

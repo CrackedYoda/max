@@ -432,6 +432,9 @@ func (s *Service) Submit(ctx context.Context, p shared.Principal, saleID uuid.UU
 		return SaleView{Sale: out}, nil
 	case SalePendingReview:
 		return SaleView{}, errAwaitingReview
+	case SaleCancelled:
+		// AttachTx records a payment for a sale an admin cancelled and
+		// sends it to manual_review, so ops can see the buyer paid.
 	default:
 		return SaleView{}, ErrSaleExpired.WithMessage("this sale is " + sale.Status + " and no longer accepts a transaction")
 	}
