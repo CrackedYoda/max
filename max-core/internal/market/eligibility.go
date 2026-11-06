@@ -11,15 +11,18 @@ const (
 	ReasonRenameCooldown = "rename_cooldown"
 	ReasonRenamePending  = "rename_pending"
 	ReasonMarketBanned   = "market_banned"
+	// ReasonPayoutWalletRemoved: the listing's payout address is no longer
+	// an active wallet of the seller, so a buy or accept would pay a stranger.
+	ReasonPayoutWalletRemoved = "payout_wallet_removed"
 	// ReasonUnavailable replaces moderation reasons in public views.
 	ReasonUnavailable = "unavailable"
 )
 
-// PublicReason hides moderation outcomes (bans, account suspension) from
-// anyone but the owner.
+// PublicReason hides moderation outcomes (bans, account suspension) and the
+// seller's wallet changes from anyone but the owner.
 func PublicReason(reason string) string {
 	switch reason {
-	case ReasonMarketBanned, ReasonOwnerSuspended:
+	case ReasonMarketBanned, ReasonOwnerSuspended, ReasonPayoutWalletRemoved:
 		return ReasonUnavailable
 	}
 	return reason

@@ -193,6 +193,9 @@ func (r *repository) AcceptOffer(ctx context.Context, offerID, seller uuid.UUID,
 		if err := lockListable(ctx, q, in.MaxID, seller, ErrOfferNotFound); err != nil {
 			return err
 		}
+		if err := lockBuyerCap(ctx, q, in.Buyer, false); err != nil {
+			return err
+		}
 		o, err := q.GetMarketOfferForUpdate(ctx, offerID)
 		if err != nil {
 			return err

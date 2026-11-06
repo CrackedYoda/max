@@ -351,28 +351,24 @@ func (q *Queries) ApproveMarketSale(ctx context.Context, arg ApproveMarketSalePa
 
 const attachCancelledMarketSaleTx = `-- name: AttachCancelledMarketSaleTx :one
 UPDATE market_sales
-SET status = 'manual_review', status_reason = $1, tx_hash = $2, submitted_at = now(),
-    next_check_at = NULL, updated_at = now()
-WHERE id = $3 AND buyer_account_id = $4 AND status = 'cancelled' AND tx_hash IS NULL
+SET tx_hash = $1, submitted_at = now(), next_check_at = now(), updated_at = now()
+WHERE id = $2 AND buyer_account_id = $3 AND status = 'cancelled' AND tx_hash IS NULL
+  AND lock_expires_at IS NOT NULL
 RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
 `
 
 type AttachCancelledMarketSaleTxParams struct {
-	Reason string
 	TxHash *string
 	ID     uuid.UUID
 	Buyer  uuid.UUID
 }
 
-// A transaction submitted for a sale an admin cancelled: the buyer may have
-// paid, so the sale goes to manual_review with the tx recorded.
+// A transaction submitted for a sale an admin cancelled after it was locked
+// (lock_expires_at set; a denied review never was). The sale stays
+// cancelled with the tx recorded and due now; the worker observes it and
+// moves it to manual_review only if it paid toward the sale.
 func (q *Queries) AttachCancelledMarketSaleTx(ctx context.Context, arg AttachCancelledMarketSaleTxParams) (MarketSale, error) {
-	row := q.db.QueryRow(ctx, attachCancelledMarketSaleTx,
-		arg.Reason,
-		arg.TxHash,
-		arg.ID,
-		arg.Buyer,
-	)
+	row := q.db.QueryRow(ctx, attachCancelledMarketSaleTx, arg.TxHash, arg.ID, arg.Buyer)
 	var i MarketSale
 	err := row.Scan(
 		&i.ID,
@@ -519,7 +515,8 @@ func (q *Queries) AttachMarketSaleTx(ctx context.Context, arg AttachMarketSaleTx
 const claimDueMarketSales = `-- name: ClaimDueMarketSales :many
 WITH due AS (
     SELECT s.id FROM market_sales s
-    WHERE s.status IN ('submitted', 'confirming') AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
+    WHERE (s.status IN ('submitted', 'confirming') OR (s.status = 'cancelled' AND s.tx_hash IS NOT NULL))
+      AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
     ORDER BY s.next_check_at
     LIMIT $2
     FOR UPDATE SKIP LOCKED
@@ -537,6 +534,8 @@ type ClaimDueMarketSalesParams struct {
 // Leases submitted and confirming sales due for observation by pushing
 // next_check_at forward under SKIP LOCKED, so concurrent workers never
 // observe the same sale; the observer then sets the real next check.
+// A cancelled sale with a transaction and a next check is a payment
+// submitted after an admin cancel, still waiting for its verdict.
 func (q *Queries) ClaimDueMarketSales(ctx context.Context, arg ClaimDueMarketSalesParams) ([]MarketSale, error) {
 	rows, err := q.db.Query(ctx, claimDueMarketSales, arg.LeaseSeconds, arg.RowLimit)
 	if err != nil {
@@ -797,6 +796,18 @@ SELECT count(*) FROM market_offers WHERE buyer_account_id = $1 AND status IN ('l
 
 func (q *Queries) CountOpenMarketOffersByBuyer(ctx context.Context, buyerAccountID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countOpenMarketOffersByBuyer, buyerAccountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenMarketSalesByBuyer = `-- name: CountOpenMarketSalesByBuyer :one
+SELECT count(*) FROM market_sales
+WHERE buyer_account_id = $1 AND status IN ('pending_review', 'locked', 'submitted', 'confirming')
+`
+
+func (q *Queries) CountOpenMarketSalesByBuyer(ctx context.Context, buyerAccountID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenMarketSalesByBuyer, buyerAccountID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1533,6 +1544,23 @@ func (q *Queries) GetLiveMarketListingByMaxIDForUpdate(ctx context.Context, maxI
 	return i, err
 }
 
+const getMarketBuyCooldown = `-- name: GetMarketBuyCooldown :one
+SELECT until FROM market_buy_cooldowns
+WHERE buyer_account_id = $1 AND listing_id = $2 AND until > now()
+`
+
+type GetMarketBuyCooldownParams struct {
+	BuyerAccountID uuid.UUID
+	ListingID      uuid.UUID
+}
+
+func (q *Queries) GetMarketBuyCooldown(ctx context.Context, arg GetMarketBuyCooldownParams) (time.Time, error) {
+	row := q.db.QueryRow(ctx, getMarketBuyCooldown, arg.BuyerAccountID, arg.ListingID)
+	var until time.Time
+	err := row.Scan(&until)
+	return until, err
+}
+
 const getMarketListing = `-- name: GetMarketListing :one
 SELECT id, max_id, seller_account_id, chain, asset_address, asset_decimals, price_base_units, payout_address, status, status_reason, expires_at, created_at, updated_at FROM market_listings WHERE id = $1
 `
@@ -2071,7 +2099,9 @@ func (q *Queries) InsertMarketStrike(ctx context.Context, arg InsertMarketStrike
 
 const leaseMarketSaleCheck = `-- name: LeaseMarketSaleCheck :execrows
 UPDATE market_sales SET next_check_at = now() + make_interval(secs => $1::double precision)
-WHERE id = $2 AND status IN ('submitted', 'confirming')
+WHERE id = $2
+  AND (status IN ('submitted', 'confirming')
+       OR (status = 'cancelled' AND tx_hash IS NOT NULL AND next_check_at IS NOT NULL))
 `
 
 type LeaseMarketSaleCheckParams struct {
@@ -2793,6 +2823,39 @@ func (q *Queries) ListMarketSalesByStatus(ctx context.Context, arg ListMarketSal
 	return items, nil
 }
 
+const listStaleReviewMarketSales = `-- name: ListStaleReviewMarketSales :many
+SELECT id FROM market_sales
+WHERE status = 'pending_review' AND created_at <= $1::timestamptz
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListStaleReviewMarketSalesParams struct {
+	Cutoff   time.Time
+	RowLimit int32
+}
+
+// Sales awaiting review since before cutoff; the worker cancels them.
+func (q *Queries) ListStaleReviewMarketSales(ctx context.Context, arg ListStaleReviewMarketSalesParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listStaleReviewMarketSales, arg.Cutoff, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnlapsedExpiredOfferSales = `-- name: ListUnlapsedExpiredOfferSales :many
 SELECT o.id FROM market_offers o
 JOIN market_sales s ON s.offer_id = o.id
@@ -2847,6 +2910,18 @@ type LockMarketRestrictionKindParams struct {
 // Serialises restriction creation per (account, kind).
 func (q *Queries) LockMarketRestrictionKind(ctx context.Context, arg LockMarketRestrictionKindParams) error {
 	_, err := q.db.Exec(ctx, lockMarketRestrictionKind, arg.AccountID, arg.Kind)
+	return err
+}
+
+const lockMarketSaleBuyer = `-- name: LockMarketSaleBuyer :exec
+
+SELECT pg_advisory_xact_lock(hashtextextended('market_sales:' || $1::text, 0))
+`
+
+// Final-review guards (migration 000011).
+// Serialises sale opening per buyer so the open-sale cap holds.
+func (q *Queries) LockMarketSaleBuyer(ctx context.Context, buyer string) error {
+	_, err := q.db.Exec(ctx, lockMarketSaleBuyer, buyer)
 	return err
 }
 
@@ -2914,7 +2989,13 @@ const searchMarketListings = `-- name: SearchMarketListings :many
 SELECT l.id, l.max_id, l.seller_account_id, l.chain, l.asset_address, l.asset_decimals, l.price_base_units, l.payout_address, l.status, l.status_reason, l.expires_at, l.created_at, l.updated_at, m.canonical_name
 FROM market_listings l
 JOIN max_ids m ON m.id = l.max_id
+JOIN accounts a ON a.id = m.owner_account_id
 WHERE l.status = 'active'
+  AND m.status = 'active'
+  AND a.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM market_restrictions x
+                  WHERE x.account_id = m.owner_account_id AND x.kind = 'ban' AND x.lifted_at IS NULL
+                    AND (x.until IS NULL OR x.until > now()))
   AND (l.expires_at IS NULL OR l.expires_at > now())
   AND ($1::text = '' OR m.canonical_name LIKE '%' || $1::text || '%')
   AND ($2::text IS NULL
@@ -2943,7 +3024,8 @@ type SearchMarketListingsRow struct {
 }
 
 // Public listing search. Prices are compared as decimal asset amounts so the
-// filter is independent of each asset's decimals.
+// filter is independent of each asset's decimals. Listings whose name is not
+// active, or whose owner is suspended or banned from the market, are hidden.
 func (q *Queries) SearchMarketListings(ctx context.Context, arg SearchMarketListingsParams) ([]SearchMarketListingsRow, error) {
 	rows, err := q.db.Query(ctx, searchMarketListings,
 		arg.Q,
@@ -3015,55 +3097,6 @@ func (q *Queries) SetMarketOfferFunding(ctx context.Context, arg SetMarketOfferF
 		&i.DeclineNote,
 		&i.ExpiresAt,
 		&i.FundedCheckedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const submitMarketSale = `-- name: SubmitMarketSale :one
-UPDATE market_sales
-SET status = 'submitted', tx_hash = $2, submitted_at = now(), next_check_at = $3, updated_at = now()
-WHERE id = $1
-RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
-`
-
-type SubmitMarketSaleParams struct {
-	ID          uuid.UUID
-	TxHash      *string
-	NextCheckAt *time.Time
-}
-
-func (q *Queries) SubmitMarketSale(ctx context.Context, arg SubmitMarketSaleParams) (MarketSale, error) {
-	row := q.db.QueryRow(ctx, submitMarketSale, arg.ID, arg.TxHash, arg.NextCheckAt)
-	var i MarketSale
-	err := row.Scan(
-		&i.ID,
-		&i.MaxID,
-		&i.ListingID,
-		&i.OfferID,
-		&i.SellerAccountID,
-		&i.BuyerAccountID,
-		&i.BuyerAddress,
-		&i.SellerPayoutAddress,
-		&i.TreasuryAddress,
-		&i.Chain,
-		&i.AssetAddress,
-		&i.AssetDecimals,
-		&i.PriceBaseUnits,
-		&i.FeeBps,
-		&i.FeeBaseUnits,
-		&i.SellerBaseUnits,
-		&i.QuotedNetworkFee,
-		&i.IdempotencyKey,
-		&i.Status,
-		&i.StatusReason,
-		&i.LockExpiresAt,
-		&i.TxHash,
-		&i.Confirmations,
-		&i.SubmittedAt,
-		&i.CompletedAt,
-		&i.NextCheckAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -3284,111 +3317,27 @@ func (q *Queries) UpdateMarketListingStatus(ctx context.Context, arg UpdateMarke
 	return i, err
 }
 
-const updateMarketSaleProgress = `-- name: UpdateMarketSaleProgress :one
-UPDATE market_sales
-SET status = $2, status_reason = $3, confirmations = $4, next_check_at = $5,
-    completed_at = $6, updated_at = now()
-WHERE id = $1
-RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
+const upsertMarketBuyCooldown = `-- name: UpsertMarketBuyCooldown :exec
+INSERT INTO market_buy_cooldowns (buyer_account_id, listing_id, sale_id, until)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (buyer_account_id, listing_id)
+DO UPDATE SET sale_id = EXCLUDED.sale_id, until = greatest(market_buy_cooldowns.until, EXCLUDED.until), created_at = now()
 `
 
-type UpdateMarketSaleProgressParams struct {
-	ID            uuid.UUID
-	Status        string
-	StatusReason  string
-	Confirmations int64
-	NextCheckAt   *time.Time
-	CompletedAt   *time.Time
+type UpsertMarketBuyCooldownParams struct {
+	Buyer     uuid.UUID
+	ListingID uuid.UUID
+	SaleID    uuid.UUID
+	Until     time.Time
 }
 
-func (q *Queries) UpdateMarketSaleProgress(ctx context.Context, arg UpdateMarketSaleProgressParams) (MarketSale, error) {
-	row := q.db.QueryRow(ctx, updateMarketSaleProgress,
-		arg.ID,
-		arg.Status,
-		arg.StatusReason,
-		arg.Confirmations,
-		arg.NextCheckAt,
-		arg.CompletedAt,
+// A buy-now sale that expired unpaid keeps its buyer off that listing for a while.
+func (q *Queries) UpsertMarketBuyCooldown(ctx context.Context, arg UpsertMarketBuyCooldownParams) error {
+	_, err := q.db.Exec(ctx, upsertMarketBuyCooldown,
+		arg.Buyer,
+		arg.ListingID,
+		arg.SaleID,
+		arg.Until,
 	)
-	var i MarketSale
-	err := row.Scan(
-		&i.ID,
-		&i.MaxID,
-		&i.ListingID,
-		&i.OfferID,
-		&i.SellerAccountID,
-		&i.BuyerAccountID,
-		&i.BuyerAddress,
-		&i.SellerPayoutAddress,
-		&i.TreasuryAddress,
-		&i.Chain,
-		&i.AssetAddress,
-		&i.AssetDecimals,
-		&i.PriceBaseUnits,
-		&i.FeeBps,
-		&i.FeeBaseUnits,
-		&i.SellerBaseUnits,
-		&i.QuotedNetworkFee,
-		&i.IdempotencyKey,
-		&i.Status,
-		&i.StatusReason,
-		&i.LockExpiresAt,
-		&i.TxHash,
-		&i.Confirmations,
-		&i.SubmittedAt,
-		&i.CompletedAt,
-		&i.NextCheckAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const updateMarketSaleStatus = `-- name: UpdateMarketSaleStatus :one
-UPDATE market_sales
-SET status = $2, status_reason = $3, updated_at = now()
-WHERE id = $1
-RETURNING id, max_id, listing_id, offer_id, seller_account_id, buyer_account_id, buyer_address, seller_payout_address, treasury_address, chain, asset_address, asset_decimals, price_base_units, fee_bps, fee_base_units, seller_base_units, quoted_network_fee, idempotency_key, status, status_reason, lock_expires_at, tx_hash, confirmations, submitted_at, completed_at, next_check_at, created_at, updated_at
-`
-
-type UpdateMarketSaleStatusParams struct {
-	ID           uuid.UUID
-	Status       string
-	StatusReason string
-}
-
-func (q *Queries) UpdateMarketSaleStatus(ctx context.Context, arg UpdateMarketSaleStatusParams) (MarketSale, error) {
-	row := q.db.QueryRow(ctx, updateMarketSaleStatus, arg.ID, arg.Status, arg.StatusReason)
-	var i MarketSale
-	err := row.Scan(
-		&i.ID,
-		&i.MaxID,
-		&i.ListingID,
-		&i.OfferID,
-		&i.SellerAccountID,
-		&i.BuyerAccountID,
-		&i.BuyerAddress,
-		&i.SellerPayoutAddress,
-		&i.TreasuryAddress,
-		&i.Chain,
-		&i.AssetAddress,
-		&i.AssetDecimals,
-		&i.PriceBaseUnits,
-		&i.FeeBps,
-		&i.FeeBaseUnits,
-		&i.SellerBaseUnits,
-		&i.QuotedNetworkFee,
-		&i.IdempotencyKey,
-		&i.Status,
-		&i.StatusReason,
-		&i.LockExpiresAt,
-		&i.TxHash,
-		&i.Confirmations,
-		&i.SubmittedAt,
-		&i.CompletedAt,
-		&i.NextCheckAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+	return err
 }

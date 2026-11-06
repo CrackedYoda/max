@@ -103,6 +103,50 @@ func (r *repository) ActiveWalletID(ctx context.Context, account uuid.UUID, ns c
 	return w.ID, nil
 }
 
+func (r *repository) OpenSaleCount(ctx context.Context, buyer uuid.UUID) (int, error) {
+	n, err := r.q.CountOpenMarketSalesByBuyer(ctx, buyer)
+	if err != nil {
+		return 0, shared.ErrInternal.WithError(err)
+	}
+	return int(n), nil
+}
+
+func (r *repository) OwnedIDCount(ctx context.Context, account uuid.UUID) (int, error) {
+	n, err := r.q.CountMaxIDsByOwner(ctx, account)
+	if err != nil {
+		return 0, shared.ErrInternal.WithError(err)
+	}
+	return int(n), nil
+}
+
+func (r *repository) BuyCooldown(ctx context.Context, buyer, listingID uuid.UUID) (*time.Time, error) {
+	until, err := r.q.GetMarketBuyCooldown(ctx, generated.GetMarketBuyCooldownParams{BuyerAccountID: buyer, ListingID: listingID})
+	if database.IsNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, shared.ErrInternal.WithError(err)
+	}
+	return &until, nil
+}
+
+// lockBuyerCap takes the per-buyer sale lock and refuses a buyer already at
+// the open-sale cap. Runs inside the caller's transaction, after the
+// max_ids lock.
+func lockBuyerCap(ctx context.Context, q *generated.Queries, buyer uuid.UUID, self bool) error {
+	if err := q.LockMarketSaleBuyer(ctx, buyer.String()); err != nil {
+		return err
+	}
+	n, err := q.CountOpenMarketSalesByBuyer(ctx, buyer)
+	if err != nil {
+		return err
+	}
+	if n >= maxOpenSalesPerBuyer {
+		return saleLimit(self)
+	}
+	return nil
+}
+
 func (r *repository) Restricted(ctx context.Context, account uuid.UUID, kind string) (bool, error) {
 	ok, err := r.q.HasActiveMarketRestriction(ctx, generated.HasActiveMarketRestrictionParams{AccountID: account, Kind: kind})
 	if err != nil {
@@ -238,6 +282,9 @@ func (r *repository) OpenSale(ctx context.Context, in NewSale) (Sale, error) {
 		if err := lockListable(ctx, q, in.MaxID, in.Seller, ErrListingNotActive); err != nil {
 			return err
 		}
+		if err := lockBuyerCap(ctx, q, in.Buyer, true); err != nil {
+			return err
+		}
 		if in.ListingID != nil {
 			l, err := q.GetMarketListingForUpdate(ctx, *in.ListingID)
 			if err != nil {
@@ -331,7 +378,7 @@ func (r *repository) AttachTx(ctx context.Context, saleID, buyer uuid.UUID, txHa
 			}
 			if cur.Status == SaleCancelled && cur.BuyerAccountID == buyer {
 				// An admin cancelled the sale; the buyer may have paid anyway.
-				row, err := attachAfterCancel(ctx, q, saleID, buyer, txHash)
+				row, err := attachAfterCancel(ctx, q, cur, txHash)
 				out = toSale(row, "")
 				return err
 			}
@@ -583,6 +630,20 @@ func (r *repository) ExpireSale(ctx context.Context, saleID uuid.UUID, e Expiry)
 			}
 		} else if err != nil && !database.IsNoRows(err) {
 			return err
+		}
+		// A buyer who let a buy-now sale expire unpaid waits before buying
+		// that listing again.
+		if e.Cooldown > 0 && sale.ListingID != nil && sale.TxHash == nil {
+			until := time.Now().Add(e.Cooldown)
+			if err := q.UpsertMarketBuyCooldown(ctx, generated.UpsertMarketBuyCooldownParams{
+				Buyer: sale.BuyerAccountID, ListingID: *sale.ListingID, SaleID: sale.ID, Until: until,
+			}); err != nil {
+				return err
+			}
+			if e.Detail == nil {
+				e.Detail = map[string]any{}
+			}
+			e.Detail["buyer_cooldown_until"] = until.UTC().Format(time.RFC3339)
 		}
 		// A buyer who submitted a transaction earns no strike, but the
 		// accepted offer must still close or it blocks their next offer.

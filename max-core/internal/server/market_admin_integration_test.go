@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/max/max-core/internal/config"
+	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/maxids"
 )
 
@@ -558,8 +559,9 @@ func TestMarketAdmin_BanBlocksListOfferBuyAndLiftRestores(t *testing.T) {
 	}
 }
 
-// A payment broadcast before an admin cancel and submitted after it is kept:
-// the sale goes to manual_review with the tx recorded.
+// A payment broadcast before an admin cancel and submitted after it is
+// recorded on the cancelled sale; the worker sends the sale to
+// manual_review only once it sees the tx paid toward the sale.
 func TestMarketAdmin_SubmitAfterCancelGoesToManualReview(t *testing.T) {
 	env := newTestEnv(t, withMarket(nil))
 	alice, bob, carol, ops := newParty(t, env), newParty(t, env), newParty(t, env), newAdmin(t, env)
@@ -576,17 +578,11 @@ func TestMarketAdmin_SubmitAfterCancelGoesToManualReview(t *testing.T) {
 		t.Fatalf("stranger submit: %d %v", code, body)
 	}
 	code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(62)})
-	if code != http.StatusOK || saleOf(t, body)["status"] != "manual_review" {
+	if code != http.StatusOK || saleOf(t, body)["status"] != "cancelled" || saleOf(t, body)["txHash"] != solSigFor(62) {
 		t.Fatalf("submit after cancel: %d %v", code, body)
 	}
-	if saleStatus(t, env, saleID) != "manual_review" || str(t, env, `SELECT tx_hash FROM market_sales WHERE id = $1`, saleID) != solSigFor(62) {
-		t.Fatal("the tx must be stored and the sale parked for review")
-	}
-	var note, hash string
-	_ = env.pool.QueryRow(context.Background(), `SELECT detail->>'note', detail->>'tx_hash' FROM market_sale_events
-		WHERE sale_id = $1 AND event_type = 'tx_after_cancel' AND from_status = 'cancelled' AND to_status = 'manual_review'`, saleID).Scan(&note, &hash)
-	if note != "tx submitted after admin cancel" || hash != solSigFor(62) {
-		t.Fatalf("event note %q hash %q", note, hash)
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'tx_after_cancel_submitted'`, saleID); n != 1 {
+		t.Fatalf("submitted events = %d", n)
 	}
 	// Same hash again is idempotent; another hash is refused.
 	if code, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(62)}); code != http.StatusOK {
@@ -594,6 +590,25 @@ func TestMarketAdmin_SubmitAfterCancelGoesToManualReview(t *testing.T) {
 	}
 	if _, body = bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(63)}); errCode(body) != "TX_MISMATCH" {
 		t.Fatalf("second hash: %v", body)
+	}
+	// Not yet seen: the sale stays cancelled and is looked at again.
+	setObs(env, settle.Observation{Status: settle.StatusNotFound, Reason: "transaction not found"})
+	tick(t, env)
+	if saleStatus(t, env, saleID) != "cancelled" {
+		t.Fatal("an unseen tx must leave the sale cancelled")
+	}
+	// Seen and paid toward the sale: manual review.
+	exec(t, env, `UPDATE market_sales SET next_check_at = now() WHERE id = $1`, saleID)
+	setObs(env, settle.Observation{Status: settle.StatusConfirmed, Matches: true, PaidTowardSale: true, Confirmations: 32})
+	if res := tick(t, env); res.ManualReview != 1 {
+		t.Fatalf("tick: %+v", res)
+	}
+	if saleStatus(t, env, saleID) != "manual_review" || str(t, env, `SELECT tx_hash FROM market_sales WHERE id = $1`, saleID) != solSigFor(62) {
+		t.Fatal("the tx must be stored and the sale parked for review")
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'tx_after_cancel'
+		AND from_status = 'cancelled' AND to_status = 'manual_review'`, saleID); n != 1 {
+		t.Fatalf("tx_after_cancel events = %d", n)
 	}
 	// The listing released by the cancel stays for sale.
 	if listingStatus(t, env, listingID) != "active" {
@@ -603,6 +618,53 @@ func TestMarketAdmin_SubmitAfterCancelGoesToManualReview(t *testing.T) {
 	_, _, done := completeSale(t, env, alice, bob, "jedi", 64)
 	if _, body = bob.c.do("POST", "/v1/market/sales/"+done+"/submit", map[string]any{"txHash": solSigFor(65)}); errCode(body) != "TX_MISMATCH" {
 		t.Fatalf("submit on completed: %v", body)
+	}
+}
+
+// A tx submitted after a cancel that never pays toward the sale leaves it
+// cancelled once the deadline passes; a sale denied in review takes no tx.
+func TestMarketAdmin_TxAfterCancelUnverifiedAndDeniedReview(t *testing.T) {
+	env := newTestEnv(t, withMarket(func(c *config.MarketConfig) { c.ReviewThreshold = "100" }))
+	alice, bob, ops := newParty(t, env), newParty(t, env), newAdmin(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	listingID := listName(t, alice, id, "25")
+	_, body := buyListing(bob, listingID, "cancel-unver-0001")
+	saleID := saleOf(t, body)["id"].(string)
+	if code, body := ops.c.do("POST", "/v1/admin/market/sales/"+saleID+"/cancel", map[string]any{"reason": "check"}); code != http.StatusOK {
+		t.Fatalf("cancel: %d %v", code, body)
+	}
+	if code, body := bob.c.do("POST", "/v1/market/sales/"+saleID+"/submit", map[string]any{"txHash": solSigFor(66)}); code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	setObs(env, settle.Observation{Status: settle.StatusConfirmed, Reason: "no transfer to the treasury", Confirmations: 32})
+	exec(t, env, `UPDATE market_sales SET lock_expires_at = now() - interval '2 hours', submitted_at = now() - interval '2 hours',
+		next_check_at = now() WHERE id = $1`, saleID)
+	tick(t, env)
+	if saleStatus(t, env, saleID) != "cancelled" || count(t, env, `SELECT count(*) FROM market_sales WHERE id = $1 AND next_check_at IS NULL`, saleID) != 1 {
+		t.Fatal("an unverified tx must leave the sale cancelled and settled")
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sale_events WHERE sale_id = $1 AND event_type = 'tx_after_cancel_unverified'`, saleID); n != 1 {
+		t.Fatalf("unverified events = %d", n)
+	}
+
+	// Denied in review: never locked, so no transaction is taken.
+	jedi := claimID(t, alice, "jedi")
+	makeListable(t, env, jedi)
+	big := listName(t, alice, jedi, "500")
+	_, body = buyListing(bob, big, "cancel-unver-0002")
+	review := saleOf(t, body)["id"].(string)
+	if saleStatus(t, env, review) != "pending_review" {
+		t.Fatalf("review sale: %v", body)
+	}
+	if code, body := ops.c.do("POST", "/v1/admin/market/sales/"+review+"/deny", map[string]any{"reason": "too large"}); code != http.StatusOK {
+		t.Fatalf("deny: %d %v", code, body)
+	}
+	if _, body = bob.c.do("POST", "/v1/market/sales/"+review+"/submit", map[string]any{"txHash": solSigFor(67)}); errCode(body) != "SALE_EXPIRED" {
+		t.Fatalf("submit after deny: %v", body)
+	}
+	if n := count(t, env, `SELECT count(*) FROM market_sales WHERE id = $1 AND tx_hash IS NULL`, review); n != 1 {
+		t.Fatal("tx recorded on a denied sale")
 	}
 }
 

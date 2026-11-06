@@ -178,8 +178,9 @@ func NewRouter(d Deps) *gin.Engine {
 	mops.DELETE("/restrictions/:id", d.Market.AdminLiftRestriction)
 
 	// Marketplace (spec §9). Every route 404s while the market is disabled;
-	// Trading() refuses new activity while paused, but reads and submit stay
-	// open so in-flight sales can finish.
+	// Trading() refuses new activity while paused. Reads, pay and submit stay
+	// open so in-flight sales can finish, and delist, withdraw and decline
+	// stay open because closing something never starts a trade.
 	listLimit := middleware.RateLimit(30, time.Minute)
 	mkt := v1.Group("/market", d.Market.Gate())
 	mkt.GET("/listings", lookupLimit, d.Market.Search)
@@ -192,12 +193,12 @@ func NewRouter(d Deps) *gin.Engine {
 	mine.GET("/eligibility/:maxId", read, d.Market.Eligibility)
 	mine.POST("/listings", sell, listLimit, trade, d.Market.CreateListing)
 	mine.PATCH("/listings/:id", sell, listLimit, trade, d.Market.UpdateListing)
-	mine.DELETE("/listings/:id", sell, listLimit, trade, d.Market.DeleteListing)
+	mine.DELETE("/listings/:id", sell, listLimit, d.Market.DeleteListing)
 	mine.POST("/listings/:id/buy", buy, payLimit, trade, d.Market.Buy)
 	mine.POST("/offers", buy, listLimit, trade, d.Market.MakeOffer)
-	mine.DELETE("/offers/:id", buy, listLimit, trade, d.Market.WithdrawOffer)
+	mine.DELETE("/offers/:id", buy, listLimit, d.Market.WithdrawOffer)
 	mine.POST("/offers/:id/accept", sell, listLimit, trade, d.Market.AcceptOffer)
-	mine.POST("/offers/:id/decline", sell, listLimit, trade, d.Market.DeclineOffer)
+	mine.POST("/offers/:id/decline", sell, listLimit, d.Market.DeclineOffer)
 	// Paying an accepted offer, like submit, stays open while paused.
 	mine.POST("/offers/:id/pay", buy, payLimit, d.Market.PayOffer)
 	mine.POST("/sales/:id/submit", buy, payLimit, d.Market.Submit)

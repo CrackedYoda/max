@@ -85,11 +85,15 @@ type Progress struct {
 // From; with LockedBefore set it must also be unpaid with its lock ended at or
 // before that time. Otherwise ExpireSale changes nothing and returns the sale
 // as it is.
+//
+// Cooldown, when positive, keeps the buyer of an unpaid buy-now sale off its
+// listing for that long (market_buy_cooldowns).
 type Expiry struct {
 	From         []string
 	LockedBefore *time.Time
 	Reason       string
 	Detail       map[string]any
+	Cooldown     time.Duration
 }
 
 // ListingQuery filters the public listing search. Prices are decimal asset amounts.
@@ -225,6 +229,14 @@ type Repository interface {
 	// the namespace, or uuid.Nil.
 	ActiveWalletID(ctx context.Context, account uuid.UUID, ns chains.Namespace, address string) (uuid.UUID, error)
 	Restricted(ctx context.Context, account uuid.UUID, kind string) (bool, error)
+	// OpenSaleCount counts the buyer's open sales (pending_review, locked,
+	// submitted, confirming).
+	OpenSaleCount(ctx context.Context, buyer uuid.UUID) (int, error)
+	// OwnedIDCount counts the MAX IDs the account owns.
+	OwnedIDCount(ctx context.Context, account uuid.UUID) (int, error)
+	// BuyCooldown returns when the buyer may buy the listing again after
+	// letting a buy-now sale of it expire unpaid, or nil.
+	BuyCooldown(ctx context.Context, buyer, listingID uuid.UUID) (*time.Time, error)
 
 	// CreateListing locks the max_ids row, re-checks listability under that
 	// lock and inserts an active listing.
@@ -234,7 +246,9 @@ type Repository interface {
 	CancelListing(ctx context.Context, id, seller uuid.UUID) error
 
 	// OpenSale locks the max_ids row and the listing, refuses if an open sale
-	// exists (ErrNameLocked), inserts the sale and its event and locks the listing.
+	// exists (ErrNameLocked) or the buyer is at the open-sale cap (SALE_LIMIT,
+	// under a per-buyer lock), inserts the sale and its event and locks the
+	// listing.
 	OpenSale(ctx context.Context, in NewSale) (Sale, error)
 	SaleByIdempotencyKey(ctx context.Context, buyer uuid.UUID, key string) (*Sale, error)
 	// AttachTx moves a locked sale to submitted. A tx hash already used by
@@ -315,6 +329,12 @@ type Repository interface {
 	UnlapsedOffers(ctx context.Context, limit int) ([]uuid.UUID, error)
 	// ExpireListings cancels active listings past expires_at (reason "expired").
 	ExpireListings(ctx context.Context, cutoff time.Time, limit int) (int, error)
+	// StaleReviews lists sales in pending_review since before cutoff.
+	StaleReviews(ctx context.Context, cutoff time.Time, limit int) ([]uuid.UUID, error)
+	// CancelStaleReview cancels a sale still in pending_review since before
+	// cutoff ("review timed out"): no strike, its accepted offer is declined
+	// and the listing released. Anything else is returned unchanged.
+	CancelStaleReview(ctx context.Context, saleID uuid.UUID, cutoff time.Time) (Sale, error)
 
 	// Admin (Task 11, spec §9). Every write records audit_logs with actor,
 	// and market_sale_events when a sale is involved; sale writes take the

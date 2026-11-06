@@ -90,6 +90,9 @@ func (s *Service) MakeOffer(ctx context.Context, p shared.Principal, in OfferInp
 	if err := s.notBanned(ctx, p.AccountID, ErrMarketRestricted); err != nil {
 		return Offer{}, err
 	}
+	if err := s.buyerCapacity(ctx, p.AccountID, false, true); err != nil {
+		return Offer{}, err
+	}
 	if r, err := s.repo.ActiveRestriction(ctx, p.AccountID, RestrictionOfferSuspension); err != nil {
 		return Offer{}, err
 	} else if r != nil {
@@ -125,9 +128,10 @@ func (s *Service) MakeOffer(ctx context.Context, p shared.Principal, in OfferInp
 	return s.repo.CreateOffer(ctx, newOffer, maxOpenOffers)
 }
 
-// WithdrawOffer lets the buyer close their live or unfunded offer.
+// WithdrawOffer lets the buyer close their live or unfunded offer. It works
+// while trading is paused.
 func (s *Service) WithdrawOffer(ctx context.Context, p shared.Principal, id uuid.UUID) error {
-	if err := s.trading(); err != nil {
+	if err := s.enabled(); err != nil {
 		return err
 	}
 	o, err := s.repo.GetOffer(ctx, id)
@@ -140,9 +144,10 @@ func (s *Service) WithdrawOffer(ctx context.Context, p shared.Principal, id uuid
 	return s.repo.WithdrawOffer(ctx, id, p.AccountID)
 }
 
-// DeclineOffer lets the name's owner refuse an open offer.
+// DeclineOffer lets the name's owner refuse an open offer. It works while
+// trading is paused.
 func (s *Service) DeclineOffer(ctx context.Context, p shared.Principal, id uuid.UUID, note string) error {
-	if err := s.trading(); err != nil {
+	if err := s.enabled(); err != nil {
 		return err
 	}
 	if _, err := s.ownerOffer(ctx, p, id); err != nil {
@@ -198,6 +203,9 @@ func (s *Service) AcceptOffer(ctx context.Context, p shared.Principal, id uuid.U
 		return SaleView{}, err
 	}
 	if err := s.notBanned(ctx, o.BuyerAccountID, errBuyerRestricted); err != nil {
+		return SaleView{}, err
+	}
+	if err := s.buyerCapacity(ctx, o.BuyerAccountID, true, false); err != nil {
 		return SaleView{}, err
 	}
 	parties, err := s.repo.PartyFacts(ctx, o.BuyerAccountID, p.AccountID, o.FromAddress)
@@ -269,6 +277,10 @@ func (s *Service) offerPayout(ctx context.Context, p shared.Principal, o Offer, 
 			return "", ErrNameLocked
 		}
 		if c, ok := chains.Lookup(l.Chain); ok && c.Namespace == a.Chain.Namespace {
+			// The caller is the seller, so the reason is not masked.
+			if err := s.payoutStillLinked(ctx, p.AccountID, a, l.PayoutAddress, false); err != nil {
+				return "", err
+			}
 			return l.PayoutAddress, nil
 		}
 	}

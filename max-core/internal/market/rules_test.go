@@ -132,6 +132,7 @@ func TestErrors(t *testing.T) {
 		"ASSET_NOT_ACCEPTED": 422, "OFFER_BELOW_MINIMUM": 422, "INSUFFICIENT_FUNDS": 422,
 		"OFFER_UNFUNDED": 422, "TX_MISMATCH": 422, "MARKET_RESTRICTED": 403,
 		"LISTING_NOT_ACTIVE": 409, "SALE_EXPIRED": 409, "OFFER_LIMIT": 409, "PENDING_APPROVAL": 202,
+		"SALE_LIMIT": 409,
 	}
 	got := map[string]int{
 		ErrMarketDisabled.Code: ErrMarketDisabled.Status, ErrMarketPaused.Code: ErrMarketPaused.Status,
@@ -141,6 +142,7 @@ func TestErrors(t *testing.T) {
 		ErrTxMismatch.Code: ErrTxMismatch.Status, ErrMarketRestricted.Code: ErrMarketRestricted.Status,
 		ErrListingNotActive.Code: ErrListingNotActive.Status, ErrSaleExpired.Code: ErrSaleExpired.Status,
 		ErrOfferLimit.Code: ErrOfferLimit.Status, ErrPendingApproval.Code: ErrPendingApproval.Status,
+		ErrSaleLimit.Code: ErrSaleLimit.Status,
 	}
 	for c, s := range want {
 		if got[c] != s {

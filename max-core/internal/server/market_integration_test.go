@@ -1140,19 +1140,57 @@ func TestMarket_OfferPausedBlocksAllButPay(t *testing.T) {
 		t.Fatalf("offer while paused: %d %v", code, body)
 	}
 	offerID, saleID := seedOfferSale(t, env, id, alice, bob)
-	for _, r := range []struct {
-		who          party
-		method, path string
-	}{
-		{alice, "POST", "/accept"}, {alice, "POST", "/decline"}, {bob, "DELETE", ""},
-	} {
-		if code, body := r.who.c.do(r.method, "/v1/market/offers/"+offerID.String()+r.path, nil); errCode(body) != "MARKET_PAUSED" {
-			t.Fatalf("%s %s while paused: %d %v", r.method, r.path, code, body)
-		}
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+offerID.String()+"/accept", nil); errCode(body) != "MARKET_PAUSED" {
+		t.Fatalf("accept while paused: %d %v", code, body)
 	}
 	code, body := bob.c.do("POST", "/v1/market/offers/"+offerID.String()+"/pay", map[string]any{"idempotencyKey": "pay-key-0001"})
 	if code != http.StatusOK || saleOf(t, body)["id"] != saleID.String() || data(t, body)["instructions"] == nil {
 		t.Fatalf("pay while paused: %d %v", code, body)
+	}
+}
+
+// Closing something never starts a trade: delist, withdraw and decline work
+// while paused; a price change does not.
+func TestMarket_PausedAllowsCloses(t *testing.T) {
+	env := newTestEnv(t, withMarket(func(c *config.MarketConfig) { c.TradingPaused = true }))
+	alice, bob, carol := newParty(t, env), newParty(t, env), newParty(t, env)
+	id := claimID(t, alice, "yoda")
+	makeListable(t, env, id)
+	ctx := context.Background()
+	var listingID string
+	if err := env.pool.QueryRow(ctx, `
+		INSERT INTO market_listings (max_id, seller_account_id, chain, asset_address, asset_decimals, price_base_units, payout_address, status)
+		VALUES ($1, $2, 'solana-devnet', $3, 6, '25000000', $4, 'active') RETURNING id::text`,
+		id, alice.account, devnetUSDC, alice.wallet.address()).Scan(&listingID); err != nil {
+		t.Fatal(err)
+	}
+	offer := func(p party) string {
+		var oid string
+		if err := env.pool.QueryRow(ctx, `
+			INSERT INTO market_offers (max_id, buyer_account_id, from_address, chain, asset_address, asset_decimals, amount_base_units, status, expires_at)
+			VALUES ($1, $2, $3, 'solana-devnet', $4, 6, '20000000', 'live', now() + interval '7 days') RETURNING id::text`,
+			id, p.account, p.wallet.address(), devnetUSDC).Scan(&oid); err != nil {
+			t.Fatal(err)
+		}
+		return oid
+	}
+	bobOffer, carolOffer := offer(bob), offer(carol)
+	if code, body := alice.c.do("PATCH", "/v1/market/listings/"+listingID, map[string]any{"price": "30"}); errCode(body) != "MARKET_PAUSED" {
+		t.Fatalf("price change while paused: %d %v", code, body)
+	}
+	if code, body := bob.c.do("DELETE", "/v1/market/offers/"+bobOffer, nil); code >= 300 {
+		t.Fatalf("withdraw while paused: %d %v", code, body)
+	}
+	if code, body := alice.c.do("POST", "/v1/market/offers/"+carolOffer+"/decline", map[string]any{"note": "no"}); code >= 300 {
+		t.Fatalf("decline while paused: %d %v", code, body)
+	}
+	if code, body := alice.c.do("DELETE", "/v1/market/listings/"+listingID, nil); code >= 300 {
+		t.Fatalf("delist while paused: %d %v", code, body)
+	}
+	if listingStatus(t, env, listingID) != "cancelled" ||
+		str(t, env, `SELECT status FROM market_offers WHERE id = $1`, bobOffer) != "withdrawn" ||
+		str(t, env, `SELECT status FROM market_offers WHERE id = $1`, carolOffer) != "declined" {
+		t.Fatal("closes did not apply")
 	}
 }
 

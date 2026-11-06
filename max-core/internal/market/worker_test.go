@@ -46,7 +46,7 @@ func (f *fakeRepo) ClaimDueSales(_ context.Context, limit int, lease time.Durati
 	var out []Sale
 	now := f.now()
 	for id, s := range f.sales {
-		if (s.Status == SaleSubmitted || s.Status == SaleConfirming) && s.NextCheckAt != nil && !s.NextCheckAt.After(now) && len(out) < limit {
+		if observable(s) && s.NextCheckAt != nil && !s.NextCheckAt.After(now) && len(out) < limit {
 			next := now.Add(lease)
 			s.NextCheckAt = &next
 			f.sales[id] = s
@@ -54,6 +54,13 @@ func (f *fakeRepo) ClaimDueSales(_ context.Context, limit int, lease time.Durati
 		}
 	}
 	return out, nil
+}
+
+// observable mirrors ClaimDueMarketSales: open paid sales, and transactions
+// submitted after an admin cancel still waiting for a verdict.
+func observable(s Sale) bool {
+	return s.Status == SaleSubmitted || s.Status == SaleConfirming ||
+		(s.Status == SaleCancelled && s.TxHash != nil && s.NextCheckAt != nil)
 }
 
 func (f *fakeRepo) ClaimSalesPastDeadline(_ context.Context, cutoff time.Time, limit int, lease time.Duration) ([]Sale, error) {
@@ -127,7 +134,7 @@ func (f *fakeRepo) AttachLateTx(_ context.Context, id, buyer uuid.UUID, h string
 
 func (f *fakeRepo) LeaseSale(_ context.Context, id uuid.UUID, lease time.Duration) (bool, error) {
 	s, ok := f.sales[id]
-	if !ok || (s.Status != SaleSubmitted && s.Status != SaleConfirming) {
+	if !ok || !observable(s) {
 		return false, nil
 	}
 	next := f.now().Add(lease)
@@ -383,12 +390,13 @@ func TestSubmit_LateOnlyForUnpaidExpiry(t *testing.T) {
 	if _, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); !errors.Is(err, ErrTxMismatch) {
 		t.Fatalf("second tx on an expired paid sale: %v", err)
 	}
-	// Only a sale an admin cancelled (Task 11) takes a transaction late: it
-	// is recorded and parked in manual_review. Other closed sales refuse.
+	// Only a sale an admin cancelled after it was locked takes a
+	// transaction late: it is recorded, the sale stays cancelled and the
+	// worker judges it. Other closed sales refuse.
 	c := h.repo.sales[s.ID]
 	c.Status, c.TxHash = SaleCancelled, nil
 	h.repo.sales[s.ID] = c
-	if v, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); err != nil || v.Sale.Status != SaleManualReview || v.Sale.TxHash == nil {
+	if v, err := h.svc.Submit(context.Background(), human(h.buyer), s.ID, validSig()); err != nil || v.Sale.Status != SaleCancelled || v.Sale.TxHash == nil {
 		t.Fatalf("cancelled sale: %+v %v", v.Sale, err)
 	}
 	for _, st := range []string{SaleReversed, SaleManualReview, SaleCompleted} {

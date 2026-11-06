@@ -72,20 +72,23 @@ func txDeadline(s Sale) time.Time {
 // expiries included, as RecheckFunding reports them).
 type Result struct {
 	Completed, Expired, ManualReview, FundingChecked int
-	ListingsExpired                                  int
+	ListingsExpired, ReviewsTimedOut                 int
 }
 
 func (r Result) empty() bool { return r == Result{} }
 
 // Tick runs one pass of the market worker. Steps, in order:
 //
-//  1. Observe submitted and confirming sales due by next_check_at.
+//  1. Observe submitted and confirming sales due by next_check_at, and
+//     transactions submitted for admin-cancelled sales.
 //  2. Expire locked sales past their lock with no transaction; an expired
-//     offer sale lapses its offer with a strike.
+//     offer sale lapses its offer with a strike, and the buyer of an expired
+//     buy-now sale waits buyCooldown before buying that listing again.
 //  3. Apply the transaction deadline to submitted and confirming sales no
 //     check is scheduled for (observing once more first).
-//  4. Close active listings past their expiry.
-//  5. Re-check offer funding.
+//  4. Cancel sales left in pending_review longer than reviewTimeout.
+//  5. Close active listings past their expiry.
+//  6. Re-check offer funding.
 //
 // A failure on one sale is logged and the pass goes on; failures to read a
 // step's work are returned joined. With the market disabled Tick does nothing.
@@ -110,6 +113,10 @@ func (s *Service) Tick(ctx context.Context) (Result, error) {
 		errs = append(errs, err)
 	} else {
 		s.observeAll(ctx, past, &res)
+	}
+
+	if err := s.timeOutReviews(ctx, &res); err != nil {
+		errs = append(errs, err)
 	}
 
 	if n, err := s.repo.ExpireListings(ctx, s.now(), tickBatch); err != nil {
@@ -182,7 +189,9 @@ func (s *Service) expireLocks(ctx context.Context, res *Result) error {
 		return err
 	}
 	for _, sale := range locked {
-		out, err := s.repo.ExpireSale(ctx, sale.ID, Expiry{From: []string{SaleLocked}, LockedBefore: &now, Reason: reasonLockEnded})
+		out, err := s.repo.ExpireSale(ctx, sale.ID, Expiry{
+			From: []string{SaleLocked}, LockedBefore: &now, Reason: reasonLockEnded, Cooldown: buyCooldown,
+		})
 		if err != nil {
 			s.log.Warn("market expire sale", zap.String("sale_id", sale.ID.String()), zap.Error(err))
 			continue
@@ -201,6 +210,28 @@ func (s *Service) expireLocks(ctx context.Context, res *Result) error {
 	}
 	for _, id := range ids {
 		s.lapse(ctx, id)
+	}
+	return nil
+}
+
+// timeOutReviews cancels sales left in pending_review past reviewTimeout
+// (reason "review timed out", no strike); the listing is released and an
+// accepted offer declined.
+func (s *Service) timeOutReviews(ctx context.Context, res *Result) error {
+	cutoff := s.now().Add(-reviewTimeout)
+	ids, err := s.repo.StaleReviews(ctx, cutoff, tickBatch)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		out, err := s.repo.CancelStaleReview(ctx, id, cutoff)
+		if err != nil {
+			s.log.Warn("market review timeout", zap.String("sale_id", id.String()), zap.Error(err))
+			continue
+		}
+		if out.Status == SaleCancelled {
+			res.ReviewsTimedOut++
+		}
 	}
 	return nil
 }
@@ -235,7 +266,7 @@ func RunWorker(ctx context.Context, s *Service, every time.Duration, log *zap.Lo
 			if !res.empty() {
 				log.Info("market tick", zap.Int("completed", res.Completed), zap.Int("expired", res.Expired),
 					zap.Int("manual_review", res.ManualReview), zap.Int("funding_changed", res.FundingChecked),
-					zap.Int("listings_expired", res.ListingsExpired))
+					zap.Int("listings_expired", res.ListingsExpired), zap.Int("reviews_timed_out", res.ReviewsTimedOut))
 			}
 		}
 	}

@@ -114,6 +114,14 @@ type ExternalVerification struct {
 	CreatedAt         time.Time
 }
 
+type MarketBuyCooldown struct {
+	BuyerAccountID uuid.UUID
+	ListingID      uuid.UUID
+	SaleID         uuid.UUID
+	Until          time.Time
+	CreatedAt      time.Time
+}
+
 type MarketListing struct {
 	ID              uuid.UUID
 	MaxID           uuid.UUID

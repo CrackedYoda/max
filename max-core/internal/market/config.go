@@ -47,8 +47,12 @@ func NewConfig(mc config.MarketConfig, rpcURLs map[string]string) (Config, error
 		ReviewThreshold: strings.TrimSpace(mc.ReviewThreshold), MinPrice: strings.TrimSpace(mc.MinOffer),
 		Treasury: map[chains.Namespace]string{},
 	}
-	if c.FeeBPS < 0 || c.FeeBPS > bpsDenominator {
-		return Config{}, fmt.Errorf("MARKET_FEE_BPS %d outside 0..%d", c.FeeBPS, bpsDenominator)
+	// market_sales.fee_bps is CHECKed to 0..5000.
+	if c.FeeBPS < 0 || c.FeeBPS > maxFeeBPS {
+		return Config{}, fmt.Errorf("MARKET_FEE_BPS %d outside 0..%d", c.FeeBPS, maxFeeBPS)
+	}
+	if c.HoldPeriod <= 0 {
+		return Config{}, errors.New("MARKET_HOLD_PERIOD must be positive")
 	}
 	assets, err := ParseAssets(mc.Assets)
 	if err != nil {
@@ -56,8 +60,13 @@ func NewConfig(mc config.MarketConfig, rpcURLs map[string]string) (Config, error
 	}
 	c.Assets = assets
 	for _, a := range assets {
-		if _, err := payments.ParseAmount(c.MinPrice, a.Decimals); err != nil {
+		minBase, err := payments.ParseAmount(c.MinPrice, a.Decimals)
+		if err != nil {
 			return Config{}, fmt.Errorf("MARKET_MIN_OFFER %q for %s: %w", c.MinPrice, a.Chain.Key, err)
+		}
+		if floor := minFeeBearing(c.FeeBPS); minBase.Cmp(floor) < 0 {
+			return Config{}, fmt.Errorf("MARKET_MIN_OFFER %q for %s is %s base units; with MARKET_FEE_BPS %d it must be at least %s so the fee is never 0",
+				c.MinPrice, a.Chain.Key, minBase, c.FeeBPS, floor)
 		}
 		if c.ReviewThreshold != "" {
 			if _, err := payments.ParseAmount(c.ReviewThreshold, a.Decimals); err != nil {
@@ -81,8 +90,8 @@ func NewConfig(mc config.MarketConfig, rpcURLs map[string]string) (Config, error
 	if len(c.Assets) == 0 {
 		return Config{}, errors.New("MARKET_ENABLED=true requires MARKET_ASSETS")
 	}
-	if c.BuyLock <= 0 || c.OfferPayWindow <= 0 || c.HoldPeriod < 0 {
-		return Config{}, errors.New("MARKET_BUY_LOCK and MARKET_OFFER_PAY_WINDOW must be positive and MARKET_HOLD_PERIOD not negative")
+	if c.BuyLock <= 0 || c.OfferPayWindow <= 0 {
+		return Config{}, errors.New("MARKET_BUY_LOCK and MARKET_OFFER_PAY_WINDOW must be positive")
 	}
 	for _, a := range c.Assets {
 		if c.Treasury[a.Chain.Namespace] == "" {
@@ -94,6 +103,19 @@ func NewConfig(mc config.MarketConfig, rpcURLs map[string]string) (Config, error
 		}
 	}
 	return c, nil
+}
+
+// maxFeeBPS is the highest MARKET_FEE_BPS (market_sales.fee_bps CHECK).
+const maxFeeBPS = 5000
+
+// minFeeBearing is the smallest price, in base units, whose fee
+// floor(price * feeBPS / 10000) is at least 1: ceil(10000 / feeBPS). With no
+// fee any positive price will do.
+func minFeeBearing(feeBPS int) *big.Int {
+	if feeBPS <= 0 {
+		return big.NewInt(1)
+	}
+	return big.NewInt(int64((bpsDenominator + feeBPS - 1) / feeBPS))
 }
 
 // ParseAssets parses "chain:asset,..." into verified settlement assets.

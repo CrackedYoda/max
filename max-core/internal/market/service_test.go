@@ -56,6 +56,10 @@ type fakeRepo struct {
 
 	// Admin (admin_test.go).
 	admin fakeAdminState
+
+	// Final-review guards.
+	ownedIDs  map[uuid.UUID]int
+	cooldowns map[string]time.Time // buyer|listing
 }
 
 func newFakeRepo() *fakeRepo {
@@ -64,8 +68,55 @@ func newFakeRepo() *fakeRepo {
 		wallets: map[string]uuid.UUID{}, restricted: map[uuid.UUID]bool{},
 		listings: map[uuid.UUID]Listing{}, sales: map[uuid.UUID]Sale{},
 		offers: map[uuid.UUID]Offer{}, restrictions: map[string]*Restriction{}, strikes: map[uuid.UUID][]time.Time{},
-		expiries: map[uuid.UUID]Expiry{},
+		expiries: map[uuid.UUID]Expiry{}, ownedIDs: map[uuid.UUID]int{}, cooldowns: map[string]time.Time{},
 	}
+}
+
+func (f *fakeRepo) OpenSaleCount(_ context.Context, buyer uuid.UUID) (int, error) {
+	n := 0
+	for _, s := range f.sales {
+		if s.BuyerAccountID == buyer && IsOpenSale(s.Status) {
+			n++
+		}
+	}
+	return n, nil
+}
+func (f *fakeRepo) OwnedIDCount(_ context.Context, account uuid.UUID) (int, error) {
+	return f.ownedIDs[account], nil
+}
+func (f *fakeRepo) BuyCooldown(_ context.Context, buyer, listing uuid.UUID) (*time.Time, error) {
+	if t, ok := f.cooldowns[buyer.String()+"|"+listing.String()]; ok && t.After(f.now()) {
+		return &t, nil
+	}
+	return nil, nil
+}
+func (f *fakeRepo) StaleReviews(_ context.Context, cutoff time.Time, _ int) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	for id, s := range f.sales {
+		if s.Status == SalePendingReview && !s.CreatedAt.After(cutoff) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+func (f *fakeRepo) CancelStaleReview(_ context.Context, id uuid.UUID, cutoff time.Time) (Sale, error) {
+	s := f.sales[id]
+	if s.Status != SalePendingReview || s.CreatedAt.After(cutoff) {
+		return s, nil
+	}
+	s.Status, s.StatusReason = SaleCancelled, reasonReviewTimedOut
+	f.sales[id] = s
+	if s.OfferID != nil && f.offers[*s.OfferID].Status == OfferAccepted {
+		f.setOffer(*s.OfferID, OfferDeclined)
+	}
+	for lid, l := range f.listings {
+		if l.MaxID == s.MaxID && l.Status == ListingLocked {
+			l.Status = ListingActive
+			f.listings[lid] = l
+		}
+	}
+	f.record(id, "review_timed_out", SalePendingReview, SaleCancelled)
+	return s, nil
 }
 
 func (f *fakeRepo) link(account uuid.UUID, addr string) {
@@ -136,10 +187,13 @@ func (f *fakeRepo) SaleByIdempotencyKey(_ context.Context, buyer uuid.UUID, key 
 func (f *fakeRepo) AttachTx(_ context.Context, id, _ uuid.UUID, h string) (Sale, error) {
 	s := f.sales[id]
 	now := f.now()
-	if s.Status == SaleCancelled { // admin-cancelled: parked for review (repository.attachAfterCancel)
-		s.Status, s.TxHash, s.SubmittedAt = SaleManualReview, &h, &now
+	if s.Status == SaleCancelled { // admin-cancelled: recorded for the worker (repository.attachAfterCancel)
+		if s.LockExpiresAt == nil {
+			return s, ErrSaleExpired
+		}
+		s.TxHash, s.SubmittedAt, s.NextCheckAt = &h, &now, &now
 		f.sales[id] = s
-		f.record(id, "tx_after_cancel", SaleCancelled, SaleManualReview)
+		f.record(id, "tx_after_cancel_submitted", SaleCancelled, SaleCancelled)
 		return s, nil
 	}
 	s.Status, s.TxHash, s.SubmittedAt, s.NextCheckAt = SaleSubmitted, &h, &now, &now
@@ -192,6 +246,9 @@ func (f *fakeRepo) ExpireSale(_ context.Context, id uuid.UUID, e Expiry) (Sale, 
 	}
 	if s.OfferID != nil && s.TxHash != nil && f.offers[*s.OfferID].Status == OfferAccepted {
 		f.setOffer(*s.OfferID, OfferExpired)
+	}
+	if e.Cooldown > 0 && s.ListingID != nil && s.TxHash == nil {
+		f.cooldowns[s.BuyerAccountID.String()+"|"+s.ListingID.String()] = f.now().Add(e.Cooldown)
 	}
 	f.expiries[id] = e
 	f.record(id, "expired", from, SaleExpired)
@@ -594,7 +651,7 @@ func TestGetSale_OnlyParties(t *testing.T) {
 
 func TestNewConfig_Startup(t *testing.T) {
 	base := config.MarketConfig{Enabled: true, Assets: "solana-devnet:" + devnetUSDC, FeeBPS: 1000, BuyLock: time.Minute,
-		OfferPayWindow: time.Hour, MinOffer: "1", TreasurySolana: solAddr()}
+		OfferPayWindow: time.Hour, HoldPeriod: time.Hour, MinOffer: "1", TreasurySolana: solAddr()}
 	rpc := map[string]string{"solana-devnet": "https://rpc.test"}
 	if _, err := NewConfig(base, rpc); err != nil {
 		t.Fatalf("valid: %v", err)
@@ -617,9 +674,49 @@ func TestNewConfig_Startup(t *testing.T) {
 	if _, err := NewConfig(evm, rpc); err == nil {
 		t.Error("EVM settlement asset accepted")
 	}
-	off := config.MarketConfig{MinOffer: "1"}
+	off := config.MarketConfig{MinOffer: "1", HoldPeriod: time.Hour}
 	if _, err := NewConfig(off, nil); err != nil {
 		t.Errorf("disabled with no assets: %v", err)
+	}
+}
+
+func TestNewConfig_HoldPeriodFeeAndMinimum(t *testing.T) {
+	base := config.MarketConfig{Enabled: true, Assets: "solana-devnet:" + devnetUSDC, FeeBPS: 1000, BuyLock: time.Minute,
+		OfferPayWindow: time.Hour, HoldPeriod: time.Hour, MinOffer: "1", TreasurySolana: solAddr()}
+	rpc := map[string]string{"solana-devnet": "https://rpc.test"}
+	for _, hold := range []time.Duration{0, -time.Hour} {
+		c := base
+		c.HoldPeriod = hold
+		if _, err := NewConfig(c, rpc); err == nil {
+			t.Errorf("MARKET_HOLD_PERIOD %v accepted", hold)
+		}
+		c.Enabled = false
+		if _, err := NewConfig(c, rpc); err == nil {
+			t.Errorf("MARKET_HOLD_PERIOD %v accepted while disabled", hold)
+		}
+	}
+	for bps, ok := range map[int]bool{0: true, 5000: true, 5001: false, 10000: false, -1: false} {
+		c := base
+		c.FeeBPS = bps
+		if _, err := NewConfig(c, rpc); (err == nil) != ok {
+			t.Errorf("MARKET_FEE_BPS %d: %v", bps, err)
+		}
+	}
+	// USDC has 6 decimals; 1000 bps needs at least ceil(10000/1000) = 10
+	// base units, 3 bps needs 3334.
+	for _, tc := range []struct {
+		bps int
+		min string
+		ok  bool
+	}{
+		{1000, "0.00001", true}, {1000, "0.000009", false}, {3, "0.003334", true}, {3, "0.003333", false},
+		{0, "0.000001", true}, {1, "0.01", true}, {1, "0.009999", false},
+	} {
+		c := base
+		c.FeeBPS, c.MinOffer = tc.bps, tc.min
+		if _, err := NewConfig(c, rpc); (err == nil) != tc.ok {
+			t.Errorf("fee %d min %s: %v", tc.bps, tc.min, err)
+		}
 	}
 }
 

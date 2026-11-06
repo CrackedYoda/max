@@ -3,6 +3,7 @@ package market
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -238,9 +239,10 @@ func (s *Service) UpdatePrice(ctx context.Context, p shared.Principal, id uuid.U
 	return out, err
 }
 
-// Delist cancels an active listing.
+// Delist cancels an active listing. It works while trading is paused: taking
+// a listing down never starts a trade.
 func (s *Service) Delist(ctx context.Context, p shared.Principal, id uuid.UUID) error {
-	if err := s.trading(); err != nil {
+	if err := s.enabled(); err != nil {
 		return err
 	}
 	l, err := s.repo.GetListing(ctx, id)
@@ -290,10 +292,20 @@ func (s *Service) Buy(ctx context.Context, p shared.Principal, listingID uuid.UU
 	if owner != l.SellerAccountID {
 		return SaleView{}, ErrListingNotActive
 	}
+	// The buyer is not the owner: moderation reasons are masked.
 	if ok, reason := Listable(facts, s.now()); !ok {
-		return SaleView{}, NotListable(reason)
+		return SaleView{}, NotListable(PublicReason(reason))
+	}
+	if err := s.payoutStillLinked(ctx, l.SellerAccountID, a, l.PayoutAddress, true); err != nil {
+		return SaleView{}, err
 	}
 	if err := s.notBanned(ctx, p.AccountID, ErrMarketRestricted); err != nil {
+		return SaleView{}, err
+	}
+	if err := s.buyCooldown(ctx, p.AccountID, listingID); err != nil {
+		return SaleView{}, err
+	}
+	if err := s.buyerCapacity(ctx, p.AccountID, true, true); err != nil {
 		return SaleView{}, err
 	}
 	payer, err := s.linkedPayer(ctx, p.AccountID, a, in.FromAddress)
@@ -376,6 +388,89 @@ func (s *Service) openBuy(ctx context.Context, p shared.Principal, l Listing, a 
 	return v, nil
 }
 
+// Buyer limits (spec §7).
+const (
+	// maxOpenSalesPerBuyer caps a buyer's open sales (pending_review,
+	// locked, submitted, confirming), so one account cannot lock many
+	// listings at once.
+	maxOpenSalesPerBuyer = 2
+	// buyCooldown keeps a buyer who let a buy-now sale expire unpaid off
+	// that listing for a while.
+	buyCooldown = time.Hour
+	// reviewTimeout cancels a sale left in pending_review this long.
+	reviewTimeout = 24 * time.Hour
+)
+
+// payoutStillLinked refuses a sale whose seller payout address is no longer
+// one of the seller's active wallets (NOT_LISTABLE payout_wallet_removed,
+// masked to unavailable when the caller is not the seller).
+func (s *Service) payoutStillLinked(ctx context.Context, seller uuid.UUID, a Asset, payout string, public bool) error {
+	id, err := s.repo.ActiveWalletID(ctx, seller, a.Chain.Namespace, payout)
+	if err != nil {
+		return err
+	}
+	if id != uuid.Nil {
+		return nil
+	}
+	if public {
+		return NotListable(PublicReason(ReasonPayoutWalletRemoved))
+	}
+	return NotListable(ReasonPayoutWalletRemoved)
+}
+
+// buyCooldown refuses a buy during the cooldown after the buyer let a
+// buy-now sale of this listing expire unpaid.
+func (s *Service) buyCooldown(ctx context.Context, buyer, listingID uuid.UUID) error {
+	until, err := s.repo.BuyCooldown(ctx, buyer, listingID)
+	if err != nil || until == nil {
+		return err
+	}
+	return ErrSaleLimit.WithMessage("your last purchase of this listing expired unpaid; you can buy it again after " +
+		until.UTC().Format(time.RFC3339)).WithDetails(map[string]any{
+		"reason": "buy_cooldown", "until": until.UTC().Format(time.RFC3339),
+	})
+}
+
+// buyerCapacity refuses a buyer at the open-sale cap or, counting the names
+// their open sales will bring (opening reports a new sale is about to be
+// added), at the MAX ID limit. self is false when the caller is the seller
+// (accept), which changes only the wording. The repository re-checks the
+// sale cap under a per-buyer lock.
+func (s *Service) buyerCapacity(ctx context.Context, buyer uuid.UUID, opening, self bool) error {
+	open, err := s.repo.OpenSaleCount(ctx, buyer)
+	if err != nil {
+		return err
+	}
+	if opening && open >= maxOpenSalesPerBuyer {
+		return saleLimit(self)
+	}
+	owned, err := s.repo.OwnedIDCount(ctx, buyer)
+	if err != nil {
+		return err
+	}
+	pending := open
+	if opening {
+		pending++
+	}
+	if owned >= maxids.MaxIDsPerAccount || owned+pending > maxids.MaxIDsPerAccount {
+		if self {
+			return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("you can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
+		}
+		return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("the buyer can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
+	}
+	return nil
+}
+
+// saleLimit is SALE_LIMIT for a buyer at the open-sale cap.
+func saleLimit(self bool) error {
+	who := "you already have"
+	if !self {
+		who = "the buyer already has"
+	}
+	return ErrSaleLimit.WithMessage(fmt.Sprintf("%s %d open purchases; one must finish or end first", who, maxOpenSalesPerBuyer)).
+		WithDetails(map[string]any{"reason": "open_sales", "limit": maxOpenSalesPerBuyer})
+}
+
 // settleErr maps adapter failures: a shortfall is the buyer's problem, anything
 // else is an RPC or programming failure.
 func settleErr(err error) error {
@@ -433,8 +528,13 @@ func (s *Service) Submit(ctx context.Context, p shared.Principal, saleID uuid.UU
 	case SalePendingReview:
 		return SaleView{}, errAwaitingReview
 	case SaleCancelled:
-		// AttachTx records a payment for a sale an admin cancelled and
-		// sends it to manual_review, so ops can see the buyer paid.
+		// A sale an admin cancelled after it was locked may have been paid
+		// anyway: AttachTx records the transaction and the worker sends the
+		// sale to manual_review if it paid toward it. A sale denied in
+		// review never had instructions, so it takes no transaction.
+		if sale.LockExpiresAt == nil {
+			return SaleView{}, ErrSaleExpired.WithMessage("this sale was cancelled in review and no longer accepts a transaction")
+		}
 	default:
 		return SaleView{}, ErrSaleExpired.WithMessage("this sale is " + sale.Status + " and no longer accepts a transaction")
 	}
@@ -473,6 +573,9 @@ func (s *Service) ObserveSale(ctx context.Context, saleID uuid.UUID) (Sale, erro
 	sale, err := s.repo.GetSale(ctx, saleID)
 	if err != nil {
 		return Sale{}, err
+	}
+	if sale.Status == SaleCancelled && sale.TxHash != nil && sale.NextCheckAt != nil {
+		return s.observeAfterCancel(ctx, sale)
 	}
 	if (sale.Status != SaleSubmitted && sale.Status != SaleConfirming) || sale.TxHash == nil {
 		return sale, nil
@@ -538,6 +641,65 @@ func (s *Service) ObserveSale(ctx context.Context, saleID uuid.UUID) (Sale, erro
 	return s.repo.ProgressSale(ctx, saleID, Progress{
 		From: sale.Status, To: sale.Status, Reason: sale.StatusReason, Confirmations: sale.Confirmations, NextCheckAt: &next,
 	})
+}
+
+// observeAfterCancel judges a transaction submitted for a sale an admin
+// cancelled after it was locked. The sale stays cancelled unless the
+// finalized transaction paid toward it, which sends it to manual_review for
+// a refund. A transaction that failed, paid nothing toward the sale, or was
+// not found by the deadline leaves it cancelled
+// (tx_after_cancel_unverified). A seen but not finalized one is re-checked.
+func (s *Service) observeAfterCancel(ctx context.Context, sale Sale) (Sale, error) {
+	adapter, order, err := s.order(sale)
+	if err != nil {
+		return Sale{}, err
+	}
+	obs, err := adapter.Observe(ctx, order, *sale.TxHash)
+	if err != nil {
+		return Sale{}, err
+	}
+	now, deadline := s.now(), txDeadline(sale)
+	stay := func(next *time.Time) (Sale, error) {
+		return s.repo.ProgressSale(ctx, sale.ID, Progress{
+			From: SaleCancelled, To: SaleCancelled, Reason: sale.StatusReason, Confirmations: obs.Confirmations, NextCheckAt: next,
+		})
+	}
+	unverified := func(why string) (Sale, error) {
+		return s.repo.ProgressSale(ctx, sale.ID, Progress{
+			From: SaleCancelled, To: SaleCancelled, Reason: sale.StatusReason, Confirmations: obs.Confirmations,
+			Event: "tx_after_cancel_unverified", Detail: map[string]any{"tx_hash": *sale.TxHash, "observation": obs.Status, "reason": why},
+		})
+	}
+	switch {
+	case obs.Status == settle.StatusConfirmed && (obs.Matches || obs.PaidTowardSale):
+		return s.repo.ProgressSale(ctx, sale.ID, Progress{
+			From: SaleCancelled, To: SaleManualReview, Reason: noteTxAfterCancel, Confirmations: obs.Confirmations,
+			Event: "tx_after_cancel", Detail: map[string]any{"tx_hash": *sale.TxHash, "matches": obs.Matches, "paid_toward_sale": true},
+		})
+	case obs.Status == settle.StatusFailed:
+		return unverified("transaction failed on chain")
+	case obs.Status == settle.StatusPending:
+		next := now.Add(recheckPending)
+		return stay(&next)
+	}
+	if !now.Before(deadline) {
+		why := "transaction not found by the deadline"
+		if obs.Status == settle.StatusConfirmed {
+			why = "transaction is not a payment for this sale: " + obs.Reason
+		}
+		return unverified(why)
+	}
+	next := deadline
+	if obs.Status != settle.StatusConfirmed {
+		waited := time.Duration(0)
+		if sale.SubmittedAt != nil {
+			waited = now.Sub(*sale.SubmittedAt)
+		}
+		if n := now.Add(recheckNotFound(waited)); n.Before(deadline) {
+			next = n
+		}
+	}
+	return stay(&next)
 }
 
 // CompleteObserved completes a sale whose transaction has been verified.

@@ -20,6 +20,10 @@ var (
 	ErrAssetNotAccepted  = shared.NewAppError("ASSET_NOT_ACCEPTED", http.StatusUnprocessableEntity, "this chain and asset are not accepted on the marketplace")
 	ErrInsufficientFunds = shared.NewAppError("INSUFFICIENT_FUNDS", http.StatusUnprocessableEntity, "the paying wallet does not hold enough funds")
 	ErrOfferLimit        = shared.NewAppError("OFFER_LIMIT", http.StatusConflict, "offer limit reached")
+	// ErrSaleLimit refuses a new sale for a buyer at the open-sale cap, or
+	// inside the cooldown after letting a buy-now sale of the listing expire
+	// unpaid; details.reason says which.
+	ErrSaleLimit         = shared.NewAppError("SALE_LIMIT", http.StatusConflict, "sale limit reached")
 	ErrOfferBelowMinimum = shared.NewAppError("OFFER_BELOW_MINIMUM", http.StatusUnprocessableEntity, "amount is below the marketplace minimum")
 	ErrOfferUnfunded     = shared.NewAppError("OFFER_UNFUNDED", http.StatusUnprocessableEntity, "the buyer wallet does not currently cover this offer")
 	ErrSaleExpired       = shared.NewAppError("SALE_EXPIRED", http.StatusConflict, "this sale has expired")

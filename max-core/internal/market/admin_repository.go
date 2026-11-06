@@ -21,29 +21,36 @@ var (
 	errAlreadyRestricted = shared.ErrConflict.WithMessage("this account already has an active restriction of this kind; lift it first")
 )
 
-// noteTxAfterCancel marks a payment that arrived after an admin cancel.
-const noteTxAfterCancel = "tx submitted after admin cancel"
+// noteTxAfterCancel is the manual_review reason of a cancelled sale whose
+// late transaction paid toward it.
+const noteTxAfterCancel = "tx submitted after admin cancel paid toward the sale"
+
+// reasonReviewTimedOut closes a sale left in pending_review too long.
+const reasonReviewTimedOut = "review timed out"
 
 // attachAfterCancel records a transaction submitted for a sale an admin
-// cancelled while it was locked. Like a late payment to a name that moved
-// on, it goes to manual_review: the buyer may have paid and a human must
-// sort out the refund. Runs inside AttachTx's transaction.
-func attachAfterCancel(ctx context.Context, q *generated.Queries, saleID, buyer uuid.UUID, txHash string) (generated.MarketSale, error) {
+// cancelled after it was locked. The sale stays cancelled with the tx
+// recorded and due for observation; the worker (Service.observeAfterCancel)
+// moves it to manual_review only if the tx paid toward the sale. A sale that
+// was never locked (denied in review) refuses. Runs inside AttachTx's
+// transaction.
+func attachAfterCancel(ctx context.Context, q *generated.Queries, cur generated.MarketSale, txHash string) (generated.MarketSale, error) {
+	if cur.LockExpiresAt == nil {
+		return cur, ErrSaleExpired.WithMessage("this sale was cancelled in review and no longer accepts a transaction")
+	}
 	row, err := q.AttachCancelledMarketSaleTx(ctx, generated.AttachCancelledMarketSaleTxParams{
-		ID: saleID, Buyer: buyer, TxHash: &txHash, Reason: noteTxAfterCancel,
+		ID: cur.ID, Buyer: cur.BuyerAccountID, TxHash: &txHash,
 	})
 	if err != nil {
 		return row, err
 	}
 	from := SaleCancelled
-	if err := event(ctx, q, saleID, "tx_after_cancel", &from, SaleManualReview, map[string]any{
-		"tx_hash": txHash, "note": noteTxAfterCancel,
-	}); err != nil {
+	if err := event(ctx, q, cur.ID, "tx_after_cancel_submitted", &from, SaleCancelled, map[string]any{"tx_hash": txHash}); err != nil {
 		return row, err
 	}
 	return row, audit.Write(ctx, q, audit.Entry{
-		Action: "market.sale_manual_review", ResourceType: "market_sale", ResourceID: saleID.String(),
-		Metadata: map[string]any{"max_id": row.MaxID.String(), "reason": noteTxAfterCancel, "tx_hash": txHash},
+		Actor: &cur.BuyerAccountID, Action: "market.sale_tx_after_cancel", ResourceType: "market_sale", ResourceID: cur.ID.String(),
+		Metadata: map[string]any{"max_id": row.MaxID.String(), "tx_hash": txHash},
 	})
 }
 
@@ -322,6 +329,18 @@ func (r *repository) AdminCancelSale(ctx context.Context, actor, saleID uuid.UUI
 			} else if !database.IsNoRows(err) {
 				return err
 			}
+			// An offer that lapsed when the sale expired, and whose late
+			// payment then sent the sale to manual review, keeps no strike:
+			// the buyer did pay.
+			if sale.Status == SaleManualReview {
+				n, err := removeLapsedStrike(ctx, q, *sale.OfferID, sale.ID)
+				if err != nil {
+					return err
+				}
+				if n > 0 {
+					detail["strikes_removed"] = n
+				}
+			}
 		}
 		if to, err := releaseListing(ctx, q, m); err != nil {
 			return err
@@ -330,6 +349,77 @@ func (r *repository) AdminCancelSale(ctx context.Context, actor, saleID uuid.UUI
 		}
 		out = toSale(row, "")
 		return adminSaleRecord(ctx, q, actor, sale, "cancelled", SaleCancelled, detail)
+	})
+	if err != nil {
+		return Sale{}, err
+	}
+	return out, nil
+}
+
+// removeLapsedStrike deletes the strikes of an offer that is lapsed and
+// audits it. It reports how many were removed.
+func removeLapsedStrike(ctx context.Context, q *generated.Queries, offerID, saleID uuid.UUID) (int64, error) {
+	o, err := q.GetMarketOfferForUpdate(ctx, offerID)
+	if err != nil {
+		return 0, err
+	}
+	if o.Status != OfferLapsed {
+		return 0, nil
+	}
+	n, err := q.DeleteMarketStrikesByOffer(ctx, &offerID)
+	if err != nil || n == 0 {
+		return n, err
+	}
+	return n, audit.Write(ctx, q, audit.Entry{
+		Action: "market.strike_removed", ResourceType: "market_offer", ResourceID: offerID.String(),
+		Metadata: map[string]any{"buyer": o.BuyerAccountID.String(), "sale_id": saleID.String(), "strikes_removed": n,
+			"reason": "the lapsed offer's sale was paid late and cancelled from manual review"},
+	})
+}
+
+// CancelStaleReview is the worker's review timeout: like a deny, without an
+// administrator. The offer is declined (no strike) and the listing released.
+func (r *repository) CancelStaleReview(ctx context.Context, saleID uuid.UUID, cutoff time.Time) (Sale, error) {
+	var out Sale
+	err := r.adminSaleTx(ctx, saleID, func(q *generated.Queries, m generated.MaxID, sale generated.MarketSale) error {
+		out = toSale(sale, "")
+		if sale.Status != SalePendingReview || sale.CreatedAt.After(cutoff) {
+			return nil // decided or moved on meanwhile
+		}
+		row, err := q.TransitionMarketSale(ctx, generated.TransitionMarketSaleParams{
+			ID: saleID, FromStatus: SalePendingReview, ToStatus: SaleCancelled, Reason: reasonReviewTimedOut,
+		})
+		if err != nil {
+			return err
+		}
+		detail := map[string]any{"reason": reasonReviewTimedOut}
+		if sale.OfferID != nil {
+			if _, err := q.AdminDeclineMarketOffer(ctx, generated.AdminDeclineMarketOfferParams{
+				ID: *sale.OfferID, Note: reasonReviewTimedOut,
+			}); err == nil {
+				detail["offer"] = OfferDeclined
+			} else if !database.IsNoRows(err) {
+				return err
+			}
+		}
+		if to, err := releaseListing(ctx, q, m); err != nil {
+			return err
+		} else if to != "" {
+			detail["listing"] = to
+		}
+		out = toSale(row, "")
+		from := SalePendingReview
+		if err := event(ctx, q, saleID, "review_timed_out", &from, SaleCancelled, detail); err != nil {
+			return err
+		}
+		meta := map[string]any{"max_id": sale.MaxID.String(), "seller": sale.SellerAccountID.String(),
+			"buyer": sale.BuyerAccountID.String(), "from_status": from, "to_status": SaleCancelled}
+		for k, v := range detail {
+			meta[k] = v
+		}
+		return audit.Write(ctx, q, audit.Entry{
+			Action: "market.sale_review_timed_out", ResourceType: "market_sale", ResourceID: saleID.String(), Metadata: meta,
+		})
 	})
 	if err != nil {
 		return Sale{}, err

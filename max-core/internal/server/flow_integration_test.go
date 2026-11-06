@@ -33,6 +33,7 @@ import (
 	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/auth"
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
 	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
@@ -112,7 +113,9 @@ func (s *stubGateway) Observe(context.Context, payments.Payment) (payments.Obser
 
 func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 	t.Helper()
-	ec := envConfig{}
+	// The market is off unless an option enables it; the hold period is
+	// required either way, as in production (default 72h).
+	ec := envConfig{market: config.MarketConfig{HoldPeriod: 72 * time.Hour, MinOffer: "1"}}
 	for _, o := range opts {
 		o(&ec)
 	}

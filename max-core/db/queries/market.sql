@@ -83,25 +83,6 @@ SELECT * FROM market_sales
 WHERE max_id = $1 AND status IN ('pending_review', 'locked', 'submitted', 'confirming')
 FOR UPDATE;
 
--- name: UpdateMarketSaleStatus :one
-UPDATE market_sales
-SET status = $2, status_reason = $3, updated_at = now()
-WHERE id = $1
-RETURNING *;
-
--- name: SubmitMarketSale :one
-UPDATE market_sales
-SET status = 'submitted', tx_hash = $2, submitted_at = now(), next_check_at = $3, updated_at = now()
-WHERE id = $1
-RETURNING *;
-
--- name: UpdateMarketSaleProgress :one
-UPDATE market_sales
-SET status = $2, status_reason = $3, confirmations = $4, next_check_at = $5,
-    completed_at = $6, updated_at = now()
-WHERE id = $1
-RETURNING *;
-
 -- name: ListMarketSalesByParty :many
 SELECT * FROM market_sales
 WHERE seller_account_id = $1 OR buyer_account_id = $1
@@ -118,9 +99,12 @@ SELECT * FROM market_sales WHERE status = $1 ORDER BY created_at LIMIT $2;
 -- Leases submitted and confirming sales due for observation by pushing
 -- next_check_at forward under SKIP LOCKED, so concurrent workers never
 -- observe the same sale; the observer then sets the real next check.
+-- A cancelled sale with a transaction and a next check is a payment
+-- submitted after an admin cancel, still waiting for its verdict.
 WITH due AS (
     SELECT s.id FROM market_sales s
-    WHERE s.status IN ('submitted', 'confirming') AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
+    WHERE (s.status IN ('submitted', 'confirming') OR (s.status = 'cancelled' AND s.tx_hash IS NOT NULL))
+      AND s.next_check_at IS NOT NULL AND s.next_check_at <= now()
     ORDER BY s.next_check_at
     LIMIT sqlc.arg(row_limit)
     FOR UPDATE SKIP LOCKED
@@ -151,7 +135,9 @@ RETURNING m.*;
 -- Re-leases one claimed sale right before it is observed, so a slow batch
 -- never outlives the claim's lease; 0 rows means the sale moved on.
 UPDATE market_sales SET next_check_at = now() + make_interval(secs => sqlc.arg(lease_seconds)::double precision)
-WHERE id = sqlc.arg(id) AND status IN ('submitted', 'confirming');
+WHERE id = sqlc.arg(id)
+  AND (status IN ('submitted', 'confirming')
+       OR (status = 'cancelled' AND tx_hash IS NOT NULL AND next_check_at IS NOT NULL));
 
 -- name: ListExpiredLockedMarketSales :many
 -- Candidates only: ExpireSale re-checks each under the max_ids and sale locks.
@@ -270,11 +256,18 @@ WHERE max_id = sqlc.arg(max_id) AND status IN ('live', 'unfunded')
 
 -- name: SearchMarketListings :many
 -- Public listing search. Prices are compared as decimal asset amounts so the
--- filter is independent of each asset's decimals.
+-- filter is independent of each asset's decimals. Listings whose name is not
+-- active, or whose owner is suspended or banned from the market, are hidden.
 SELECT sqlc.embed(l), m.canonical_name
 FROM market_listings l
 JOIN max_ids m ON m.id = l.max_id
+JOIN accounts a ON a.id = m.owner_account_id
 WHERE l.status = 'active'
+  AND m.status = 'active'
+  AND a.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM market_restrictions x
+                  WHERE x.account_id = m.owner_account_id AND x.kind = 'ban' AND x.lifted_at IS NULL
+                    AND (x.until IS NULL OR x.until > now()))
   AND (l.expires_at IS NULL OR l.expires_at > now())
   AND (sqlc.arg(q)::text = '' OR m.canonical_name LIKE '%' || sqlc.arg(q)::text || '%')
   AND (sqlc.narg(min_price)::text IS NULL
@@ -545,14 +538,44 @@ ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(row_limit);
 
 -- name: AttachCancelledMarketSaleTx :one
--- A transaction submitted for a sale an admin cancelled: the buyer may have
--- paid, so the sale goes to manual_review with the tx recorded.
+-- A transaction submitted for a sale an admin cancelled after it was locked
+-- (lock_expires_at set; a denied review never was). The sale stays
+-- cancelled with the tx recorded and due now; the worker observes it and
+-- moves it to manual_review only if it paid toward the sale.
 UPDATE market_sales
-SET status = 'manual_review', status_reason = sqlc.arg(reason), tx_hash = sqlc.arg(tx_hash), submitted_at = now(),
-    next_check_at = NULL, updated_at = now()
+SET tx_hash = sqlc.arg(tx_hash), submitted_at = now(), next_check_at = now(), updated_at = now()
 WHERE id = sqlc.arg(id) AND buyer_account_id = sqlc.arg(buyer) AND status = 'cancelled' AND tx_hash IS NULL
+  AND lock_expires_at IS NOT NULL
 RETURNING *;
 
 -- name: LockMarketRestrictionKind :exec
 -- Serialises restriction creation per (account, kind).
 SELECT pg_advisory_xact_lock(hashtextextended('market_restrictions:' || sqlc.arg(account_id)::text || ':' || sqlc.arg(kind)::text, 0));
+
+-- Final-review guards (migration 000011).
+
+-- name: LockMarketSaleBuyer :exec
+-- Serialises sale opening per buyer so the open-sale cap holds.
+SELECT pg_advisory_xact_lock(hashtextextended('market_sales:' || sqlc.arg(buyer)::text, 0));
+
+-- name: CountOpenMarketSalesByBuyer :one
+SELECT count(*) FROM market_sales
+WHERE buyer_account_id = $1 AND status IN ('pending_review', 'locked', 'submitted', 'confirming');
+
+-- name: UpsertMarketBuyCooldown :exec
+-- A buy-now sale that expired unpaid keeps its buyer off that listing for a while.
+INSERT INTO market_buy_cooldowns (buyer_account_id, listing_id, sale_id, until)
+VALUES (sqlc.arg(buyer), sqlc.arg(listing_id), sqlc.arg(sale_id), sqlc.arg(until))
+ON CONFLICT (buyer_account_id, listing_id)
+DO UPDATE SET sale_id = EXCLUDED.sale_id, until = greatest(market_buy_cooldowns.until, EXCLUDED.until), created_at = now();
+
+-- name: GetMarketBuyCooldown :one
+SELECT until FROM market_buy_cooldowns
+WHERE buyer_account_id = $1 AND listing_id = $2 AND until > now();
+
+-- name: ListStaleReviewMarketSales :many
+-- Sales awaiting review since before cutoff; the worker cancels them.
+SELECT id FROM market_sales
+WHERE status = 'pending_review' AND created_at <= sqlc.arg(cutoff)::timestamptz
+ORDER BY created_at
+LIMIT sqlc.arg(row_limit);

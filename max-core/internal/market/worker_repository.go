@@ -63,6 +63,14 @@ func (r *repository) UnlapsedOffers(ctx context.Context, limit int) ([]uuid.UUID
 	return ids, nil
 }
 
+func (r *repository) StaleReviews(ctx context.Context, cutoff time.Time, limit int) ([]uuid.UUID, error) {
+	ids, err := r.q.ListStaleReviewMarketSales(ctx, generated.ListStaleReviewMarketSalesParams{Cutoff: cutoff, RowLimit: int32(limit)})
+	if err != nil {
+		return nil, shared.ErrInternal.WithError(err)
+	}
+	return ids, nil
+}
+
 func (r *repository) ExpireListings(ctx context.Context, cutoff time.Time, limit int) (int, error) {
 	n := 0
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
