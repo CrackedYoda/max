@@ -22,20 +22,22 @@ const ID = "11111111-1111-4111-8111-111111111111";
 describe("market routes", () => {
   const cases: { name: string; status?: number; run: (c: MaxClient) => Promise<unknown>; method: string; path: string; body?: unknown }[] = [
     { name: "search", run: (c) => c.market.search({ q: "yo", minPrice: "5", sort: "price_asc", limit: 10 }), method: "GET", path: "/v1/market/listings?q=yo&minPrice=5&sort=price_asc&limit=10" },
-    { name: "name", run: (c) => c.market.name("max.yoda"), method: "GET", path: "/v1/market/names/max.yoda" },
+    { name: "getName", run: (c) => c.market.getName("max.yoda"), method: "GET", path: "/v1/market/names/max.yoda" },
     { name: "eligibility", run: (c) => c.market.eligibility(ID), method: "GET", path: `/v1/market/eligibility/${ID}` },
     { name: "list", run: (c) => c.market.list({ maxId: ID, price: "250", chain: "solana", asset: "mint", payoutAddress: "pay" }), method: "POST", path: "/v1/market/listings", body: { maxId: ID, price: "250", chain: "solana", asset: "mint", payoutAddress: "pay" } },
-    { name: "updatePrice", run: (c) => c.market.updatePrice(ID, "300"), method: "PATCH", path: `/v1/market/listings/${ID}`, body: { price: "300" } },
+    { name: "updateListing", run: (c) => c.market.updateListing(ID, "300"), method: "PATCH", path: `/v1/market/listings/${ID}`, body: { price: "300" } },
     { name: "delist", status: 204, run: (c) => c.market.delist(ID), method: "DELETE", path: `/v1/market/listings/${ID}` },
     { name: "offer", run: (c) => c.market.offer({ name: "yoda", amount: "10", chain: "solana", asset: "mint", fromAddress: "b" }), method: "POST", path: "/v1/market/offers", body: { name: "yoda", amount: "10", chain: "solana", asset: "mint", fromAddress: "b" } },
     { name: "withdrawOffer", status: 204, run: (c) => c.market.withdrawOffer(ID), method: "DELETE", path: `/v1/market/offers/${ID}` },
-    { name: "accept", run: (c) => c.market.accept(ID, { payoutAddress: "p" }), method: "POST", path: `/v1/market/offers/${ID}/accept`, body: { payoutAddress: "p" } },
-    { name: "decline", status: 204, run: (c) => c.market.decline(ID, { note: "no" }), method: "POST", path: `/v1/market/offers/${ID}/decline`, body: { note: "no" } },
-    { name: "pay", run: (c) => c.market.pay(ID, { idempotencyKey: "key-12345" }), method: "POST", path: `/v1/market/offers/${ID}/pay`, body: { idempotencyKey: "key-12345" } },
+    { name: "acceptOffer", run: (c) => c.market.acceptOffer(ID, { payoutAddress: "p" }), method: "POST", path: `/v1/market/offers/${ID}/accept`, body: { payoutAddress: "p" } },
+    { name: "declineOffer", status: 204, run: (c) => c.market.declineOffer(ID, { note: "no" }), method: "POST", path: `/v1/market/offers/${ID}/decline`, body: { note: "no" } },
+    { name: "payOffer", run: (c) => c.market.payOffer(ID, { idempotencyKey: "key-12345" }), method: "POST", path: `/v1/market/offers/${ID}/pay`, body: { idempotencyKey: "key-12345" } },
     { name: "submit", run: (c) => c.market.submit(ID, "sig"), method: "POST", path: `/v1/market/sales/${ID}/submit`, body: { txHash: "sig" } },
     { name: "getSale", run: (c) => c.market.getSale(ID), method: "GET", path: `/v1/market/sales/${ID}` },
-    { name: "me", run: (c) => c.market.me(), method: "GET", path: "/v1/market/me" },
+    { name: "inbox", run: (c) => c.market.inbox(), method: "GET", path: "/v1/market/me" },
     { name: "agents.marketAuthorizations", run: (c) => c.agents.marketAuthorizations(ID, { decision: "pending_approval" }), method: "GET", path: `/v1/agents/${ID}/market-authorizations?decision=pending_approval` },
+    { name: "agents.setPolicy with market", run: (c) => c.agents.setPolicy(ID, { limits: [], market: { canSell: true, minSalePrices: [{ chain: "solana", asset: "m", amount: "5" }] } }), method: "PUT", path: `/v1/agents/${ID}/policy`, body: { limits: [], market: { canSell: true, minSalePrices: [{ chain: "solana", asset: "m", amount: "5" }] } } },
+    { name: "agents.setPolicy without market keeps it", run: (c) => c.agents.setPolicy(ID, { limits: [] }), method: "PUT", path: `/v1/agents/${ID}/policy`, body: { limits: [] } },
     { name: "agents.approveMarket", run: (c) => c.agents.approveMarket(ID), method: "POST", path: `/v1/agent-approvals/market/${ID}/approve` },
     { name: "agents.denyMarket", run: (c) => c.agents.denyMarket(ID), method: "POST", path: `/v1/agent-approvals/market/${ID}/deny` },
     { name: "admin.marketListings", run: (c) => c.admin.marketListings({ status: "active", limit: 5 }), method: "GET", path: "/v1/admin/market/listings?status=active&limit=5" },
@@ -85,10 +87,10 @@ describe("market routes", () => {
     const calls = [
       c.market.buy(ID, { fromAddress: "b" }),
       c.market.list({ maxId: ID, price: "1", chain: "solana", asset: "m", payoutAddress: "p" }),
-      c.market.updatePrice(ID, "2"),
+      c.market.updateListing(ID, "2"),
       c.market.offer({ name: "yoda", amount: "1", chain: "solana", asset: "m", fromAddress: "b" }),
-      c.market.accept(ID),
-      c.market.pay(ID),
+      c.market.acceptOffer(ID),
+      c.market.payOffer(ID),
     ];
     for (const r of await Promise.all(calls)) {
       assert.ok(isPendingApproval(r));
@@ -106,7 +108,7 @@ describe("market routes", () => {
 
   test("path segments are encoded", async () => {
     const { c, calls } = mock(200, {});
-    await c.market.name("a/b");
+    await c.market.getName("a/b");
     assert.equal(calls[0]!.path, "/v1/market/names/a%2Fb");
   });
 });

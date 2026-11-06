@@ -56,8 +56,8 @@ catch (e) { if (isMaxApiError(e, "NO_COMPATIBLE_WALLET")) offerCrossChain(); els
 Buy and sell MAX IDs. The core SDK has no Solana dependency; building the transaction lives in `@max/sdk/solana`, which needs the optional peers `@solana/web3.js` and `@solana/spl-token`.
 
 ```ts
-import { MaxClient, assertSaleInstructionsMatch, isPendingApproval } from "@max/sdk";
-import { buildSolanaSaleTransaction } from "@max/sdk/solana";
+import { MaxClient, isPendingApproval } from "@max/sdk";
+import { buildVerifiedSolanaSaleTransaction } from "@max/sdk/solana";
 
 const max = new MaxClient({ baseUrl: "https://api.max.example" });
 
@@ -65,12 +65,14 @@ const { listings } = await max.market.search({ q: "yoda", sort: "price_asc" });
 const res = await max.market.buy(listings[0].listingId, { fromAddress: wallet.publicKey.toBase58() });
 if (isPendingApproval(res)) throw new Error(`held for approval: ${res.authorizationId}`); // agents only
 
-// Never sign what the API returned without checking it against the sale:
-// exact fee to the treasury, exact remainder to the seller, from the buyer, plus the sale memo.
-assertSaleInstructionsMatch(res.sale, res.instructions);
-
 const { blockhash } = await connection.getLatestBlockhash();
-const tx = buildSolanaSaleTransaction(res.instructions!, wallet.publicKey.toBase58(), blockhash);
+// Checks the instructions against the sale (exact fee to the treasury, exact remainder
+// to the seller, from the buyer, plus the sale memo) before building. Pass what you
+// trust independently: the connected wallet, the asset and price the user accepted.
+const tx = buildVerifiedSolanaSaleTransaction(res, wallet.publicKey.toBase58(), blockhash, {
+  asset: listings[0].asset,
+  priceBaseUnits: listings[0].priceBaseUnits,
+});
 const signed = await wallet.signTransaction(tx);
 const signature = await connection.sendRawTransaction(signed.serialize());
 
@@ -82,7 +84,7 @@ while (!["completed", "expired", "cancelled", "reversed"].includes(view.sale.sta
 }
 ```
 
-`assertSaleInstructionsMatch` derives the treasury, seller and buyer token accounts itself, so a tampered response cannot redirect funds. Agents' `buy`, `list`, `updatePrice`, `offer`, `accept` and `pay` may return `{ status: "pending_approval", authorizationId, reasons }` instead of throwing; the administrator releases them with `max.agents.approveMarket(authorizationId)`.
+`assertSaleInstructionsMatch` (called by `buildVerifiedSolanaSaleTransaction`) proves the instructions match the sale: it derives the token accounts from the sale's own addresses, so it does not catch a response that rewrites both. Always pass `expect` with values you trust independently (connected wallet as `buyer`, the accepted listing's `asset` and `priceBaseUnits`, a pinned `treasury`). The raw `buildSolanaSaleTransaction` is unverified. Agents' `buy`, `list`, `updateListing`, `offer`, `acceptOffer` and `payOffer` may return `{ status: "pending_approval", authorizationId, reasons }` instead of throwing; the administrator releases them with `max.agents.approveMarket(authorizationId)`.
 
 ## Sign in with a wallet
 

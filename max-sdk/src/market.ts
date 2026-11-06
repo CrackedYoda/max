@@ -16,7 +16,7 @@ import type {
 /**
  * The name marketplace. Each method is one API route.
  *
- * Methods an agent can call (buy, list, updatePrice, offer, accept, pay) may
+ * Methods an agent can call (buy, list, updateListing, offer, acceptOffer, payOffer) may
  * return a `PendingApproval` instead of the result: the agent's policy held
  * the action for its administrator and nothing has happened yet. Narrow with
  * `isPendingApproval(result)`.
@@ -30,7 +30,7 @@ export class MarketApi {
   }
 
   /** Public market view of one name: listing, live offer count, last sale. */
-  name(name: string): Promise<NameMarketView> {
+  getName(name: string): Promise<NameMarketView> {
     return this.http.get(`/v1/market/names/${enc(name)}`);
   }
 
@@ -43,7 +43,7 @@ export class MarketApi {
     return this.http.post("/v1/market/listings", { body: input });
   }
 
-  updatePrice(listingId: string, price: string): Promise<MarketResult<Listing>> {
+  updateListing(listingId: string, price: string): Promise<MarketResult<Listing>> {
     return this.http.patch(`/v1/market/listings/${enc(listingId)}`, { body: { price } });
   }
 
@@ -70,16 +70,16 @@ export class MarketApi {
   }
 
   /** Accept an offer on your name. `payoutAddress` is needed only when the name has no listing. */
-  accept(offerId: string, input: { payoutAddress?: string } = {}): Promise<MarketResult<SaleView>> {
+  acceptOffer(offerId: string, input: { payoutAddress?: string } = {}): Promise<MarketResult<SaleView>> {
     return this.http.post(`/v1/market/offers/${enc(offerId)}/accept`, { body: input });
   }
 
-  decline(offerId: string, input: { note?: string } = {}): Promise<void> {
+  declineOffer(offerId: string, input: { note?: string } = {}): Promise<void> {
     return this.http.post(`/v1/market/offers/${enc(offerId)}/decline`, { body: input });
   }
 
   /** The buyer pays an accepted offer: returns the sale with the instructions to sign. */
-  pay(offerId: string, input: { idempotencyKey?: string } = {}): Promise<MarketResult<SaleView>> {
+  payOffer(offerId: string, input: { idempotencyKey?: string } = {}): Promise<MarketResult<SaleView>> {
     return this.http.post(`/v1/market/offers/${enc(offerId)}/pay`, { body: input });
   }
 
@@ -93,7 +93,7 @@ export class MarketApi {
   }
 
   /** Your listings, sales and offers. */
-  me(): Promise<MarketInbox> {
+  inbox(): Promise<MarketInbox> {
     return this.http.get("/v1/market/me");
   }
 }

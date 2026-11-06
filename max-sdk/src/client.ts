@@ -9,6 +9,7 @@ import {
   type AgentCredential,
   type AgentDetail,
   type AgentLimit,
+  type AgentMarketPolicy,
   type AgentPolicy,
   type AgentScope,
   type AgentTransfer,
@@ -307,9 +308,13 @@ class AgentsAdminApi {
   resume(agentId: string): Promise<Agent> {
     return this.update(agentId, { status: "active" });
   }
+  /**
+   * Replace the policy. Omit `market` to keep the current selling policy;
+   * send it to replace it.
+   */
   setPolicy(
     agentId: string,
-    policy: { limits: Pick<AgentLimit, "chain" | "asset" | "maxPerTransfer" | "maxPer24h">[]; allowedRecipients?: string[]; allowAnyRecipient?: boolean },
+    policy: { limits: Pick<AgentLimit, "chain" | "asset" | "maxPerTransfer" | "maxPer24h">[]; allowedRecipients?: string[]; allowAnyRecipient?: boolean; market?: AgentMarketPolicy },
   ): Promise<AgentPolicy> {
     return this.http.put(`/v1/agents/${enc(agentId)}/policy`, { body: policy });
   }

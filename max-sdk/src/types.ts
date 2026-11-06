@@ -358,7 +358,15 @@ export interface AgentPolicy {
   limits: AgentLimit[];
   allowedRecipients: string[];
   allowAnyRecipient: boolean;
+  /** Selling policy for marketplace actions. */
+  market: AgentMarketPolicy;
   updatedAt: ISODate;
+}
+
+export interface AgentMarketPolicy {
+  canSell: boolean;
+  /** Per-asset floors an agent may sell a name for; `amount` is in base units. */
+  minSalePrices: { chain: string; asset: string; amount: string }[];
 }
 
 export interface AgentCredential {

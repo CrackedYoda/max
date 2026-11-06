@@ -17,7 +17,10 @@ import {
 import type { MarketInstructions } from "./market-types.js";
 import { MEMO_PROGRAM } from "./solana-address.js";
 
-export { assertSaleInstructionsMatch } from "./sale-instructions.js";
+import { assertSaleInstructionsMatch, type SaleExpectations } from "./sale-instructions.js";
+import type { SaleView } from "./market-types.js";
+
+export { assertSaleInstructionsMatch };
 
 const MEMO_PROGRAM_ID = new PublicKey(MEMO_PROGRAM);
 
@@ -28,6 +31,9 @@ function need(accounts: Record<string, string> | undefined, key: string, kind: s
 }
 
 /**
+ * UNVERIFIED: builds whatever the instructions say. Prefer
+ * `buildVerifiedSolanaSaleTransaction`.
+ *
  * Build the unsigned v0 transaction for a sale from the API's `instructions`,
  * in the API's order: create-ATA-idempotent (as needed), the fee transfer, the
  * seller transfer, then the memo. `payer` is the buyer and must be the account
@@ -79,4 +85,20 @@ export function buildSolanaSaleTransaction(ins: MarketInstructions, payer: strin
   });
 
   return new VersionedTransaction(new TransactionMessage({ payerKey, recentBlockhash, instructions }).compileToV0Message());
+}
+
+/**
+ * Check the sale's instructions with `assertSaleInstructionsMatch` (throwing
+ * if they do not match), then build the unsigned v0 transaction for `payer`.
+ * `expect` pins values you trust independently; see `SaleExpectations`.
+ * `payer` is also asserted to be the sale's buyer.
+ */
+export function buildVerifiedSolanaSaleTransaction(
+  view: SaleView,
+  payer: string,
+  recentBlockhash: string,
+  expect: SaleExpectations = {},
+): VersionedTransaction {
+  assertSaleInstructionsMatch(view.sale, view.instructions, { ...expect, buyer: expect.buyer ?? payer });
+  return buildSolanaSaleTransaction(view.instructions!, payer, recentBlockhash);
 }
