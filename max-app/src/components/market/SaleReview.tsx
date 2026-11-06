@@ -1,4 +1,4 @@
-import { isPendingApproval, type SaleView } from '@max/sdk';
+import { isMaxApiError, isPendingApproval, type SaleView } from '@max/sdk';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Redirect, router } from 'expo-router';
@@ -205,6 +205,13 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
   async function confirm(view: SaleView, replace = false) {
     setFailure(null);
     const back = () => setPhase(replace ? { k: 'uncertain', view, lookup: 'not_found' } : { k: 'review', view });
+    // Before Face ID: a held-then-approved sale reaches review without start()'s check.
+    try {
+      assertSaleChain(view.sale.chain, t.chain);
+    } catch (err) {
+      setFailure(err);
+      return back();
+    }
     if (lockPassed(view)) {
       setFailure('The payment window closed. Nothing was signed.');
       return back();
@@ -239,9 +246,13 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
   }
 
   const close = () => {
-    // Closed before any live sale existed for these terms (or it already ended unpaid): next open starts fresh.
+    // Next open starts fresh only when MAX refused outright (no sale was made) or the sale ended
+    // unpaid. Never while the request is in flight, held for approval, or after a network error:
+    // a sale may exist, and the same key must replay it rather than make a second one.
     const v = useSaleDraft.getState().view;
-    if (fingerprint && (!v || shouldRotateSaleKey(v.sale, !!useSaleDraft.getState().signed[v.sale.id]))) useSaleDraft.getState().dropKey(fingerprint);
+    const refused = rawPhase.k === 'start_failed' && isMaxApiError(failure);
+    const dead = !!v && shouldRotateSaleKey(v.sale, !!useSaleDraft.getState().signed[v.sale.id]);
+    if (fingerprint && (refused || dead)) useSaleDraft.getState().dropKey(fingerprint);
     useSaleDraft.getState().close();
     if (router.canGoBack()) router.back();
     else router.replace('/market');
