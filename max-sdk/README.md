@@ -61,9 +61,19 @@ import { buildVerifiedSolanaSaleTransaction } from "@max/sdk/solana";
 
 const max = new MaxClient({ baseUrl: "https://api.max.example" });
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const { listings } = await max.market.search({ q: "yoda", sort: "price_asc" });
-const res = await max.market.buy(listings[0].listingId, { fromAddress: wallet.publicKey.toBase58() });
+let res = await max.market.buy(listings[0].listingId, { fromAddress: wallet.publicKey.toBase58() });
 if (isPendingApproval(res)) throw new Error(`held for approval: ${res.authorizationId}`); // agents only
+
+// Large sales wait in pending_review for MAX's marketplace review and come
+// without instructions. Poll until an admin approves (locked, with
+// instructions; the payment window starts then) or the sale ends.
+while (res.sale.status === "pending_review") {
+  await sleep(5000);
+  res = await max.market.getSale(res.sale.id);
+}
+if (res.sale.status !== "locked" || !res.instructions) throw new Error(`sale is ${res.sale.status}; nothing to pay`);
 
 const { blockhash } = await connection.getLatestBlockhash();
 // Checks the instructions against the sale (exact fee to the treasury, exact remainder
@@ -77,14 +87,17 @@ const signed = await wallet.signTransaction(tx);
 const signature = await connection.sendRawTransaction(signed.serialize());
 
 await max.market.submit(res.sale.id, signature);
+// manual_review is terminal for you: a human at MAX settles it (a payment that
+// doesn't match the sale, or a name that moved on), so stop polling there too.
+const done = ["completed", "expired", "cancelled", "reversed", "manual_review"];
 let view = await max.market.getSale(res.sale.id);
-while (!["completed", "expired", "cancelled", "reversed"].includes(view.sale.status)) {
-  await new Promise((r) => setTimeout(r, 2000));
+while (!done.includes(view.sale.status)) {
+  await sleep(2000);
   view = await max.market.getSale(res.sale.id);
 }
 ```
 
-`assertSaleInstructionsMatch` (called by `buildVerifiedSolanaSaleTransaction`) proves the instructions match the sale: it derives the token accounts from the sale's own addresses, so it does not catch a response that rewrites both. Always pass `expect` with values you trust independently (connected wallet as `buyer`, the accepted listing's `asset` and `priceBaseUnits`, a pinned `treasury`). The raw `buildSolanaSaleTransaction` is unverified. Agents' `buy`, `list`, `updateListing`, `offer`, `acceptOffer` and `payOffer` may return `{ status: "pending_approval", authorizationId, reasons }` instead of throwing; the administrator releases them with `max.agents.approveMarket(authorizationId)`.
+`assertSaleInstructionsMatch` (called by `buildVerifiedSolanaSaleTransaction`) proves the instructions match the sale: it derives the token accounts from the sale's own addresses, so it does not catch a response that rewrites both. Always pass `expect` with values you trust independently (connected wallet as `buyer`, the accepted listing's `asset` and `priceBaseUnits`, a pinned `treasury`). The raw `buildSolanaSaleTransaction` is unverified. Agents' `buy`, `list`, `updateListing`, `acceptOffer` and `payOffer` may return `{ status: "pending_approval", authorizationId, reasons }` instead of throwing; the administrator releases them with `max.agents.approveMarket(authorizationId)`. Offers are never held: an offer spends nothing until it is paid, so the agent policy checks `payOffer` instead. Approvals are API, SDK and MCP only in v1.
 
 ## Sign in with a wallet
 

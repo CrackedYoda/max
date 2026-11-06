@@ -16,10 +16,11 @@ import type {
 /**
  * The name marketplace. Each method is one API route.
  *
- * Methods an agent can call (buy, list, updateListing, offer, acceptOffer, payOffer) may
+ * Methods an agent can call (buy, list, updateListing, acceptOffer, payOffer) may
  * return a `PendingApproval` instead of the result: the agent's policy held
  * the action for its administrator and nothing has happened yet. Narrow with
- * `isPendingApproval(result)`.
+ * `isPendingApproval(result)`. Offers are never held: an offer spends nothing
+ * until it is paid, so the policy checks `payOffer` instead.
  */
 export class MarketApi {
   constructor(private readonly http: HttpClient) {}
@@ -61,6 +62,11 @@ export class MarketApi {
     return this.http.post(`/v1/market/listings/${enc(listingId)}/buy`, { body, retrySafe: true });
   }
 
+  /**
+   * Make an offer on a name, listed or not. Never held for approval (offers
+   * spend nothing until paid); the `MarketResult` type is kept for
+   * compatibility.
+   */
   offer(input: MakeOfferInput): Promise<MarketResult<Offer>> {
     return this.http.post("/v1/market/offers", { body: input });
   }

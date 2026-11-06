@@ -14,7 +14,7 @@ export type MarketOp = "list" | "update_price" | "buy" | "accept" | "pay";
 /** Error codes the marketplace adds (see `MaxApiError.code`). */
 export type MarketErrorCode =
   | "MARKET_DISABLED" | "MARKET_PAUSED" | "NOT_LISTABLE" | "LISTING_NOT_ACTIVE" | "SELF_TRADE"
-  | "MARKET_RESTRICTED" | "ASSET_NOT_ACCEPTED" | "INSUFFICIENT_FUNDS" | "OFFER_LIMIT"
+  | "MARKET_RESTRICTED" | "ASSET_NOT_ACCEPTED" | "INSUFFICIENT_FUNDS" | "OFFER_LIMIT" | "SALE_LIMIT"
   | "OFFER_BELOW_MINIMUM" | "OFFER_UNFUNDED" | "SALE_EXPIRED" | "TX_MISMATCH"
   | "NAME_LOCKED" | "INSUFFICIENT_REGISTRATION_BALANCE" | "PRICE_UNAVAILABLE";
 
