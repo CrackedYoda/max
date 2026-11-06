@@ -1,7 +1,66 @@
 # MAX Marketplace — Design Spec
 
 Date: 2026-11-05
-Status: Agreed in brainstorming, awaiting written-spec review
+Status: Implemented on `feat/marketplace`; updated 2026-11-06 to match what was built
+
+### Changes after implementation
+
+The sections below were updated so the spec matches the code. In short:
+
+1. Agent market policy is `{canSell, minSalePrices: [{chain, asset, amount}]}`;
+   selling in an asset with no minimum goes to `pending_approval` (§4, §8).
+2. A prepared transfer already in flight when a name is sold still pays the
+   old owner; only new prepares are refused (§2, §6).
+3. A finalized transaction that pays toward the sale but does not match goes
+   to `manual_review`; any other mismatch is treated as not found (§5).
+4. The transaction deadline is `greatest(lock_expires_at, submitted_at) +
+   30m`; then the sale expires with no strike (§6).
+5. `GET /v1/agents/:agentId/market-authorizations?decision=`; approvals are
+   API/SDK/MCP only in v1 (§8, §9).
+6. New error codes: `NAME_LISTED`, `OWNER_CHANGED`, `RENAME_PENDING`,
+   `SALE_LIMIT`, plus `MAX_ID_LIMIT_REACHED` at purchase (§9).
+7. Admin routes 404 for non-admins; `GET /v1/admin/market/restrictions`;
+   approve takes an optional reason (§9).
+8. Client env: `NEXT_PUBLIC_MARKET_ASSETS` / `EXPO_PUBLIC_MARKET_ASSETS` as
+   `chain:mint:decimals`, `NEXT_PUBLIC_RPC_SOLANA[_DEVNET]`, and the optional
+   `*_MARKET_TREASURY` pins (§11).
+9. An offer's spend counts when it is paid; offers are never held; new `pay`
+   authorization action; migration `000010` columns (§4, §8).
+10. Paused trading still allows delist, withdraw and decline;
+    `MARKET_DISABLED` is a 404 (§7).
+11. Bodies: accept `{payoutAddress?}` (required when the name has no
+    listing); pay's `idempotencyKey` is optional (§9).
+12. Complete: `max_ids.type` follows the buyer's account type; the
+    destination is set only if the paying wallet is still linked; the
+    seller's listing is sold even for an offer sale; a lapsed offer paid
+    late completes and loses its strike (§6).
+13. Expiry and late payment: an expired sale with a tx expires its offer
+    with no strike; a late tx moves the sale to `confirming` and re-locks
+    the listing; a late payment completes even after a relist at the old
+    price (§6).
+14. Admin and guards: deny declines the offer and reactivates the listing;
+    cancel from `locked` (no tx) or `manual_review`; a tx after a cancel is
+    observed before any `manual_review`; `pending_review` auto-cancels after
+    24h; at most 2 open sales per buyer; a 1h buy cooldown after an unpaid
+    buy-now expiry (§6, §7, §9).
+15. Pre-flight: native ≥ network fee + rent for missing token accounts +
+    the payer's rent-exempt floor; only the buyer's token account balance
+    counts; classic Token program only; the fee payer must be the buyer
+    (§2, §5).
+16. Registration gate: X- and manual-review reserved claims are not gated;
+    only chains with an RPC count; testnets are skipped in production; EVM
+    balances come from a read-only reader (§5).
+17. `MARKET_FEE_BPS` is `0..5000`; `MARKET_HOLD_PERIOD` must be positive;
+    `MARKET_MIN_OFFER` must keep the fee above zero (§10).
+18. SDK: `assertSaleInstructionsMatch(sale, instructions, expect?)` with
+    `SaleExpectations`, `buildSolanaSaleTransaction`,
+    `buildVerifiedSolanaSaleTransaction(view, payer, blockhash, expect?)`
+    and the method names as shipped (§12).
+19. App sale flow is `SaleReview.tsx` + `saleTx.ts`; web cards show no last
+    sale (§11).
+20. A ban blocks buying and offers (`MARKET_RESTRICTED`); public
+    `NOT_LISTABLE` reasons are masked to `unavailable`; the MAX ID cap
+    applies at purchase (§3).
 
 ## 1. Goal
 
@@ -44,10 +103,10 @@ minimum USD balance across the claimant's linked wallets.
 | Assets | Solana USDC only, set by `MARKET_ASSETS`. |
 | Fee | 10% (`MARKET_FEE_BPS=1000`), deducted from the seller. Buyer pays the listed price. |
 | Fee destination | Per-namespace treasury `TREASURY_<NS>`, falling back to `RENAME_TREASURY_<NS>`. |
-| Pre-flight | Before any tx is built: buyer USDC ≥ price; buyer SOL ≥ network fee + rent for any missing token accounts. |
+| Pre-flight | Before any tx is built: the buyer's own token account (classic Token program only) holds ≥ price, since only it is spent from; buyer SOL ≥ network fee + rent for any missing token accounts + the payer's rent-exempt floor. The fee payer must be the buyer. |
 | Registration gate | Sum of stablecoins (USDC, USDT at $1) + native coins (ETH, SOL, POL via price feed) across linked wallets ≥ `REGISTRATION_MIN_BALANCE_USD` (default 100; `0` disables). Checked once at claim. Feed failure or stale price fails closed. |
 | Offers | Bound to one linked wallet that must hold the offer amount + gas, re-checked continuously. |
-| Owner change | Destinations, settlement prefs and profile cleared; buyer's paying wallet set as destination; `resolution_version` bumped; history kept; "owner changed" shown for 30 days. |
+| Owner change | Destinations, settlement prefs and profile cleared; buyer's paying wallet set as destination if still linked to the buyer; `resolution_version` bumped; history kept; "owner changed" shown for 30 days. A prepared transfer already in flight still pays the old owner; only new prepares see the new owner. |
 
 ## 3. Eligibility
 
@@ -60,9 +119,15 @@ A name is **listable** when all hold:
   default 72h, set on claim, rename and purchase).
 - `now() >= max_ids.rename_available_at` (not inside a rename cooldown).
 - No rename request `awaiting_payment`.
-- The owner has no active `ban` in `market_restrictions`.
+- The owner has no active `ban` in `market_restrictions`. A ban also blocks
+  the account from buying and making offers (`MARKET_RESTRICTED`).
 - For agent-owned names: the agent has `market:sell`; listing/accepting
   without policy `market.canSell = true` goes to human approval.
+
+`NOT_LISTABLE` carries a reason code. Anyone but the owner sees moderation
+reasons (`market_banned`, `owner_suspended`) and `payout_wallet_removed` as
+`unavailable`. Buy, offer and accept also enforce the buyer's MAX ID limit
+(10, counting purchases in progress): `MAX_ID_LIMIT_REACHED`.
 
 While a name has an active listing, renames are refused. While a name has an
 open sale (`pending_review`, `locked`, `submitted`, `confirming`), the listing
@@ -166,8 +231,20 @@ reason, created_by, created_at, lifted_at`. Active = `lifted_at is null and
 ### `agent_market_authorizations`
 
 Same shape as `agent_transfer_authorizations`, with `action (buy | offer |
-list | accept)`, nullable `sale_id`, `offer_id`, `listing_id`, `decision`,
+list | accept | pay)`, nullable `sale_id`, `offer_id`, `listing_id`, `decision`,
 `reasons`, `policy_version`, `amount_base_units`, `decided_by`, `decided_at`.
+
+Migration `000010_agent_market_approvals` adds the `pay` action and three
+columns: `payload jsonb` (the full input, so an approval replays the action
+exactly), `failure text` (set when the action or its replay failed; such an
+authorization never counts toward spend) and `finished_at timestamptz`.
+
+### `market_buy_cooldowns` (migration `000011_market_guards`)
+
+`buyer_account_id, listing_id` (primary key), `sale_id`, `until`,
+`created_at`. Written when a buy-now sale expires unpaid. The same migration
+adds partial indexes for stale reviews, open sales per buyer and
+transactions submitted after a cancel.
 
 ### Changes to existing tables
 
@@ -177,9 +254,11 @@ list | accept)`, nullable `sale_id`, `offer_id`, `listing_id`, `decision`,
 - `reserved_names`: insert `('market', 'blocked') on conflict do nothing`. The
   migration fails loudly if a MAX ID named `market` already exists, so an
   operator decides; it never renames silently.
-- `agent_policies.limits` is reused for buy/offer spend; a new
+- `agent_policies.limits` is reused for buy/pay spend; a new
   `market jsonb not null default '{}'` column holds
-  `{ "canSell": bool, "minSalePrice": "<base units>" }`.
+  `{ "canSell": bool, "minSalePrices": [{ "chain", "asset", "amount" }] }`
+  (decimal amounts per chain and asset). Selling in an asset with no
+  minimum goes to `pending_approval`.
 
 ## 5. Components
 
@@ -223,7 +302,10 @@ input.
 same rule as payments), the fee payer and transfer authority is
 `buyer_address`, it moves exactly those two amounts of the snapshot mint to
 the snapshot ATAs, it makes no other transfers of that mint from the buyer, and
-it carries the memo. Anything else is recorded as an event and ignored.
+it carries the memo. A finalized transaction that pays something toward the
+sale but does not match exactly sends the sale to `manual_review` (a human
+sorts out refunds). Any other mismatch is recorded as an event and treated
+as not found until the deadline (§6).
 
 ### Price feed
 
@@ -242,6 +324,11 @@ minimum, return `INSUFFICIENT_REGISTRATION_BALANCE` with
 the agent's own linked wallets. The result is recorded in `audit_logs`
 (amount only, no addresses beyond what the account already owns).
 
+Only chains with an RPC URL count, and testnets are skipped in production.
+EVM balances come from a read-only reader (native balance and ERC-20
+`balanceOf`); there is no EVM settlement. Reserved names claimed through X
+or manual review are not gated.
+
 ## 6. Flows
 
 ### List
@@ -254,8 +341,10 @@ the agent's own linked wallets. The result is recorded in `audit_logs`
 
 ### Buy now
 
-1. Check market on, not paused, listing `active`, name still listable,
-   buyer not banned, self-trade rules (§7), agent policy (§8).
+1. Check market on, not paused, listing `active`, name still listable, the
+   listing's payout address still an active wallet of the seller, buyer not
+   banned, not in a buy cooldown for this listing, under the open-sale cap
+   and the MAX ID limit, self-trade rules (§7), agent policy (§8).
 2. `Quote` + `CheckFunds` for `fromAddress`.
 3. In one DB tx: lock the max_id row, insert the sale snapshot, set the listing to
    `locked`. Status `pending_review` if price > `MARKET_REVIEW_THRESHOLD`,
@@ -275,25 +364,31 @@ buyer then calls `GET /sales/:id` to receive instructions.
    `CheckFunds` on `fromAddress` with a fresh quote. Insert `live`.
 2. Funding worker (every 5m): re-run `CheckFunds` for `live`/`unfunded`
    offers; flip between them. Unfunded offers are hidden from the seller.
-3. Accept: seller (or approved agent) accepts a `live` offer. `CheckFunds`
-   runs again; if it fails, the offer flips to `unfunded` and accept fails. In one DB
-   tx: offer → `accepted`, other live/unfunded offers on the name →
-   `superseded`, listing (if any) → `locked`, sale snapshot inserted with
-   `lock_expires_at = now + MARKET_OFFER_PAY_WINDOW` (24h).
+3. Accept: seller (or approved agent) accepts a `live` offer. The payout is
+   the listing's payout address when the name is listed (re-checked as still
+   an active wallet of the seller), otherwise `payoutAddress` from the body.
+   `CheckFunds` runs again; if it fails, the offer flips to `unfunded` and
+   accept fails. In one DB tx: offer → `accepted`, other live/unfunded offers
+   on the name → `superseded`, listing (if any) → `locked`, sale snapshot
+   inserted with `lock_expires_at = now + MARKET_OFFER_PAY_WINDOW` (24h).
 4. Pay: buyer calls `POST /offers/:id/pay`, gets fresh quote and instructions
-   (re-runs `CheckFunds`). Then submit as buy-now.
+   (re-runs `CheckFunds`). This is where an agent's offer spend is checked
+   (`pay` authorization). Then submit as buy-now.
 5. Lock expires unpaid → sale `expired`, offer `lapsed`, strike recorded,
    listing back to `active`.
 
 ### Complete (one DB transaction)
 
-1. Sale `confirming` → `completed`, `completed_at`.
-2. Listing → `sold`; offer (if any) → `completed`; all other live offers on
-   the name → `superseded`.
+1. Sale `submitted`/`confirming` → `completed`, `completed_at`.
+2. The name's live listing → `sold`, whether the sale came from it or from
+   an accepted offer; offer (if any) → `completed` (a lapsed offer paid late
+   completes too and its strike is removed); all other live offers on the
+   name → `superseded`.
 3. `maxids.TransferOwnership`:
-   - `owner_account_id = buyer`
+   - `owner_account_id = buyer`; `max_ids.type` follows the buyer's account
+     type
    - delete `max_id_destinations`, then insert the buyer's paying wallet for
-     its namespace
+     its namespace, only if it is still an active wallet of the buyer
    - delete `settlement_preferences`
    - clear `display_name`, `description`, `avatar_url`
    - `resolution_version += 1`
@@ -302,17 +397,42 @@ buyer then calls `GET /sales/:id` to receive instructions.
    - insert `max_id_ownership_events (transferred, sale_id)`
 4. `audit_logs` entry.
 
+If the transfer is refused (the seller no longer owns the name, or a rename
+is pending) the paid sale goes to `manual_review` instead.
+
+A payment to the name prepared before the sale completed (an in-flight
+prepared transfer) still pays the old owner's resolved address; only
+prepares after completion resolve to the buyer.
+
 `max_id_history` and `name_quarantine` rows are untouched.
 
 ### Expiry and late payment
 
 - Worker expires `locked` sales past `lock_expires_at` with no submitted tx.
+  An unpaid offer sale lapses its offer with a strike; an unpaid buy-now
+  sale starts a 1h cooldown before that buyer may buy the same listing again
+  (`SALE_LIMIT`, `details.reason: buy_cooldown`).
 - A sale with a submitted tx is kept until the tx is final or provably failed,
-  even past the lock.
-- If a valid matching tx is found for an `expired` sale and the name has no
-  other open sale and is still owned by the seller, the sale completes. If the
-  name has moved on, the sale goes to `manual_review` for an admin refund from
-  the treasury and a refund from the seller.
+  even past the lock. A tx not found, or final but not a payment for the
+  sale, expires the sale at `greatest(lock_expires_at, submitted_at) + 30m`,
+  with no strike; an accepted offer of a sale that expired with a tx expires
+  too, with no strike. A tx that failed on chain expires the sale at once.
+- A tx submitted for an `expired`, unpaid sale is a late payment. If the
+  seller still owns the name and no other sale is open on it, the sale moves
+  to `confirming` and re-locks the name's active listing (even one relisted
+  at the old price since), then completes on a match. If the name has moved
+  on, the sale goes to `manual_review` for an admin refund from the treasury
+  and a refund from the seller.
+- A tx submitted for a sale an admin cancelled is taken only if the sale was
+  ever locked (a sale denied in review refuses with `SALE_EXPIRED`). The sale
+  stays `cancelled` with the tx recorded; the worker observes it and moves
+  it to `manual_review` (event `tx_after_cancel`) only if the finalized tx
+  paid toward the sale. A tx that fails, pays nothing toward the sale, or is
+  not found by the deadline leaves it `cancelled`
+  (`tx_after_cancel_unverified`).
+- A sale left in `pending_review` for 24h is cancelled by the worker
+  ("review timed out", no strike): the offer is declined and the listing
+  returns to active.
 
 ### Public read model
 
@@ -320,12 +440,21 @@ buyer then calls `GET /sales/:id` to receive instructions.
   (only when within the last 30 days).
 - `GET /v1/market/names/:name` returns listing, live offer count, last sale
   price and date, `listable` with reason.
+- `GET /v1/market/listings` hides listings whose name is not active or whose
+  owner is suspended or banned.
 
 ## 7. Anti-fraud
 
-- `MARKET_ENABLED=false`: market routes return 404, worker idle.
-- `MARKET_TRADING_PAUSED=true`: reads work; new listings, offers, accepts and
-  buys return `MARKET_PAUSED`; open sales still complete.
+- `MARKET_ENABLED=false`: market routes return 404 `MARKET_DISABLED`, worker
+  idle.
+- `MARKET_TRADING_PAUSED=true`: reads work; new listings, price changes,
+  offers, accepts and buys return `MARKET_PAUSED`. Delist, withdraw offer and
+  decline offer still work (closing never starts a trade), and pay, submit
+  and open sales still complete.
+- **Listing-lock griefing:** a buyer has at most 2 open sales
+  (`pending_review`, `locked`, `submitted`, `confirming`), checked under a
+  per-buyer lock (`SALE_LIMIT`, `details.reason: open_sales`); a 1h buy
+  cooldown follows an unpaid buy-now expiry; reviews time out after 24h.
 - **Self-trade / wash-trade:** refuse if buyer and seller accounts are the
   same, share any wallet ever linked to both (`wallets` history, any status),
   the paying wallet was ever linked to the seller, or one is an agent
@@ -349,14 +478,19 @@ New scopes in `agents.AllScopes`:
 
 Policy:
 
-- **Buy / offer / pay** spend is evaluated against `agent_policies.limits` for
-  (chain, asset) like transfers (`maxPerTransfer`, `maxPer24h`, where offers count
-  at accept time, not make time). Within limits → `auto_approved`; otherwise
-  `pending_approval` until the administrator approves.
-- **List / accept** need `market.canSell = true` and price ≥
-  `market.minSalePrice`; otherwise `pending_approval`.
-- Approvals reuse `/v1/agent-approvals/...` (new market variants) and show in
-  the agents dashboard.
+- **Buy / pay** spend is evaluated against `agent_policies.limits` for
+  (chain, asset) like transfers (`maxPerTransfer`, `maxPer24h`). An offer
+  spends nothing until it is paid, so making one is never held; paying an
+  accepted offer is the `pay` action. Within limits → `auto_approved`;
+  otherwise `pending_approval` until the administrator approves.
+- **List / update price / accept** need `market.canSell = true` and a price
+  ≥ the `market.minSalePrices` entry for that chain and asset; no entry →
+  `pending_approval`.
+- A held action keeps its full input; the administrator's approval replays
+  it exactly, and a failed action never counts toward spend.
+- Approvals use `POST /v1/agent-approvals/market/:authorizationId/approve|deny`
+  and `GET /v1/agents/:agentId/market-authorizations?decision=`. In v1 they
+  are API, SDK and MCP only; the web and app dashboards do not show them.
 
 Human market routes are not session-only.
 
@@ -378,26 +512,38 @@ Authenticated (session or agent key with scope):
 | `POST /v1/market/listings/:id/buy` `{fromAddress, idempotencyKey}` | market:buy |
 | `POST /v1/market/offers` `{name, amount, chain, asset, fromAddress, expiresAt?}` | market:buy |
 | `DELETE /v1/market/offers/:id` | market:buy |
-| `POST /v1/market/offers/:id/accept` | market:sell |
+| `POST /v1/market/offers/:id/accept` `{payoutAddress?}` (required when the name has no listing) | market:sell |
 | `POST /v1/market/offers/:id/decline` `{note?}` | market:sell |
-| `POST /v1/market/offers/:id/pay` `{idempotencyKey}` | market:buy |
+| `POST /v1/market/offers/:id/pay` `{idempotencyKey?}` | market:buy |
 | `POST /v1/market/sales/:id/submit` `{txHash}` | market:buy |
 | `GET /v1/market/sales/:id` | market:read |
 | `GET /v1/market/me` | market:read |
 
-Agent approvals (session, administrator):
+Agent approvals (session, administrator; API/SDK/MCP only in v1):
 
+- `GET /v1/agents/:agentId/market-authorizations?decision=`
 - `POST /v1/agent-approvals/market/:authorizationId/approve`
 - `POST /v1/agent-approvals/market/:authorizationId/deny`
 
-Admin (`/v1/admin/market`, `ADMIN_ACCOUNT_IDS`):
+Admin (`/v1/admin/market`, `ADMIN_ACCOUNT_IDS`; every route answers 404 to
+anyone else):
 
 - `GET listings`, `GET offers`, `GET sales` (filters: status, account, name)
 - `POST listings/:id/delist {reason}`
-- `POST sales/:id/approve`, `POST sales/:id/deny {reason}`, `POST sales/:id/cancel {reason}`
+- `POST sales/:id/approve {reason?}`: `pending_review` → `locked`; the lock
+  window starts now.
+- `POST sales/:id/deny {reason}`: `pending_review` → `cancelled`; the offer is
+  declined ("denied by admin: …", no strike) and the listing returns to
+  active.
+- `POST sales/:id/cancel {reason}`: from `locked` with no tx, or
+  `manual_review`; the listing returns to active and an accepted offer
+  expires with no strike. Cancelling a `manual_review` offer sale whose offer
+  had lapsed removes that offer's strike. Refunds are off-platform. A tx
+  submitted afterwards is handled as in §6.
 - `POST sales/:id/reverse {reason}`: ownership back to the seller via
   `TransferOwnership`; money is handled manually.
-- `POST restrictions {accountId, kind, until?, reason}`, `DELETE restrictions/:id`
+- `GET restrictions?accountId=&all=`, `POST restrictions {accountId, kind,
+  until?, reason}`, `DELETE restrictions/:id`
 
 ### Errors
 
@@ -406,7 +552,10 @@ Admin (`/v1/admin/market`, `ADMIN_ACCOUNT_IDS`):
 `ASSET_NOT_ACCEPTED`, `INSUFFICIENT_FUNDS` (with `{needAsset, haveAsset,
 needNative, haveNative}`), `OFFER_LIMIT`, `OFFER_BELOW_MINIMUM`,
 `OFFER_UNFUNDED`, `SALE_EXPIRED`, `TX_MISMATCH`, `PENDING_APPROVAL`,
-`INSUFFICIENT_REGISTRATION_BALANCE`, `PRICE_UNAVAILABLE`.
+`INSUFFICIENT_REGISTRATION_BALANCE`, `PRICE_UNAVAILABLE`, `NAME_LISTED`
+(rename of a listed name), `OWNER_CHANGED` and `RENAME_PENDING` (reverse or
+transfer refused), `SALE_LIMIT` (409; `details.reason` is `open_sales` or
+`buy_cooldown`), and `MAX_ID_LIMIT_REACHED` at purchase.
 
 ## 10. Configuration
 
@@ -415,30 +564,33 @@ needNative, haveNative}`), `OFFER_LIMIT`, `OFFER_BELOW_MINIMUM`,
 | `MARKET_ENABLED` | `false` | master switch |
 | `MARKET_TRADING_PAUSED` | `false` | read-only mode |
 | `MARKET_ASSETS` | — | `chain:asset` list, e.g. `solana-devnet:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`; verified tokens only |
-| `MARKET_FEE_BPS` | `1000` | fee from seller proceeds |
-| `MARKET_HOLD_PERIOD` | `72h` | after claim / rename / purchase |
+| `MARKET_FEE_BPS` | `1000` | fee from seller proceeds, `0..5000` |
+| `MARKET_HOLD_PERIOD` | `72h` | after claim / rename / purchase; must be positive |
 | `MARKET_BUY_LOCK` | `15m` | buy-now window |
 | `MARKET_OFFER_PAY_WINDOW` | `24h` | after accept |
 | `MARKET_REVIEW_THRESHOLD` | — (off) | decimal amount; sales above need admin review |
-| `MARKET_MIN_OFFER` | `1` | decimal amount; also the minimum listing price, so the fee is never zero |
+| `MARKET_MIN_OFFER` | `1` | decimal amount; also the minimum listing price. With a fee it must be ≥ `ceil(10000 / MARKET_FEE_BPS)` base units of every asset, so the fee is never zero |
 | `TREASURY_EVM`, `TREASURY_SOLANA` | fall back to `RENAME_TREASURY_*` | fee recipients |
 | `REGISTRATION_MIN_BALANCE_USD` | `100` | `0` disables the gate |
 | `PRICE_FEED_URL` | CoinGecko simple price | |
 | `PRICE_FEED_TTL` / `PRICE_FEED_MAX_AGE` | `60s` / `5m` | |
 
 Startup fails if `MARKET_ENABLED=true` and an asset in `MARKET_ASSETS` has no
-treasury for its namespace or no RPC configured.
+treasury for its namespace or no RPC configured, and whenever the fee, hold
+period or minimum offer break the rules above.
 
 ## 11. UI surfaces
 
 ### Web (`max-frontend`)
 
 - `/market`: search, price filter, sort, listing cards (handle, price, listed
-  ago, last sale). Read-only without a wallet.
+  ago; no last sale). Read-only without a wallet.
 - `/[handle]`: market panel. When listed: price, **Buy now**, **Make offer**.
   When not listed: **Make offer**. Banner "Owner changed on <date>" for 30 days.
 - Buy/pay modal: quote breakdown, funds check, lock countdown, sign with the
-  connected Solana wallet, submit, poll to completion.
+  connected Solana wallet, submit, poll to completion. After an uncertain
+  wallet error it looks for the payment and offers a new signature only once
+  the first attempt's blockhash has expired.
 - `/dashboard` → Market: my listings (create with "you receive 90%",
   eligibility reason, edit, delist), offers received (accept/decline), offers
   made (withdraw, pay, unfunded warning), sales history.
@@ -452,9 +604,20 @@ treasury for its namespace or no RPC configured.
 - `market/[name].tsx`: detail, Buy now, Make offer.
 - **Sell** action on ID cards → `sell.tsx`.
 - `market/offers.tsx`: inbox (received / made).
-- Payment through `review.tsx` and `services/chain.ts`, extended to sign a
-  multi-instruction Solana transaction.
+- Payment through the sale variant of the review sheet,
+  `components/market/SaleReview.tsx`, with `services/saleTx.ts` (instructions
+  and pure helpers) and `services/chain.ts` signing the multi-instruction
+  Solana transaction. Signed bytes and their blockhash are kept: a retry
+  re-sends the same bytes, and a new signature waits for the first to expire.
 - Claim screen shows the registration-gate message.
+
+Client configuration: `NEXT_PUBLIC_MARKET_ASSETS` / `EXPO_PUBLIC_MARKET_ASSETS`
+(`chain:mint:decimals`, mirroring `MARKET_ASSETS`; the decimals pin how a
+shown price becomes base units, cross-checked on chain);
+`NEXT_PUBLIC_RPC_SOLANA` / `NEXT_PUBLIC_RPC_SOLANA_DEVNET` (and the app's
+`EXPO_PUBLIC_RPC_*`); optional `NEXT_PUBLIC_MARKET_TREASURY` /
+`EXPO_PUBLIC_MARKET_TREASURY`, which pin the treasury passed to
+`assertSaleInstructionsMatch` as `expect.treasury`.
 
 ## 12. SDK and MCP
 
@@ -464,15 +627,21 @@ treasury for its namespace or no RPC configured.
 
 - `search`, `getName`, `eligibility`
 - `list`, `updateListing`, `delist`
-- `buy`, `offer`, `withdrawOffer`, `acceptOffer`, `declineOffer`, `payOffer`
+- `buy`, `offer`, `withdrawOffer`, `acceptOffer(offerId, {payoutAddress?})`,
+  `declineOffer`, `payOffer(offerId, {idempotencyKey?})`
 - `submit`, `getSale`, `inbox`
-- `assertSaleInstructionsMatch(sale, instructions)`: throws unless the
-  instructions pay exactly the snapshot fee and seller amounts (dependency-free,
-  in the main entry).
-- `buildSolanaSaleTransaction(instructions, recentBlockhash)` →
-  `VersionedTransaction`, exported from the `@max/sdk/solana` subpath with
-  `@solana/web3.js` and `@solana/spl-token` as optional peer dependencies, so
-  the main SDK stays dependency-free.
+- `client.agents.marketAuthorizations(agentId, {decision?})`,
+  `approveMarket(authorizationId)`, `denyMarket(authorizationId)`
+- `assertSaleInstructionsMatch(sale, instructions, expect?)`: throws unless the
+  instructions pay exactly the snapshot fee and seller amounts; `expect:
+  SaleExpectations` pins `buyer`, `asset`, `priceBaseUnits` and `treasury`
+  you trust independently (dependency-free, in the main entry).
+- `buildSolanaSaleTransaction(instructions, payer, recentBlockhash)` →
+  `VersionedTransaction` (unverified), and
+  `buildVerifiedSolanaSaleTransaction(view, payer, recentBlockhash, expect?)`,
+  which asserts first. Both are exported from the `@max/sdk/solana` subpath
+  with `@solana/web3.js` and `@solana/spl-token` as optional peer
+  dependencies, so the main SDK stays dependency-free.
 
 Plus types, new error codes, `ownerChangedAt` on resolve/profile types, and a
 README section.
@@ -481,8 +650,9 @@ README section.
 
 `market_search`, `market_get_listing`, `market_list_name`, `market_delist`,
 `market_make_offer`, `market_accept_offer`, `market_buy`, `market_get_sale`.
-Tools that may need approval return `{status: "pending_approval",
-authorizationId}`.
+Tools that may need approval (`market_list_name`, `market_accept_offer`,
+`market_buy`) return `{status: "pending_approval", authorizationId}`;
+`market_make_offer` is never held.
 
 ## 13. Testing
 

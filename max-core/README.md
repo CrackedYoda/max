@@ -258,14 +258,14 @@ in one Solana transaction that they sign themselves. MAX never holds funds or si
 | Variable | Default | Meaning |
 |---|---|---|
 | `MARKET_ENABLED` | `false` | Master switch for the routes and the worker. |
-| `MARKET_TRADING_PAUSED` | `false` | Read-only mode. New listings, offers, accepts and buys return `MARKET_PAUSED`; pay, submit and open sales still finish. |
+| `MARKET_TRADING_PAUSED` | `false` | Trading pause. New listings, price changes, offers, accepts and buys return `MARKET_PAUSED`. Delist, withdraw offer and decline offer still work (closing never starts a trade), and pay, submit and open sales still finish. |
 | `MARKET_ASSETS` | none | `chain:asset` list of verified Solana tokens, for example `solana-devnet:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. |
-| `MARKET_FEE_BPS` | `1000` | The fee taken from the seller's proceeds: `price * bps / 10000`, rounded down. |
-| `MARKET_HOLD_PERIOD` | `72h` | How long a name can't be listed after it is claimed, renamed or bought. |
+| `MARKET_FEE_BPS` | `1000` | The fee taken from the seller's proceeds: `price * bps / 10000`, rounded down. `0` to `5000`. |
+| `MARKET_HOLD_PERIOD` | `72h` | How long a name can't be listed after it is claimed, renamed or bought. Must be positive. |
 | `MARKET_BUY_LOCK` | `15m` | The buy-now payment window. |
 | `MARKET_OFFER_PAY_WINDOW` | `24h` | The payment window after an offer is accepted. |
 | `MARKET_REVIEW_THRESHOLD` | off | A decimal amount. Sales above it wait in `pending_review` for an admin. |
-| `MARKET_MIN_OFFER` | `1` | A decimal amount. It is the minimum offer and also the minimum listing price. |
+| `MARKET_MIN_OFFER` | `1` | A decimal amount. It is the minimum offer and also the minimum listing price. When the fee is on it must be at least `ceil(10000 / MARKET_FEE_BPS)` base units of every asset, so the fee is never 0. |
 | `TREASURY_SOLANA`, `TREASURY_EVM` | `RENAME_TREASURY_*` | Where the fee is paid. |
 | `REGISTRATION_MIN_BALANCE_USD` | `100` | The balance needed to claim a name. `0` turns the gate off and never calls the price feed. |
 | `PRICE_FEED_URL`, `PRICE_FEED_TTL`, `PRICE_FEED_MAX_AGE` | CoinGecko, `60s`, `5m` | The registration gate's price feed. A stale or failed feed fails closed with `PRICE_UNAVAILABLE`. |
@@ -280,7 +280,7 @@ Routes (session, or an agent key with the scope shown):
 | GET | `/v1/market/names/:name` | Public: listing, live offer count, last sale, listable |
 | GET | `/v1/market/eligibility/:maxId` | `market:read` |
 | POST / PATCH / DELETE | `/v1/market/listings[/:id]` | `market:sell` |
-| POST | `/v1/market/listings/:id/buy` `{fromAddress, idempotencyKey}` | `market:buy`: returns the sale, quote and instructions |
+| POST | `/v1/market/listings/:id/buy` `{fromAddress, idempotencyKey}` | `market:buy`: returns the sale, quote and instructions. A buyer has at most 2 open sales (`SALE_LIMIT`, `details.reason: open_sales`) and, after letting a buy-now sale expire unpaid, waits 1h before buying that listing again (`SALE_LIMIT`, `buy_cooldown`). Buys, offers and accepts count the buyer's MAX IDs plus purchases in progress against the 10-ID limit (`MAX_ID_LIMIT_REACHED`). |
 | POST / DELETE | `/v1/market/offers[/:id]` | `market:buy` |
 | POST | `/v1/market/offers/:id/accept`, `/decline` | `market:sell` |
 | POST | `/v1/market/offers/:id/pay`, `/v1/market/sales/:id/submit {txHash}` | `market:buy` |
@@ -304,15 +304,18 @@ Admin routes are under `/v1/admin/market`. They need a session whose account is 
 **Worker.** When the market is enabled, `market.RunWorker` ticks every 15s. Each tick does the following:
 - Observes submitted sales and completes exact payments in one transaction (ownership transfer, listing sold, other offers superseded).
 - Moves mismatched payments to `manual_review`.
-- Expires unpaid locks. An unpaid accepted offer lapses and records a strike; 3 strikes in 30 days bring a 30-day offer suspension.
+- Judges a transaction submitted for a sale an admin cancelled after it was locked: the sale stays `cancelled` with the tx recorded, and moves to `manual_review` only once the finalized tx paid toward it. A sale denied in review takes no transaction.
+- Cancels sales left in `pending_review` for 24h ("review timed out", no strike; the offer is declined and the listing released).
+- Expires unpaid locks. An unpaid accepted offer lapses and records a strike; 3 strikes in 30 days bring a 30-day offer suspension. An unpaid buy-now sale starts the buyer's 1h cooldown on that listing.
 - Expires a submitted sale whose transaction is still not found, or still isn't a payment for the sale, 30m after the later of the lock end and the submission.
 - Late payments arrive through `submit` on an expired sale: they complete the sale if the seller still owns the name, and go to `manual_review` otherwise.
 - Rechecks offer funding every 5m and expires listings and offers.
 
 Codes: `MARKET_DISABLED`, `MARKET_PAUSED`, `NOT_LISTABLE` (`details.reason`), `LISTING_NOT_ACTIVE`, `NAME_LOCKED`,
-`SELF_TRADE`, `MARKET_RESTRICTED`, `ASSET_NOT_ACCEPTED`, `INSUFFICIENT_FUNDS`, `OFFER_LIMIT`, `OFFER_BELOW_MINIMUM`,
+`SELF_TRADE`, `MARKET_RESTRICTED`, `ASSET_NOT_ACCEPTED`, `INSUFFICIENT_FUNDS`, `OFFER_LIMIT`, `SALE_LIMIT`, `OFFER_BELOW_MINIMUM`,
 `OFFER_UNFUNDED`, `SALE_EXPIRED`, `TX_MISMATCH`, `PENDING_APPROVAL` (202), `INSUFFICIENT_REGISTRATION_BALANCE`,
-`PRICE_UNAVAILABLE`.
+`PRICE_UNAVAILABLE`, plus `NAME_LISTED`, `OWNER_CHANGED`, `RENAME_PENDING` and `MAX_ID_LIMIT_REACHED`. Public
+`NOT_LISTABLE` reasons hide moderation and wallet changes as `unavailable` (`payout_wallet_removed` is shown only to the seller).
 
 ### Error codes worth handling in UI
 
