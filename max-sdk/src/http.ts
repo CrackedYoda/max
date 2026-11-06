@@ -135,7 +135,8 @@ export class HttpClient {
     }
     if (!res.ok || body?.error) {
       const e = body?.error ?? {};
-      throw new MaxApiError(e.code ?? "HTTP_ERROR", e.message ?? `HTTP ${res.status}`, res.status, requestId);
+      const details = e.details && typeof e.details === "object" ? (e.details as Record<string, unknown>) : undefined;
+      throw new MaxApiError(e.code ?? "HTTP_ERROR", e.message ?? `HTTP ${res.status}`, res.status, requestId, details);
     }
     return body.data as T;
   }

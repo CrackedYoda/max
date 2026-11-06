@@ -106,6 +106,14 @@ describe("market routes", () => {
     await assert.rejects(c.market.buy(ID, { fromAddress: "b" }), (e: unknown) => e instanceof MaxApiError && e.code === "LISTING_NOT_ACTIVE" && e.status === 409);
   });
 
+  test("error details are kept", async () => {
+    const details = { needAsset: "250000000", haveAsset: "1000000", needNative: "5000", haveNative: "0" };
+    const { c } = mock(422, { error: { code: "INSUFFICIENT_FUNDS", message: "short", details } });
+    await assert.rejects(c.market.buy(ID, { fromAddress: "b" }), (e: unknown) => e instanceof MaxApiError && e.code === "INSUFFICIENT_FUNDS" && (e.details as Record<string, unknown>)?.needAsset === "250000000");
+    const { c: c2 } = mock(409, { error: { code: "LISTING_NOT_ACTIVE", message: "nope" } });
+    await assert.rejects(c2.market.buy(ID, { fromAddress: "b" }), (e: unknown) => e instanceof MaxApiError && e.details === undefined);
+  });
+
   test("path segments are encoded", async () => {
     const { c, calls } = mock(200, {});
     await c.market.getName("a/b");
