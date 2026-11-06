@@ -7,12 +7,13 @@ import { useState } from "react";
 import { Header } from "@/components/Header";
 import { IdCard, IdCardSkeleton } from "@/components/identity/IdCard";
 import { PaymentRow } from "@/components/payments/PaymentRow";
+import { MarketInbox } from "@/components/market/MarketInbox";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { Banner, Card, SectionHeader } from "@/components/ui/Blocks";
 import { Segmented } from "@/components/ui/Fields";
 import { errorCode, errorMessage } from "@/error/messages";
-import { useMyIds, useRemoveWallet, useTransfers, useWallets } from "@/hooks/queries";
+import { useIsMarketAdmin, useMyIds, useRemoveWallet, useTransfers, useWallets } from "@/hooks/queries";
 import { toast } from "@/store/flows";
 import { formatDate, namespaceLabel, shortAddress } from "@/utils/format";
 
@@ -30,6 +31,7 @@ export default function DashboardPage() {
 function Dashboard() {
   const ids = useMyIds();
   const wallets = useWallets();
+  const admin = useIsMarketAdmin();
 
   return (
     <main className="mx-auto flex max-w-[1200px] flex-col gap-14 px-6 pb-24 pt-14">
@@ -64,6 +66,10 @@ function Dashboard() {
         </div>
       </section>
 
+      {ids.data && wallets.data ? (
+        <MarketInbox ids={ids.data} wallets={wallets.data}
+          adminLink={admin.isAdmin ? <Link href="/dashboard/admin/market" className="text-sm font-medium">Market admin</Link> : null} />
+      ) : null}
       <WalletsSection wallets={wallets.data ?? []} loading={wallets.isLoading} />
       <ActivitySection />
     </main>
