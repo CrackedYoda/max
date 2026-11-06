@@ -139,6 +139,8 @@ type SaleState = {
   signed: Record<string, SignedTx>;
   setTarget(t: SaleTarget): void;
   keyFor(fingerprint: string): string;
+  /** Forget a key so the next attempt makes a new sale (the old one ended unpaid). */
+  dropKey(fingerprint: string): void;
   setView(v: SaleView | null): void;
   setSigned(saleId: string, s: SignedTx | null): void;
   /** Closes the flow; keeps signatures and keys. */
@@ -158,6 +160,12 @@ export const useSaleDraft = create<SaleState>((set, get) => ({
     set((s) => ({ keys: { ...s.keys, [fingerprint]: key } }));
     return key;
   },
+  dropKey: (fingerprint) =>
+    set((s) => {
+      const keys = { ...s.keys };
+      delete keys[fingerprint];
+      return { keys };
+    }),
   setView: (view) => set({ view }),
   setSigned: (saleId, signed) =>
     set((s) => {

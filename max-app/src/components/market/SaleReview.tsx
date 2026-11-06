@@ -17,6 +17,7 @@ import { marketErrorMessage } from '@/error/market';
 import { fetchTrustedDecimals, SALE_TERMINAL, useChains, useInvalidateMarket, useSale, useTrustedDecimals } from '@/hooks/queries';
 import { useCountdown } from '@/hooks/useCountdown';
 import { broadcastSale, ChainError, findSalePayment, hasRpc, signSale } from '@/services/chain';
+import { assertSaleChain, shouldRotateSaleKey } from '@/services/saleTx';
 import { stepUp } from '@/services/session';
 import * as vault from '@/services/vault';
 import { useSaleDraft, type SaleTarget } from '@/store/flows';
@@ -101,7 +102,8 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     setPhase({ k: 'uncertain', view, lookup: 'checking' });
     const known = useSaleDraft.getState().signed[view.sale.id]?.hash;
     try {
-      const sig = await findSalePayment(view.sale.chain, t.fromAddress, view.sale.id, known);
+      assertSaleChain(view.sale.chain, t.chain);
+      const sig = await findSalePayment(t.chain, t.fromAddress, view.sale.id, known);
       if (sig) await record(view, sig);
       else setPhase({ k: 'uncertain', view, lookup: 'not_found' });
     } catch {
@@ -112,12 +114,22 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
   function advance(view: SaleView) {
     useSaleDraft.getState().setView(view);
     const s = view.sale;
+    rotateIfDead(view);
     // Signed on this phone earlier but never recorded: it may be on chain.
     if (!s.txHash && useSaleDraft.getState().signed[s.id] && !['completed', 'cancelled', 'reversed'].includes(s.status)) void lookForPayment(view);
     else setPhase(phaseFor(view));
   }
 
-  async function start() {
+  // The idempotency key for this target: one per buy (listing + payer) or offer payment.
+  const fingerprint = t.kind === 'listing' ? JSON.stringify(['buy', t.id, t.fromAddress]) : t.kind === 'offer' ? JSON.stringify(['pay', t.id]) : null;
+
+  /** A replayed or watched sale that ended unpaid must not be replayed again: next try gets a new sale. */
+  function rotateIfDead(view: SaleView) {
+    const d = useSaleDraft.getState();
+    if (fingerprint && shouldRotateSaleKey(view.sale, !!d.signed[view.sale.id])) d.dropKey(fingerprint);
+  }
+
+  async function start(retried = false) {
     const gen = getGeneration();
     setFailure(null);
     setPhase({ k: 'starting' });
@@ -128,9 +140,9 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
       const d = useSaleDraft.getState();
       const res =
         t.kind === 'listing'
-          ? await max().market.buy(t.id, { fromAddress: t.fromAddress, idempotencyKey: d.keyFor(JSON.stringify(['buy', t.id, t.fromAddress])) })
+          ? await max().market.buy(t.id, { fromAddress: t.fromAddress, idempotencyKey: d.keyFor(fingerprint!) })
           : t.kind === 'offer'
-            ? await max().market.payOffer(t.id, { idempotencyKey: d.keyFor(JSON.stringify(['pay', t.id])) })
+            ? await max().market.payOffer(t.id, { idempotencyKey: d.keyFor(fingerprint!) })
             : await max().market.getSale(t.id);
       if (gen !== getGeneration()) return;
       if (isPendingApproval(res)) {
@@ -138,6 +150,12 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
         return;
       }
       invalidate();
+      // A buy replayed from an earlier, now dead sale: rotate the key and lock afresh once.
+      if (t.kind === 'listing' && !retried && shouldRotateSaleKey(res.sale, !!useSaleDraft.getState().signed[res.sale.id])) {
+        useSaleDraft.getState().dropKey(fingerprint!);
+        return start(true);
+      }
+      if (res.sale.chain !== t.chain) throw new Error('This sale is on a different network than the one you chose. Nothing was signed.');
       advance(res);
     } catch (err) {
       if (gen !== getGeneration()) return;
@@ -155,7 +173,10 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
 
   const terminal = !!sale.data && SALE_TERMINAL.includes(sale.data.sale.status);
   useEffect(() => {
-    if (terminal) invalidate();
+    if (!terminal) return;
+    invalidate();
+    if (sale.data) rotateIfDead(sale.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal, invalidate]);
 
   async function sendSigned(view: SaleView, retryingUncertain = false) {
@@ -163,7 +184,8 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     if (!s) return;
     setPhase({ k: 'working', view, step: 'broadcast' });
     try {
-      await broadcastSale(view.sale.chain, s);
+      assertSaleChain(view.sale.chain, t.chain);
+      await broadcastSale(t.chain, s);
     } catch (err) {
       setFailure(err);
       // A signature whose fate is unknown is never dropped, whatever the retry says.
@@ -205,7 +227,7 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
     if (!useSaleDraft.getState().signed[view.sale.id]) {
       try {
         setPhase({ k: 'working', view, step: 'sign' });
-        const signed = await signSale(view, { buyer: t.fromAddress, asset: t.asset, priceBaseUnits });
+        const signed = await signSale(view, t.chain, { buyer: t.fromAddress, asset: t.asset, priceBaseUnits });
         useSaleDraft.getState().setSigned(view.sale.id, signed);
       } catch (err) {
         setFailure(err);
@@ -217,6 +239,9 @@ function SaleFlow({ target: t }: { target: SaleTarget }) {
   }
 
   const close = () => {
+    // Closed before any live sale existed for these terms (or it already ended unpaid): next open starts fresh.
+    const v = useSaleDraft.getState().view;
+    if (fingerprint && (!v || shouldRotateSaleKey(v.sale, !!useSaleDraft.getState().signed[v.sale.id]))) useSaleDraft.getState().dropKey(fingerprint);
     useSaleDraft.getState().close();
     if (router.canGoBack()) router.back();
     else router.replace('/market');

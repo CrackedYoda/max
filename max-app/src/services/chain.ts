@@ -20,7 +20,7 @@ import {
 
 import { getEnv, USDC } from '@/config/env';
 import type { EvmKey, SolanaKey } from '@/services/keys';
-import { matchSaleSignature, saleInstructions } from '@/services/saleTx';
+import { assertSaleChain, matchSaleSignature, saleInstructions } from '@/services/saleTx';
 import * as vault from '@/services/vault';
 import type { SignedTx } from '@/store/flows';
 
@@ -253,14 +253,16 @@ export async function mintDecimals(chainKey: string, mint: string): Promise<numb
  * nothing is signed. Not broadcast here: the caller keeps the bytes so a retry
  * re-sends the same transaction.
  */
-export async function signSale(view: SaleView, expect: Required<Pick<SaleExpectations, 'buyer' | 'asset' | 'priceBaseUnits'>>): Promise<SignedTx> {
+export async function signSale(view: SaleView, chainKey: string, expect: Required<Pick<SaleExpectations, 'buyer' | 'asset' | 'priceBaseUnits'>>): Promise<SignedTx> {
+  // `chainKey` is the tapped listing/offer's chain: the RPC is chosen by it, never by the sale.
+  assertSaleChain(view.sale.chain, chainKey);
   assertSaleInstructionsMatch(view.sale, view.instructions, expect);
   const key = vault.keyFor('solana', expect.buyer);
   if (!key || key.namespace !== 'solana') throw new ChainError('The paying account isn’t on this phone.');
   const payer = key.keypair.publicKey;
   const tx = new Transaction();
   tx.add(...saleInstructions(view.instructions?.solana, payer));
-  tx.recentBlockhash = (await solConnForKey(view.sale.chain).getLatestBlockhash('confirmed')).blockhash;
+  tx.recentBlockhash = (await solConnForKey(chainKey).getLatestBlockhash('confirmed')).blockhash;
   tx.feePayer = payer;
   tx.sign(key.keypair);
   const sig = tx.signature;

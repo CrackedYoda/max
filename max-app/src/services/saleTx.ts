@@ -66,6 +66,21 @@ export function saleInstructions(list: SolanaIx[] | undefined, payer: PublicKey)
   });
 }
 
+/**
+ * Whether an idempotency key that produced `sale` must be rotated: the sale
+ * ended unpaid (expired / cancelled, no transaction) and this phone holds no
+ * signature for it. max-core replays the sale for a reused key, so keeping the
+ * key would return the dead sale forever.
+ */
+export function shouldRotateSaleKey(sale: { status: string; txHash?: string }, signedHere: boolean): boolean {
+  return !sale.txHash && !signedHere && (sale.status === 'expired' || sale.status === 'cancelled');
+}
+
+/** The chain a sale must settle on is the one the user tapped, never the server's say-so. */
+export function assertSaleChain(saleChain: string, expected: string): void {
+  if (saleChain !== expected) throw new Error('This sale is on a different network than the one you chose, so nothing was signed or sent.');
+}
+
 /** The memo every sale payment carries. */
 export const saleMemo = (saleId: string) => `max:sale:${saleId}`;
 
