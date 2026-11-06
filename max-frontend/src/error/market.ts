@@ -15,6 +15,7 @@ const LISTABLE_REASONS: Record<string, string> = {
   rename_pending: "A rename is waiting for its fee. Finish or let it expire first.",
   market_banned: "This account can’t use the marketplace.",
   unavailable: "This name isn’t available on the market right now.",
+  payout_wallet_removed: "The listing’s payout wallet is no longer linked to your account. Delist and list again with a linked wallet.",
 };
 
 export function listableReason(reason: string | undefined, dates?: { listableAt?: string; renameAvailableAt?: string }): string {
