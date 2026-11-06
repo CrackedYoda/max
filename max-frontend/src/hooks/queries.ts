@@ -5,6 +5,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 
 import { max } from "@/api/client";
 import { keys } from "@/api/keys";
+import { getEnv } from "@/config/env";
 import { mintDecimals } from "@/services/market";
 import { useSession } from "@/store/session";
 
@@ -202,14 +203,29 @@ export function useMarketName(name: string | null) {
 }
 
 /** Token decimals straight from the chain (not from MAX). */
-export function useMintDecimals(chain: string | undefined, mint: string | undefined, known?: number | null) {
+export function useMintDecimals(chain: string | undefined, mint: string | undefined) {
   return useQuery({
     queryKey: keys.mintDecimals(chain ?? "", mint ?? ""),
     queryFn: () => mintDecimals(chain!, mint!),
-    enabled: !!chain && !!mint && known == null,
+    enabled: !!chain && !!mint,
     staleTime: Infinity,
     gcTime: Infinity,
   });
+}
+
+/**
+ * Token decimals from trusted sources only: the env pin for a configured
+ * market asset, cross-checked against the mint on chain, or the chain alone.
+ * Never inferred from API fields. `error` is set when the two disagree.
+ */
+export function useTrustedDecimals(chain: string | undefined, mint: string | undefined): { decimals: number | null; error: string | null; loading: boolean } {
+  const pinned = getEnv().marketAssets.find((a) => a.chain === chain && a.asset === mint)?.decimals;
+  const onChain = useMintDecimals(chain, mint);
+  if (pinned != null && onChain.data != null && onChain.data !== pinned) {
+    return { decimals: null, error: "This token’s decimals on chain don’t match MAX’s configuration, so nothing can be signed.", loading: false };
+  }
+  const decimals = pinned ?? onChain.data ?? null;
+  return { decimals, error: null, loading: decimals == null && onChain.isLoading };
 }
 
 export function useMarketInbox() {

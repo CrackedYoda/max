@@ -3,8 +3,12 @@ import { z } from "zod";
 const schema = z.object({
   apiUrl: z.url(),
   rpc: z.record(z.string(), z.url()),
-  /** `chain:asset` pairs offers can be made in when a name has no listing (mirrors max-core MARKET_ASSETS). */
-  marketAssets: z.array(z.object({ chain: z.string().min(1), asset: z.string().min(1) })),
+  /**
+   * `chain:asset[:decimals]` entries mirroring max-core MARKET_ASSETS. Offers on
+   * unlisted names use the first; `decimals` pins the token's decimals so a
+   * price is never converted with decimals that came from the API.
+   */
+  marketAssets: z.array(z.object({ chain: z.string().min(1), asset: z.string().min(1), decimals: z.number().int().min(0).max(30).optional() })),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -35,8 +39,8 @@ export function getEnv(): Env {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((pair) => {
-      const i = pair.indexOf(":");
-      return i > 0 ? { chain: pair.slice(0, i), asset: pair.slice(i + 1) } : { chain: "", asset: "" };
+      const [chain = "", asset = "", dec] = pair.split(":");
+      return { chain, asset, decimals: dec && /^\d+$/.test(dec) ? Number(dec) : undefined };
     })
     .filter((a) => a.chain && a.asset);
   cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc, marketAssets });

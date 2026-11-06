@@ -70,7 +70,16 @@ export function MarketInbox({ ids, wallets, adminLink }: { ids: MaxId[]; wallets
           <Panel title="Sales">
             {data.sales.length ? data.sales.map((s) => (
               <SaleRow key={s.id} sale={s} bought={mine.has(s.buyerAddress)}
-                onPay={() => setPay({ kind: "sale", saleId: s.id, handle: s.handle ?? "", chain: s.chain, asset: s.asset, symbol: s.symbol, price: s.price, priceBaseUnits: s.priceBaseUnits })} />
+                onPay={() => {
+                  // Pin to what the buyer agreed to before the sale existed (their offer)
+                  // when we have it; otherwise to the sale's displayed price, converted with
+                  // trusted decimals and checked against the sale's own base units.
+                  const o = s.offerId ? data.offersMade.find((x) => x.id === s.offerId) : undefined;
+                  setPay({
+                    kind: "sale", saleId: s.id, handle: s.handle ?? "", chain: o?.chain ?? s.chain, asset: o?.asset ?? s.asset, symbol: o?.symbol ?? s.symbol,
+                    price: o?.amount ?? s.price, priceBaseUnits: o?.amountBaseUnits ?? s.priceBaseUnits,
+                  });
+                }} />
             )) : <Empty>No sales yet.</Empty>}
           </Panel>
         </div>

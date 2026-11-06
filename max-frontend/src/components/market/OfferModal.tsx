@@ -6,7 +6,7 @@ import { useState } from "react";
 
 import { max } from "@/api/client";
 import { marketErrorMessage } from "@/error/market";
-import { useInvalidateMarket, useMintDecimals, useWallets } from "@/hooks/queries";
+import { useInvalidateMarket, useTrustedDecimals, useWallets } from "@/hooks/queries";
 import { toast } from "@/store/flows";
 import { useSession } from "@/store/session";
 import { displayDecimal, toBaseUnits } from "@/utils/money";
@@ -29,7 +29,7 @@ export function OfferModal({ handle, asset, listPrice, onClose }: { handle: stri
   const wallets = useWallets();
   const invalidate = useInvalidateMarket();
   const native = useNative(asset.chain);
-  const decimals = useMintDecimals(asset.chain, asset.asset);
+  const trusted = useTrustedDecimals(asset.chain, asset.asset);
   const payers = walletsFor(wallets.data, asset.chain);
   const [amount, setAmount] = useState("");
   const [from, setFrom] = useState("");
@@ -37,8 +37,8 @@ export function OfferModal({ handle, asset, listPrice, onClose }: { handle: stri
   const [failure, setFailure] = useState<unknown>(null);
   const [pending, setPending] = useState(false);
   const fromAddress = from || payers[0]?.address || "";
-  const amountOk = /^\d+(\.\d+)?$/.test(amount.trim()) && (decimals.data == null || (toBaseUnits(amount, decimals.data) ?? BigInt(0)) > BigInt(0));
-  const units = { decimals: decimals.data, symbol: asset.symbol, nativeSymbol: native.symbol, nativeDecimals: native.decimals, amount: amount.trim() };
+  const amountOk = /^\d+(\.\d+)?$/.test(amount.trim()) && (trusted.decimals == null || (toBaseUnits(amount, trusted.decimals) ?? BigInt(0)) > BigInt(0));
+  const units = { decimals: trusted.decimals, symbol: asset.symbol, nativeSymbol: native.symbol, nativeDecimals: native.decimals, amount: amount.trim() };
   // Formatted at render so late-arriving token decimals still apply.
   const error = failure == null ? null : marketErrorMessage(failure, units);
   const setError = setFailure;

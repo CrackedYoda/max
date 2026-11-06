@@ -45,7 +45,7 @@ src/error/          error-code → copy map, ErrorBoundary
 src/validation/     zod schemas mirroring API rules
 ```
 
-Marketplace env: `NEXT_PUBLIC_RPC_SOLANA_DEVNET` / `NEXT_PUBLIC_RPC_SOLANA` (blockhash and mint decimals for signing), and `NEXT_PUBLIC_MARKET_ASSETS` (`chain:mint`, comma-separated, mirrors max-core `MARKET_ASSETS`) for offers on names with no listing or sale history.
+Marketplace env: `NEXT_PUBLIC_RPC_SOLANA_DEVNET` / `NEXT_PUBLIC_RPC_SOLANA` (blockhash and mint decimals for signing), and `NEXT_PUBLIC_MARKET_ASSETS` (`chain:mint:decimals`, comma-separated, mirrors max-core `MARKET_ASSETS`, e.g. `solana-devnet:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:6`). The decimals pin how a shown price becomes base units before signing (cross-checked against the mint on chain); the first entry is also the asset for offers on names with no listing or sale history.
 
 Top-level route names (`agents`, `verify`, `rename`, `dashboard`, …) are reserved by `max-core` migration 000007 so no handle is shadowed by a page.
 

@@ -53,3 +53,18 @@ export function decimalsFrom(price: string, priceBaseUnits: string): number | nu
   }
   return null;
 }
+
+/**
+ * The base units to pin a sale to: the price the user saw, converted with
+ * decimals from a trusted source (env pin or the chain), never from the API.
+ * If the API also sent base units for that price and they disagree, the
+ * response is inconsistent and nothing may be signed.
+ */
+export function pinnedPriceBase(shownPrice: string, trustedDecimals: number, serverBase?: string): { base: string } | { error: string } {
+  const base = toBaseUnits(shownPrice, trustedDecimals);
+  if (base === null || base <= BigInt(0)) return { error: "The price shown isn’t a valid amount for this token, so nothing can be signed." };
+  if (serverBase !== undefined && serverBase !== base.toString()) {
+    return { error: "The amount MAX sent doesn’t match the price shown, so nothing was signed. Reload and try again." };
+  }
+  return { base: base.toString() };
+}

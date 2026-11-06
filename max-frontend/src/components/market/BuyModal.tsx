@@ -6,11 +6,11 @@ import { useEffect, useState } from "react";
 
 import { max } from "@/api/client";
 import { marketErrorMessage } from "@/error/market";
-import { SALE_TERMINAL, useInvalidateMarket, useMintDecimals, useSale, useWallets } from "@/hooks/queries";
-import { signSale } from "@/services/market";
+import { SALE_TERMINAL, useInvalidateMarket, useSale, useTrustedDecimals, useWallets } from "@/hooks/queries";
+import { findSaleSignature, MaybeSentError, signSale } from "@/services/market";
 import { useSession } from "@/store/session";
 import { shortAddress } from "@/utils/format";
-import { decimalsFrom, displayDecimal, toBaseUnits } from "@/utils/money";
+import { displayDecimal, pinnedPriceBase } from "@/utils/money";
 
 import { Handle } from "../identity/Handle";
 import { Button, ButtonLink, Spinner } from "../ui/Button";
@@ -24,13 +24,15 @@ import { connectLinkedSolana, SaleStatusPill, useCountdown, useIdempotencyKey, u
 /**
  * What the user clicked. These are the values the transaction is checked
  * against before signing, so they come from the listing/offer shown, never
- * from the sale MAX returns.
+ * from the sale MAX returns. `price` is the decimal amount shown to the user;
+ * it is converted with trusted decimals (env pin / chain), and
+ * `priceBaseUnits`, when the API sent one, must agree with that conversion.
  */
 type Terms = { handle: string; chain: string; asset: string; symbol: string; price: string; priceBaseUnits?: string };
 export type PayTarget =
   | (Terms & { kind: "listing"; listingId: string })
   | (Terms & { kind: "offer"; offerId: string; fromAddress: string; priceBaseUnits: string })
-  | (Terms & { kind: "sale"; saleId: string; priceBaseUnits: string });
+  | (Terms & { kind: "sale"; saleId: string });
 
 type Phase =
   | { k: "intro" }
@@ -38,6 +40,8 @@ type Phase =
   | { k: "review"; view: SaleView }
   | { k: "held"; saleId: string }
   | { k: "record_failed"; view: SaleView; txHash: string; error: string }
+  /** The wallet errored after signing began: the payment may be on chain. Never offer a plain re-sign. */
+  | { k: "uncertain"; view: SaleView; lookup: "checking" | "not_found" | "failed" }
   | { k: "watching"; saleId: string };
 
 const STEP: Record<"connect" | "lock" | "sign" | "record", string> = {
@@ -58,10 +62,10 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
   // The raw error, formatted at render so late-arriving token decimals still apply.
   const [failure, setFailure] = useState<unknown>(null);
 
-  const known = target.priceBaseUnits ? decimalsFrom(target.price, target.priceBaseUnits) : null;
-  const mint = useMintDecimals(target.chain, target.asset, known);
-  const decimals = known ?? mint.data ?? null;
-  const trustedBase = target.priceBaseUnits ?? (decimals != null ? toBaseUnits(target.price, decimals)?.toString() : undefined);
+  const trusted = useTrustedDecimals(target.chain, target.asset);
+  const decimals = trusted.decimals;
+  const pin = decimals != null ? pinnedPriceBase(target.price, decimals, target.priceBaseUnits) : null;
+  const [confirmedRetry, setConfirmedRetry] = useState(false);
   const units = { decimals, symbol: target.symbol, nativeSymbol: native.symbol, nativeDecimals: native.decimals, amount: target.price };
   const error = failure == null ? null : typeof failure === "string" ? failure : marketErrorMessage(failure, units);
   const setError = setFailure;
@@ -120,19 +124,38 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
 
   async function pay(view: SaleView) {
     setError(null);
-    if (!trustedBase) {
-      setError("Couldn’t read this token’s decimals from the network, so the price can’t be checked. Nothing was signed.");
-      return;
-    }
+    setConfirmedRetry(false);
+    if (trusted.error) return setError(trusted.error);
+    if (!pin) return setError("Couldn’t read this token’s decimals from the network, so the price can’t be checked. Nothing was signed.");
+    if ("error" in pin) return setError(pin.error);
     try {
       setPhase({ k: "working", step: "connect", view });
       const w = await connectLinkedSolana(wallets.data ?? [], view.sale.buyerAddress);
       setPhase({ k: "working", step: "sign", view });
-      const sig = await signSale(view, w, { asset: target.asset, priceBaseUnits: trustedBase });
+      const sig = await signSale(view, w, { asset: target.asset, priceBaseUnits: pin.base });
       await record(view, sig);
     } catch (err) {
+      if (err instanceof MaybeSentError) {
+        setError(err);
+        await lookForPayment(view);
+        return;
+      }
       setPhase({ k: "review", view });
       setError(err);
+    }
+  }
+
+  /** After an uncertain wallet error: find the sale's tx on chain before anyone signs again. */
+  async function lookForPayment(view: SaleView) {
+    setPhase({ k: "uncertain", view, lookup: "checking" });
+    try {
+      const sig = await findSaleSignature(view);
+      if (sig) {
+        setError(null);
+        await record(view, sig);
+      } else setPhase({ k: "uncertain", view, lookup: "not_found" });
+    } catch {
+      setPhase({ k: "uncertain", view, lookup: "failed" });
     }
   }
 
@@ -181,6 +204,29 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
             <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Checking every few seconds…</p>
             {sale.data && sale.data.sale.status !== "pending_review" && sale.data.sale.status !== "locked" ? <SaleOutcome view={sale.data} handle={target.handle} /> : null}
           </>
+        ) : phase.k === "uncertain" ? (
+          <>
+            <Banner tone="warn" title="Your payment may already have been sent">
+              {error ?? "Phantom reported an error after signing started."} Don’t pay again until you’ve checked.
+            </Banner>
+            {phase.lookup === "checking" ? (
+              <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Looking for this payment in {shortAddress(phase.view.sale.buyerAddress)}’s recent transactions…</p>
+            ) : (
+              <>
+                <p className="m-0 text-[15px] leading-relaxed">
+                  {phase.lookup === "failed"
+                    ? "We couldn’t reach the network to check. Check your wallet before retrying: open Phantom’s activity and look for this payment."
+                    : `No payment for this sale shows up yet among ${shortAddress(phase.view.sale.buyerAddress)}’s last 20 transactions. A payment can take a minute to appear: check Phantom’s activity, then check again.`}
+                </p>
+                <Button variant="secondary" onClick={() => lookForPayment(phase.view)}>Check again</Button>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
+                  I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
+                </label>
+                <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view)}>Sign again</Button>
+              </>
+            )}
+          </>
         ) : phase.k === "record_failed" ? (
           <>
             <Banner tone="warn" title="Your payment was sent, but MAX hasn’t recorded it yet.">
@@ -225,9 +271,9 @@ function Review({ view, target, nativeSymbol, error, working, onPay }: {
         </p>
       ) : null}
       <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-4 rounded-xl bg-ivory p-4">
-        <ReviewRow label="Price" value={`${displayDecimal(q?.price ?? s.price)} ${sym}`} />
+        <ReviewRow label="Price" value={`${displayDecimal(target.price)} ${sym}`} />
         <ReviewRow label="Network fee" value={q ? `≈ ${q.networkFee} ${nativeSymbol}` : "—"} />
-        <ReviewRow label="Total you pay" value={q ? `${displayDecimal(q.totalAsset)} ${sym} + ${q.totalNative} ${nativeSymbol}` : `${displayDecimal(s.price)} ${sym}`} />
+        <ReviewRow label="Total you pay" value={q ? `${displayDecimal(target.price)} ${sym} + ${q.totalNative} ${nativeSymbol}` : `${displayDecimal(target.price)} ${sym}`} />
         <ReviewRow label="Seller receives" value={`${displayDecimal(q?.sellerReceives ?? s.sellerReceives)} ${sym}`} />
       </dl>
       <p className="m-0 text-[13px] leading-relaxed text-muted">
@@ -235,7 +281,7 @@ function Review({ view, target, nativeSymbol, error, working, onPay }: {
         The transaction is checked against this price before Phantom opens.
       </p>
       {error ? <Banner tone="danger">{error}</Banner> : null}
-      <Button onClick={onPay} disabled={expired} loading={!!working}>{working ?? `Sign and pay ${displayDecimal(q?.totalAsset ?? s.price)} ${sym}`}</Button>
+      <Button onClick={onPay} disabled={expired} loading={!!working}>{working ?? `Sign and pay ${displayDecimal(target.price)} ${sym}`}</Button>
     </>
   );
 }
