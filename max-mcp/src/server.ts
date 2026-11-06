@@ -235,8 +235,9 @@ export function createMaxMcpServer(opts: MaxMcpOptions): McpServer {
     {
       title: "Make an offer on a MAX ID",
       description:
-        "Make an offer on a MAX ID, paid later from the agent's configured wallet. Subject to the agent's spend policy. " +
-        "The owner may accept; paying an accepted offer is a separate step. " + PENDING_NOTE,
+        "Make an offer on a MAX ID, paid later from the agent's configured wallet. An offer spends nothing until it is paid, " +
+        "so it is never held for approval; the agent's spend policy applies when an accepted offer is paid, which is a separate step " +
+        "that may be held. The owner may accept or decline.",
       inputSchema: {
         name: z.string().min(1).max(64).describe("MAX ID, e.g. max.yoda"),
         amount: z.string().max(40).regex(/^\d*\.?\d+$/).describe('Decimal amount, e.g. "50"'),

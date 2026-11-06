@@ -17,7 +17,7 @@ MCP server for **MAX**: lets an AI agent look up MAX IDs and **propose** payment
 | `market_get_listing` | Public market view of one name | no |
 | `market_list_name` | List a name for sale (needs the admin's `canSell` policy; may be held for approval) | yes |
 | `market_delist` | Remove a listing | yes |
-| `market_make_offer` | Offer on a name, from the operator's wallet (may be held) | yes |
+| `market_make_offer` | Offer on a name, from the operator's wallet. Never held: the spend policy applies when an accepted offer is paid | yes |
 | `market_accept_offer` | Accept an offer on a name the agent owns (may be held) | yes |
 | `market_buy` | Lock a listing; returns sale, quote and instructions. Never signs: verify with `assertSaleInstructionsMatch`, then sign with your own signer (may be held) | yes |
 | `market_get_sale` | Status of a sale | yes |
