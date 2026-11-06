@@ -174,7 +174,8 @@ const (
 	RestrictionOfferSuspension = "offer_suspension"
 )
 
-// Restriction is an active market_restrictions row.
+// Restriction is a market_restrictions row. Active means not lifted and
+// not past Until.
 type Restriction struct {
 	ID, AccountID uuid.UUID
 	Kind          string
@@ -182,6 +183,7 @@ type Restriction struct {
 	Reason        string
 	CreatedBy     *uuid.UUID
 	CreatedAt     time.Time
+	LiftedAt      *time.Time
 }
 
 type NewRestriction struct {
@@ -313,6 +315,30 @@ type Repository interface {
 	UnlapsedOffers(ctx context.Context, limit int) ([]uuid.UUID, error)
 	// ExpireListings cancels active listings past expires_at (reason "expired").
 	ExpireListings(ctx context.Context, cutoff time.Time, limit int) (int, error)
+
+	// Admin (Task 11, spec §9). Every write records audit_logs with actor,
+	// and market_sale_events when a sale is involved; sale writes take the
+	// max_ids lock first and re-check the sale's status under it.
+	AdminListings(ctx context.Context, f AdminFilter) ([]Listing, error)
+	AdminOffers(ctx context.Context, f AdminFilter) ([]Offer, error)
+	AdminSales(ctx context.Context, f AdminFilter) ([]Sale, error)
+	AdminRestrictions(ctx context.Context, account *uuid.UUID, includeInactive bool, limit int) ([]Restriction, error)
+	// AdminDelist moves an active listing to admin_delisted with reason.
+	AdminDelist(ctx context.Context, actor, listingID uuid.UUID, reason string) (Listing, error)
+	// AdminApproveSale moves a pending_review sale to locked until lockExpiresAt.
+	AdminApproveSale(ctx context.Context, actor, saleID uuid.UUID, lockExpiresAt time.Time, reason string) (Sale, error)
+	// AdminDenySale cancels a pending_review sale, declines its offer and
+	// releases the listing.
+	AdminDenySale(ctx context.Context, actor, saleID uuid.UUID, reason string) (Sale, error)
+	// AdminCancelSale cancels a locked unpaid or manual_review sale, expires
+	// its accepted offer and releases the listing.
+	AdminCancelSale(ctx context.Context, actor, saleID uuid.UUID, reason string) (Sale, error)
+	// AdminReverseSale transfers a completed sale's name from the buyer back
+	// to the seller and marks the sale reversed.
+	AdminReverseSale(ctx context.Context, actor, saleID uuid.UUID, reason string, hold time.Duration) (Sale, error)
+	AdminRestrict(ctx context.Context, actor, account uuid.UUID, in NewRestriction) (Restriction, error)
+	// LiftRestriction sets lifted_at on an active restriction.
+	LiftRestriction(ctx context.Context, actor, id uuid.UUID, reason string) (Restriction, error)
 }
 
 // Agent policy actions (agent_market_authorizations.action).

@@ -163,6 +163,20 @@ func NewRouter(d Deps) *gin.Engine {
 	ops.POST("/reserved-claims/:id/revoke", d.Verifications.AdminRevokeClaim)
 	ops.POST("/verifications/:id/revoke", d.Verifications.AdminRevokeVerification)
 
+	// Marketplace admin (spec §9 Admin); 404 while the market is disabled.
+	mops := ops.Group("/market", d.Market.Gate())
+	mops.GET("/listings", d.Market.AdminListings)
+	mops.GET("/offers", d.Market.AdminOffers)
+	mops.GET("/sales", d.Market.AdminSales)
+	mops.POST("/listings/:id/delist", d.Market.AdminDelist)
+	mops.POST("/sales/:id/approve", d.Market.AdminApproveSale)
+	mops.POST("/sales/:id/deny", d.Market.AdminDenySale)
+	mops.POST("/sales/:id/cancel", d.Market.AdminCancelSale)
+	mops.POST("/sales/:id/reverse", d.Market.AdminReverseSale)
+	mops.GET("/restrictions", d.Market.AdminRestrictions)
+	mops.POST("/restrictions", d.Market.AdminRestrict)
+	mops.DELETE("/restrictions/:id", d.Market.AdminLiftRestriction)
+
 	// Marketplace (spec §9). Every route 404s while the market is disabled;
 	// Trading() refuses new activity while paused, but reads and submit stay
 	// open so in-flight sales can finish.

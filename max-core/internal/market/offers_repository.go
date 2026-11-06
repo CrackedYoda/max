@@ -418,5 +418,5 @@ func toOffer(o generated.MarketOffer, name string) Offer {
 }
 
 func toRestriction(r generated.MarketRestriction) Restriction {
-	return Restriction{ID: r.ID, AccountID: r.AccountID, Kind: r.Kind, Until: r.Until, Reason: r.Reason, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt}
+	return Restriction{ID: r.ID, AccountID: r.AccountID, Kind: r.Kind, Until: r.Until, Reason: r.Reason, CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, LiftedAt: r.LiftedAt}
 }

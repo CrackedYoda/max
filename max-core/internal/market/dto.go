@@ -457,3 +457,74 @@ func summarize(a AgentAuthorization, idStr func(*uuid.UUID) *string) agentAction
 	}
 	return sum
 }
+
+// Admin views (spec §9 Admin) show full data, party accounts included.
+
+type adminReasonRequest struct {
+	Reason string `json:"reason" binding:"max=500"`
+}
+
+type adminRestrictionRequest struct {
+	AccountID string     `json:"accountId" binding:"required,uuid"`
+	Kind      string     `json:"kind" binding:"required,oneof=ban offer_suspension"`
+	Until     *time.Time `json:"until"`
+	Reason    string     `json:"reason" binding:"required,max=500"`
+}
+
+type adminListingResponse struct {
+	listingResponse
+	SellerAccountID string `json:"sellerAccountId"`
+}
+
+type adminOfferResponse struct {
+	offerResponse
+	BuyerAccountID string    `json:"buyerAccountId"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type adminSaleResponse struct {
+	saleResponse
+	SellerAccountID  string     `json:"sellerAccountId"`
+	BuyerAccountID   string     `json:"buyerAccountId"`
+	QuotedNetworkFee string     `json:"quotedNetworkFee"`
+	NextCheckAt      *time.Time `json:"nextCheckAt,omitempty"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+}
+
+type restrictionResponse struct {
+	ID        string     `json:"id"`
+	AccountID string     `json:"accountId"`
+	Kind      string     `json:"kind"`
+	Until     *time.Time `json:"until,omitempty"`
+	Reason    string     `json:"reason"`
+	CreatedBy string     `json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	LiftedAt  *time.Time `json:"liftedAt,omitempty"`
+	Active    bool       `json:"active"`
+}
+
+func toAdminListingResponse(l Listing) adminListingResponse {
+	return adminListingResponse{listingResponse: toListingResponse(l), SellerAccountID: l.SellerAccountID.String()}
+}
+
+func toAdminOfferResponse(o Offer) adminOfferResponse {
+	return adminOfferResponse{offerResponse: toOfferResponse(o), BuyerAccountID: o.BuyerAccountID.String(), UpdatedAt: o.UpdatedAt}
+}
+
+func toAdminSaleResponse(s Sale) adminSaleResponse {
+	return adminSaleResponse{
+		saleResponse: toSaleResponse(s), SellerAccountID: s.SellerAccountID.String(), BuyerAccountID: s.BuyerAccountID.String(),
+		QuotedNetworkFee: s.QuotedNetworkFee, NextCheckAt: s.NextCheckAt, UpdatedAt: s.UpdatedAt,
+	}
+}
+
+func toRestrictionResponse(r Restriction, now time.Time) restrictionResponse {
+	out := restrictionResponse{
+		ID: r.ID.String(), AccountID: r.AccountID.String(), Kind: r.Kind, Until: r.Until, Reason: r.Reason,
+		CreatedAt: r.CreatedAt, LiftedAt: r.LiftedAt, Active: restrictionActive(r, now),
+	}
+	if r.CreatedBy != nil {
+		out.CreatedBy = r.CreatedBy.String()
+	}
+	return out
+}

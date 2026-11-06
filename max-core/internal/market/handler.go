@@ -1,6 +1,7 @@
 package market
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -371,4 +372,186 @@ func (h *Handler) DenyAgentAction(c *gin.Context) {
 		return
 	}
 	shared.OK(c, agentActionResponse{Authorization: toAgentAuthorizationResponse(a)})
+}
+
+// Admin routes (spec §9 Admin): /v1/admin/market/..., session-only and
+// limited to ADMIN_ACCOUNT_IDS by the router.
+
+// adminFilter reads ?status=&accountId=&name=&limit= (limit at most 100).
+func adminFilter(c *gin.Context) (AdminFilter, bool) {
+	f := AdminFilter{Status: c.Query("status"), Name: c.Query("name")}
+	if raw := c.Query("accountId"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			fail(c, shared.ErrValidation.WithMessage("accountId must be a UUID"))
+			return f, false
+		}
+		f.AccountID = &id
+	}
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			fail(c, shared.ErrValidation.WithMessage("limit must be between 1 and 100"))
+			return f, false
+		}
+		f.Limit = n
+	}
+	return f, true
+}
+
+func (h *Handler) AdminListings(c *gin.Context) {
+	f, ok := adminFilter(c)
+	if !ok {
+		return
+	}
+	ls, err := h.svc.AdminListings(c.Request.Context(), f)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	out := make([]adminListingResponse, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, toAdminListingResponse(l))
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
+}
+
+func (h *Handler) AdminOffers(c *gin.Context) {
+	f, ok := adminFilter(c)
+	if !ok {
+		return
+	}
+	os, err := h.svc.AdminOffers(c.Request.Context(), f)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	out := make([]adminOfferResponse, 0, len(os))
+	for _, o := range os {
+		out = append(out, toAdminOfferResponse(o))
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
+}
+
+func (h *Handler) AdminSales(c *gin.Context) {
+	f, ok := adminFilter(c)
+	if !ok {
+		return
+	}
+	ss, err := h.svc.AdminSales(c.Request.Context(), f)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	out := make([]adminSaleResponse, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, toAdminSaleResponse(s))
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
+}
+
+// adminReason binds an optional {reason} body; the service decides whether
+// the reason is required.
+func adminReason(c *gin.Context) (string, bool) {
+	var req adminReasonRequest
+	if !bindOptional(c, &req) {
+		return "", false
+	}
+	return req.Reason, true
+}
+
+func (h *Handler) AdminDelist(c *gin.Context) {
+	id, ok := param(c, "id", ErrListingNotFound)
+	if !ok {
+		return
+	}
+	reason, ok := adminReason(c)
+	if !ok {
+		return
+	}
+	l, err := h.svc.AdminDelist(c.Request.Context(), shared.MustPrincipal(c).AccountID, id, reason)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	shared.OK(c, toAdminListingResponse(l))
+}
+
+// adminSaleAction serves POST /v1/admin/market/sales/:id/{approve,deny,cancel,reverse}.
+func (h *Handler) adminSaleAction(c *gin.Context, fn func(ctx context.Context, actor, saleID uuid.UUID, reason string) (Sale, error)) {
+	id, ok := param(c, "id", ErrSaleNotFound)
+	if !ok {
+		return
+	}
+	reason, ok := adminReason(c)
+	if !ok {
+		return
+	}
+	s, err := fn(c.Request.Context(), shared.MustPrincipal(c).AccountID, id, reason)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	shared.OK(c, toAdminSaleResponse(s))
+}
+
+func (h *Handler) AdminApproveSale(c *gin.Context) { h.adminSaleAction(c, h.svc.AdminApprove) }
+func (h *Handler) AdminDenySale(c *gin.Context)    { h.adminSaleAction(c, h.svc.AdminDeny) }
+func (h *Handler) AdminCancelSale(c *gin.Context)  { h.adminSaleAction(c, h.svc.AdminCancel) }
+func (h *Handler) AdminReverseSale(c *gin.Context) { h.adminSaleAction(c, h.svc.AdminReverse) }
+
+func (h *Handler) AdminRestrict(c *gin.Context) {
+	var req adminRestrictionRequest
+	if err := shared.BindJSON(c, &req); err != nil {
+		fail(c, err)
+		return
+	}
+	r, err := h.svc.AdminRestrict(c.Request.Context(), shared.MustPrincipal(c).AccountID, uuid.MustParse(req.AccountID),
+		NewRestriction{Kind: req.Kind, Until: req.Until, Reason: req.Reason})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	shared.Created(c, toRestrictionResponse(r, h.svc.now()))
+}
+
+func (h *Handler) AdminLiftRestriction(c *gin.Context) {
+	id, ok := param(c, "id", ErrRestrictionNotFound)
+	if !ok {
+		return
+	}
+	reason, ok := adminReason(c)
+	if !ok {
+		return
+	}
+	r, err := h.svc.AdminLiftRestriction(c.Request.Context(), shared.MustPrincipal(c).AccountID, id, reason)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	shared.OK(c, toRestrictionResponse(r, h.svc.now()))
+}
+
+// AdminRestrictions is GET /v1/admin/market/restrictions?accountId=&all=true
+// (active only unless all=true), so an admin can find a restriction to lift.
+func (h *Handler) AdminRestrictions(c *gin.Context) {
+	f, ok := adminFilter(c)
+	if !ok {
+		return
+	}
+	rs, err := h.svc.AdminRestrictions(c.Request.Context(), f.AccountID, c.Query("all") == "true", f.Limit)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	now := h.svc.now()
+	out := make([]restrictionResponse, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, toRestrictionResponse(r, now))
+	}
+	c.Header("Cache-Control", "no-store")
+	shared.OK(c, out)
 }

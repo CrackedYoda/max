@@ -53,6 +53,9 @@ type fakeRepo struct {
 	events   []fakeEvent
 	expiries map[uuid.UUID]Expiry
 	leases   int
+
+	// Admin (admin_test.go).
+	admin fakeAdminState
 }
 
 func newFakeRepo() *fakeRepo {
@@ -70,7 +73,9 @@ func (f *fakeRepo) link(account uuid.UUID, addr string) {
 }
 
 func (f *fakeRepo) NameFacts(context.Context, uuid.UUID) (NameFacts, uuid.UUID, error) {
-	return f.facts, f.owner, nil
+	facts := f.facts
+	facts.OwnerBanned = facts.OwnerBanned || f.restricted[f.owner]
+	return facts, f.owner, nil
 }
 func (f *fakeRepo) PartyFacts(_ context.Context, buyer, seller uuid.UUID, _ string) (PartyFacts, error) {
 	p := f.party

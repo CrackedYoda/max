@@ -479,3 +479,67 @@ WHERE m.agent_account_id = sqlc.arg(agent_account_id)
   AND (sqlc.narg(decision)::text IS NULL OR m.decision = sqlc.narg(decision))
 ORDER BY m.created_at DESC
 LIMIT sqlc.arg(row_limit);
+
+-- Admin (Task 11, spec §9 Admin). Admin views show full data.
+
+-- name: AdminListMarketListings :many
+SELECT sqlc.embed(l), m.canonical_name
+FROM market_listings l
+JOIN max_ids m ON m.id = l.max_id
+WHERE (sqlc.narg(status)::text IS NULL OR l.status = sqlc.narg(status)::text)
+  AND (sqlc.narg(account_id)::uuid IS NULL OR l.seller_account_id = sqlc.narg(account_id)::uuid)
+  AND (sqlc.narg(name)::text IS NULL OR m.canonical_name = sqlc.narg(name)::text)
+ORDER BY l.created_at DESC, l.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: AdminListMarketOffers :many
+SELECT sqlc.embed(o), m.canonical_name
+FROM market_offers o
+JOIN max_ids m ON m.id = o.max_id
+WHERE (sqlc.narg(status)::text IS NULL OR o.status = sqlc.narg(status)::text)
+  AND (sqlc.narg(account_id)::uuid IS NULL OR o.buyer_account_id = sqlc.narg(account_id)::uuid)
+  AND (sqlc.narg(name)::text IS NULL OR m.canonical_name = sqlc.narg(name)::text)
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: AdminListMarketSales :many
+-- accountId matches either party.
+SELECT sqlc.embed(s), m.canonical_name
+FROM market_sales s
+JOIN max_ids m ON m.id = s.max_id
+WHERE (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status)::text)
+  AND (sqlc.narg(account_id)::uuid IS NULL
+       OR s.seller_account_id = sqlc.narg(account_id)::uuid OR s.buyer_account_id = sqlc.narg(account_id)::uuid)
+  AND (sqlc.narg(name)::text IS NULL OR m.canonical_name = sqlc.narg(name)::text)
+ORDER BY s.created_at DESC, s.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: ApproveMarketSale :one
+-- Admin approval of a reviewed sale: the lock window starts now.
+UPDATE market_sales
+SET status = 'locked', status_reason = '', lock_expires_at = sqlc.arg(lock_expires_at), updated_at = now()
+WHERE id = sqlc.arg(id) AND status = 'pending_review'
+RETURNING *;
+
+-- name: AdminDeclineMarketOffer :one
+-- An accepted offer whose sale an admin denied.
+UPDATE market_offers
+SET status = 'declined', decline_note = sqlc.arg(note), updated_at = now()
+WHERE id = sqlc.arg(id) AND status = 'accepted'
+RETURNING *;
+
+-- name: GetMarketRestriction :one
+SELECT * FROM market_restrictions WHERE id = $1;
+
+-- name: LiftMarketRestriction :one
+UPDATE market_restrictions SET lifted_at = now()
+WHERE id = $1 AND lifted_at IS NULL
+RETURNING *;
+
+-- name: AdminListMarketRestrictions :many
+-- Active only unless include_inactive; accountId optional.
+SELECT * FROM market_restrictions
+WHERE (sqlc.narg(account_id)::uuid IS NULL OR account_id = sqlc.narg(account_id)::uuid)
+  AND (sqlc.arg(include_inactive)::boolean OR (lifted_at IS NULL AND (until IS NULL OR until > now())))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(row_limit);
