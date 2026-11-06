@@ -15,6 +15,8 @@ If CocoaPods fails with `Unicode Normalization not appropriate for ASCII-8BIT`, 
 
 The app talks to `max-core` (`EXPO_PUBLIC_MAX_API_URL`, `http://localhost:8080` in dev). A network appears in the app only when it is listed by `GET /v1/chains` **and** has an `EXPO_PUBLIC_RPC_*` set. Balances and broadcasting go directly to that RPC.
 
+Marketplace sales settle in USDC on Solana. `EXPO_PUBLIC_MARKET_ASSETS` (`chain:mint:decimals`, mirroring max-core `MARKET_ASSETS`) pins each asset's decimals; before signing, the app converts the price the user saw with those decimals (cross-checked against the mint through its own RPC) and verifies the sale's instructions with `assertSaleInstructionsMatch`.
+
 Checks: `npx tsc --noEmit`, `npx expo lint`, `npx expo-doctor`.
 
 ## Layout
@@ -24,10 +26,12 @@ src/app/                 routes (Expo Router)
   _layout.tsx            fonts, providers, Stack.Protected guards, lock overlay
   index.tsx              anchor: → /welcome or /home
   (onboarding)/          welcome, backup, verify, import, passcode
-  (app)/(tabs)/          home, send, receive, ids
+  (app)/(tabs)/          home, send, receive, market, ids
   (app)/                 claim, review (sign sheet), scan, destination, edit-id,
                          reveal, export-key, security, add-account,
                          rename (paid rename), verify (reserved names via X),
+                         sell (list / reprice / delist), market/[name] (buy, offer),
+                         market/offers (listings, offers, sales),
                          verify/x (X deep-link landing, Android)
 src/services/
   secure.ts              the ONLY SecureStore module

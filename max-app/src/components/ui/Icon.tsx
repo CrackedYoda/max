@@ -22,7 +22,8 @@ export type IconName =
   | 'chevronDown'
   | 'lock'
   | 'alert'
-  | 'external';
+  | 'external'
+  | 'market';
 
 /** Feather-style 24px stroke icons, matching the canvas. Decorative unless labelled by the parent. */
 export function Icon({ name, size = 22, color = colors.ink, strokeWidth = 2 }: { name: IconName; size?: number; color?: string; strokeWidth?: number }) {
@@ -98,6 +99,12 @@ export function Icon({ name, size = 22, color = colors.ink, strokeWidth = 2 }: {
         <>
           <Circle cx={12} cy={12} r={10} {...p} />
           <Path d="M12 8v4M12 16h.01" {...p} />
+        </>
+      )}
+      {name === 'market' && (
+        <>
+          <Path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" {...p} />
+          <Path d="M7 7h.01" {...p} />
         </>
       )}
       {name === 'external' && <Path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" {...p} />}
