@@ -51,6 +51,39 @@ try { await max.resolve("max.yoda", { chain: "base" }); }
 catch (e) { if (isMaxApiError(e, "NO_COMPATIBLE_WALLET")) offerCrossChain(); else throw e; }
 ```
 
+## Marketplace
+
+Buy and sell MAX IDs. The core SDK has no Solana dependency; building the transaction lives in `@max/sdk/solana`, which needs the optional peers `@solana/web3.js` and `@solana/spl-token`.
+
+```ts
+import { MaxClient, assertSaleInstructionsMatch, isPendingApproval } from "@max/sdk";
+import { buildSolanaSaleTransaction } from "@max/sdk/solana";
+
+const max = new MaxClient({ baseUrl: "https://api.max.example" });
+
+const { listings } = await max.market.search({ q: "yoda", sort: "price_asc" });
+const res = await max.market.buy(listings[0].listingId, { fromAddress: wallet.publicKey.toBase58() });
+if (isPendingApproval(res)) throw new Error(`held for approval: ${res.authorizationId}`); // agents only
+
+// Never sign what the API returned without checking it against the sale:
+// exact fee to the treasury, exact remainder to the seller, from the buyer, plus the sale memo.
+assertSaleInstructionsMatch(res.sale, res.instructions);
+
+const { blockhash } = await connection.getLatestBlockhash();
+const tx = buildSolanaSaleTransaction(res.instructions!, wallet.publicKey.toBase58(), blockhash);
+const signed = await wallet.signTransaction(tx);
+const signature = await connection.sendRawTransaction(signed.serialize());
+
+await max.market.submit(res.sale.id, signature);
+let view = await max.market.getSale(res.sale.id);
+while (!["completed", "expired", "cancelled", "reversed"].includes(view.sale.status)) {
+  await new Promise((r) => setTimeout(r, 2000));
+  view = await max.market.getSale(res.sale.id);
+}
+```
+
+`assertSaleInstructionsMatch` derives the treasury, seller and buyer token accounts itself, so a tampered response cannot redirect funds. Agents' `buy`, `list`, `updatePrice`, `offer`, `accept` and `pay` may return `{ status: "pending_approval", authorizationId, reasons }` instead of throwing; the administrator releases them with `max.agents.approveMarket(authorizationId)`.
+
 ## Sign in with a wallet
 
 `WalletSigner` is anything that signs a text message. EVM wallets return the 0x `personal_sign` hex. Solana wallets return base58 of the ed25519 signature.

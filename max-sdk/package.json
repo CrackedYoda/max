@@ -11,10 +11,19 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./solana": {
+      "types": "./dist/solana.d.ts",
+      "import": "./dist/solana.js"
     }
   },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=18.17" },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
@@ -23,6 +32,20 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "peerDependencies": {
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "peerDependenciesMeta": {
+    "@solana/spl-token": {
+      "optional": true
+    },
+    "@solana/web3.js": {
+      "optional": true
+    }
   }
 }
