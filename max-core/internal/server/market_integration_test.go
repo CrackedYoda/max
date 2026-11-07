@@ -429,7 +429,7 @@ func newTestMarket(t *testing.T, pool *pgxpool.Pool, ec envConfig) (*market.Serv
 	}
 	fs := &fakeSettle{obs: settle.Observation{Status: settle.StatusConfirmed, Matches: true, Confirmations: 32}}
 	adapters := map[chains.Namespace]settle.Adapter{chains.NamespaceSolana: fs}
-	policy := market.NewAgentPolicy(agents.NewRepository(pool), market.NewAgentStore(pool))
+	policy := market.NewAgentPolicy(agents.NewRepository(pool, testNamer(t)), market.NewAgentStore(pool))
 	return market.NewService(market.NewRepository(pool), adapters, cfg, policy, zap.NewNop()), fs
 }
 

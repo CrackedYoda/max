@@ -13,18 +13,22 @@ import (
 	"github.com/max/max-core/internal/audit"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/shared"
 )
 
 type repository struct {
-	pool *pgxpool.Pool
-	q    *generated.Queries
+	pool  *pgxpool.Pool
+	q     *generated.Queries
+	namer maxids.DefaultNamer
 }
 
 var _ Repository = (*repository)(nil)
 
-func NewRepository(pool *pgxpool.Pool) Repository {
-	return &repository{pool: pool, q: generated.New(pool)}
+// NewRepository returns the auth repository. namer names the default MAX ID
+// every new account gets at its first login.
+func NewRepository(pool *pgxpool.Pool, namer maxids.DefaultNamer) Repository {
+	return &repository{pool: pool, q: generated.New(pool), namer: namer}
 }
 
 func (r *repository) CreateChallenge(ctx context.Context, c Challenge) error {
@@ -106,6 +110,13 @@ func (r *repository) loginOnce(ctx context.Context, proof WalletProof) (acct Acc
 			ProofSignature: proof.Signature,
 		})
 		if err != nil {
+			return err
+		}
+		// The default MAX ID is created in the same transaction, so the loser
+		// of a first-login race (which fails on CreateWallet above) rolls
+		// back without leaving an account or a default behind.
+		if _, err := maxids.CreateDefault(ctx, q, r.namer, a.ID, maxids.TypeHuman,
+			&maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)}); err != nil {
 			return err
 		}
 		if err := audit.Write(ctx, q, audit.Entry{

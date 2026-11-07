@@ -135,7 +135,7 @@ func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 		t.Fatal(err)
 	}
 
-	authSvc := auth.NewService(auth.NewRepository(pool), auth.Config{
+	authSvc := auth.NewService(auth.NewRepository(pool, testNamer(t)), auth.Config{
 		Domain: "localhost:3000", URI: "http://localhost:3000",
 		ChallengeTTL: time.Minute, SessionTTL: time.Hour, SessionSecret: strings.Repeat("x", 32),
 	})
@@ -150,7 +150,7 @@ func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
 	maxidSvc := maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))
 	agentSvc := agents.NewService(agents.Deps{
-		Repo: agents.NewRepository(pool), Payments: paySvc, Wallets: walletSvc, IDs: maxidSvc,
+		Repo: agents.NewRepository(pool, testNamer(t)), Payments: paySvc, Wallets: walletSvc, IDs: maxidSvc,
 		WalletProofs: authSvc, Attestor: attestor, CredentialSecret: strings.Repeat("a", 32), Log: zap.NewNop(),
 	})
 	fees, _ := renames.ParseFees("solana:native:0.05")
@@ -181,6 +181,16 @@ func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 		Payments:    payments.NewHandler(paySvc),
 	})
 	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov, market: marketSvc, settle: fs}
+}
+
+// testNamer is the namer the env's repositories give new accounts' defaults.
+func testNamer(t *testing.T) maxids.DefaultNamer {
+	t.Helper()
+	n, err := maxids.NewDefaultNamer(maxids.DefaultStyleRandom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 type client struct {
@@ -528,7 +538,12 @@ func TestFlow_DirectPaymentLifecycle(t *testing.T) {
 		}
 	}
 	_, body = alice.do("GET", "/v1/ids", nil)
-	maxID := body["data"].([]any)[0].(map[string]any)["id"].(string)
+	var maxID string // max.yoda, not the default Alice got at login
+	for _, m := range body["data"].([]any) {
+		if m.(map[string]any)["name"] == "yoda" {
+			maxID = m.(map[string]any)["id"].(string)
+		}
+	}
 	alice.do("PUT", "/v1/ids/"+maxID+"/destinations/evm", map[string]any{"walletId": newWalletID})
 	prepare["idempotencyKey"] = "pay-" + strings.Repeat("3", 12)
 	if _, body = bob.do("POST", "/v1/transfers/prepare", prepare); errCode(body) != "RESOLUTION_STALE" {

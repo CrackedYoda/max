@@ -14,18 +14,22 @@ import (
 	"github.com/max/max-core/db/generated"
 	"github.com/max/max-core/internal/audit"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/shared"
 )
 
 type repository struct {
-	pool *pgxpool.Pool
-	q    *generated.Queries
+	pool  *pgxpool.Pool
+	q     *generated.Queries
+	namer maxids.DefaultNamer
 }
 
 var _ Repository = (*repository)(nil)
 
-func NewRepository(pool *pgxpool.Pool) Repository {
-	return &repository{pool: pool, q: generated.New(pool)}
+// NewRepository returns the agents repository. namer names the default MAX ID
+// every new agent gets when it is created.
+func NewRepository(pool *pgxpool.Pool, namer maxids.DefaultNamer) Repository {
+	return &repository{pool: pool, q: generated.New(pool), namer: namer}
 }
 
 func (r *repository) CreateAgent(ctx context.Context, admin uuid.UUID, name, description string) (Agent, Policy, error) {
@@ -45,6 +49,10 @@ func (r *repository) CreateAgent(ctx context.Context, admin uuid.UUID, name, des
 		}
 		pol, err := q.CreateAgentPolicy(ctx, acct.ID)
 		if err != nil {
+			return err
+		}
+		// An agent's default has no destination until it links a wallet.
+		if _, err := maxids.CreateDefault(ctx, q, r.namer, acct.ID, maxids.TypeAgent, nil); err != nil {
 			return err
 		}
 		a = toAgent(row)

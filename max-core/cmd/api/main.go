@@ -60,7 +60,13 @@ func run() error {
 	}
 	defer pool.Close()
 
-	authSvc := auth.NewService(auth.NewRepository(pool), auth.Config{
+	// config.Load already rejected unknown or unbuilt styles.
+	namer, err := maxids.NewDefaultNamer(cfg.DefaultIDStyle)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
+	authSvc := auth.NewService(auth.NewRepository(pool, namer), auth.Config{
 		Domain:        cfg.Auth.Domain,
 		URI:           cfg.Auth.URI,
 		ChallengeTTL:  cfg.Auth.ChallengeTTL,
@@ -94,6 +100,7 @@ func run() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go backfillDefaults(ctx, pool, namer, log.Named("maxids"))
 	if cfg.Payments.WorkerEnabled {
 		go payments.NewWorker(paymentSvc, paymentRepo, log.Named("payments")).Run(ctx)
 	}
@@ -139,12 +146,12 @@ func run() error {
 		return err
 	}
 	agentSvc := agents.NewService(agents.Deps{
-		Repo: agents.NewRepository(pool), Payments: paymentSvc, Wallets: walletSvc, IDs: maxidSvc,
+		Repo: agents.NewRepository(pool, namer), Payments: paymentSvc, Wallets: walletSvc, IDs: maxidSvc,
 		WalletProofs: authSvc, Attestor: attestor, CredentialSecret: cfg.Agents.CredentialSecret, Log: log.Named("agents"),
 	})
 	log.Info("agent authorization key", zap.String("key_id", attestor.KeyID()))
 
-	marketSvc, err := newMarket(cfg, pool, log.Named("market"))
+	marketSvc, err := newMarket(cfg, pool, namer, log.Named("market"))
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -174,6 +181,22 @@ func run() error {
 	return server.Run(cfg.HTTP.Addr, router, log)
 }
 
+// backfillDefaults gives existing accounts their default MAX IDs once at
+// startup. A failure is logged and never stops the server.
+func backfillDefaults(ctx context.Context, pool *pgxpool.Pool, namer maxids.DefaultNamer, log *zap.Logger) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("default MAX ID backfill panicked", zap.Any("panic", p))
+		}
+	}()
+	n, err := maxids.BackfillDefaults(ctx, pool, namer, 100, log)
+	if err != nil {
+		log.Error("default MAX ID backfill failed", zap.Int("created", n), zap.Error(err))
+		return
+	}
+	log.Info("default MAX ID backfill done", zap.Int("created", n))
+}
+
 func adminSet(ids []uuid.UUID) func(uuid.UUID) bool {
 	set := make(map[uuid.UUID]bool, len(ids))
 	for _, id := range ids {
@@ -185,7 +208,7 @@ func adminSet(ids []uuid.UUID) func(uuid.UUID) bool {
 // newMarket validates the market settings (startup fails when an enabled
 // market lacks a treasury or RPC for an asset) and builds the service with a
 // Solana settlement adapter over the configured RPC URLs.
-func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.Service, error) {
+func newMarket(cfg config.Config, pool *pgxpool.Pool, namer maxids.DefaultNamer, log *zap.Logger) (*market.Service, error) {
 	mcfg, err := market.NewConfig(cfg.Market, cfg.Payments.RPCURLs)
 	if err != nil {
 		return nil, err
@@ -200,7 +223,7 @@ func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.
 	if !mcfg.Enabled {
 		log.Info("MARKET_ENABLED=false: marketplace routes return 404")
 	}
-	policy := market.NewAgentPolicy(agents.NewRepository(pool), market.NewAgentStore(pool))
+	policy := market.NewAgentPolicy(agents.NewRepository(pool, namer), market.NewAgentStore(pool))
 	return market.NewService(market.NewRepository(pool), adapters, mcfg, policy, log), nil
 }
 
