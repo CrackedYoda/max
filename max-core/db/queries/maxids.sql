@@ -99,8 +99,11 @@ RETURNING *;
 SELECT * FROM max_ids WHERE owner_account_id = $1 AND is_default;
 
 -- name: AccountsWithoutDefault :many
-SELECT a.id, a.type FROM accounts a
+-- Keyset page after (after_created_at, after_id). NO KEY UPDATE does not block
+-- foreign-key inserts (sessions, wallets, payments) that reference the account.
+SELECT a.id, a.type, a.created_at FROM accounts a
 WHERE NOT EXISTS (SELECT 1 FROM max_ids m WHERE m.owner_account_id = a.id AND m.is_default)
-ORDER BY a.created_at
-LIMIT $1
-FOR UPDATE OF a SKIP LOCKED;
+  AND (a.created_at, a.id) > (sqlc.arg(after_created_at)::timestamptz, sqlc.arg(after_id)::uuid)
+ORDER BY a.created_at, a.id
+LIMIT sqlc.arg(batch)
+FOR NO KEY UPDATE OF a SKIP LOCKED;

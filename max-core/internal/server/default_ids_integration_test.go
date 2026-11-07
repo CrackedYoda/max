@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/max/max-core/db/generated"
 	"github.com/max/max-core/internal/chains"
@@ -331,12 +333,57 @@ func TestBackfill_Idempotent(t *testing.T) {
 	}
 }
 
+// failFirstNamer fails its first Generate call, then delegates.
+type failFirstNamer struct {
+	next   maxids.DefaultNamer
+	failed bool
+}
+
+func (f *failFirstNamer) Generate() (string, error) {
+	if !f.failed {
+		f.failed = true
+		return "", errors.New("injected namer failure")
+	}
+	return f.next.Generate()
+}
+func (f *failFirstNamer) Owns(s string) bool { return f.next.Owns(s) }
+
+func TestBackfill_FailingAccountDoesNotBlockOthers(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	at := func(age time.Duration) uuid.UUID {
+		var id uuid.UUID
+		if err := env.pool.QueryRow(ctx, `INSERT INTO accounts (type, created_at) VALUES ('human', now() - $1::interval) RETURNING id`, age.String()).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	first, second, third := at(3*time.Hour), at(2*time.Hour), at(time.Hour)
+
+	// Batch 1: the failing account is its own batch, and the run still reaches the others.
+	n, err := maxids.BackfillDefaults(ctx, env.pool, &failFirstNamer{next: randomNamer(t)}, 1, zap.NewNop())
+	if n != 2 || err == nil || !strings.Contains(err.Error(), first.String()) || !strings.Contains(err.Error(), "1 accounts failed") {
+		t.Fatalf("run with a failing account: %d %v", n, err)
+	}
+	if defaults(t, env, first) != 0 || defaults(t, env, second) != 1 || defaults(t, env, third) != 1 {
+		t.Fatal("wrong accounts got defaults")
+	}
+	// The next run picks up the account that failed.
+	if n, err := maxids.BackfillDefaults(ctx, env.pool, randomNamer(t), 1, zap.NewNop()); n != 1 || err != nil {
+		t.Fatalf("rerun: %d %v", n, err)
+	}
+	if defaults(t, env, first) != 1 {
+		t.Fatal("failed account still has no default")
+	}
+}
+
+// The backfill selects an account whose default another transaction is
+// inserting, blocks on the one-default index, and skips it once that commits.
 func TestBackfill_RacesCreate(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
 	acct := bareAccount(t, env, "human")
 
-	// CreateDefault holds an open transaction on the account while the backfill runs.
 	tx, err := env.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -349,12 +396,20 @@ func TestBackfill_RacesCreate(t *testing.T) {
 		n   int
 		err error
 	}
+	core, logs := observer.New(zap.DebugLevel)
 	done := make(chan result, 1)
 	go func() {
-		n, err := maxids.BackfillDefaults(ctx, env.pool, randomNamer(t), 100, zap.NewNop())
+		n, err := maxids.BackfillDefaults(ctx, env.pool, randomNamer(t), 100, zap.New(core))
 		done <- result{n, err}
 	}()
-	time.Sleep(200 * time.Millisecond)
+	// Wait until the backfill is blocked on our uncommitted default.
+	deadline := time.Now().Add(5 * time.Second)
+	for count(t, env, `SELECT count(*) FROM pg_locks WHERE NOT granted`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("backfill never blocked on the concurrent default")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -362,10 +417,35 @@ func TestBackfill_RacesCreate(t *testing.T) {
 	if r.err != nil || r.n != 0 {
 		t.Fatalf("backfill: %d %v", r.n, r.err)
 	}
+	if logs.FilterMessage("default MAX ID already exists; skipped").Len() != 1 {
+		t.Fatalf("expected one ErrDefaultExists skip, logs: %v", logs.All())
+	}
 	if n := defaults(t, env, acct); n != 1 {
 		t.Fatalf("defaults = %d", n)
 	}
 	if n, err := maxids.BackfillDefaults(ctx, env.pool, randomNamer(t), 100, zap.NewNop()); err != nil || n != 0 {
 		t.Fatalf("rerun: %d %v", n, err)
+	}
+}
+
+// NO KEY UPDATE lets foreign-key inserts on a locked account through.
+func TestBackfill_LockAllowsForeignKeyInserts(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	acct := bareAccount(t, env, "human")
+	tx, err := env.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := generated.New(tx).AccountsWithoutDefault(ctx, generated.AccountsWithoutDefaultParams{Batch: 100})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("select: %v %v", rows, err)
+	}
+	insCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := env.pool.Exec(insCtx, `INSERT INTO wallets (account_id, chain_namespace, address, proof_message, proof_signature, verified_at)
+		VALUES ($1, 'solana', $2, 'm', 's', now())`, acct, uuid.NewString()); err != nil {
+		t.Fatalf("wallet insert blocked by backfill lock: %v", err)
 	}
 }

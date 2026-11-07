@@ -13,20 +13,30 @@ import (
 )
 
 const accountsWithoutDefault = `-- name: AccountsWithoutDefault :many
-SELECT a.id, a.type FROM accounts a
+SELECT a.id, a.type, a.created_at FROM accounts a
 WHERE NOT EXISTS (SELECT 1 FROM max_ids m WHERE m.owner_account_id = a.id AND m.is_default)
-ORDER BY a.created_at
-LIMIT $1
-FOR UPDATE OF a SKIP LOCKED
+  AND (a.created_at, a.id) > ($1::timestamptz, $2::uuid)
+ORDER BY a.created_at, a.id
+LIMIT $3
+FOR NO KEY UPDATE OF a SKIP LOCKED
 `
 
-type AccountsWithoutDefaultRow struct {
-	ID   uuid.UUID
-	Type string
+type AccountsWithoutDefaultParams struct {
+	AfterCreatedAt time.Time
+	AfterID        uuid.UUID
+	Batch          int32
 }
 
-func (q *Queries) AccountsWithoutDefault(ctx context.Context, limit int32) ([]AccountsWithoutDefaultRow, error) {
-	rows, err := q.db.Query(ctx, accountsWithoutDefault, limit)
+type AccountsWithoutDefaultRow struct {
+	ID        uuid.UUID
+	Type      string
+	CreatedAt time.Time
+}
+
+// Keyset page after (after_created_at, after_id). NO KEY UPDATE does not block
+// foreign-key inserts (sessions, wallets, payments) that reference the account.
+func (q *Queries) AccountsWithoutDefault(ctx context.Context, arg AccountsWithoutDefaultParams) ([]AccountsWithoutDefaultRow, error) {
+	rows, err := q.db.Query(ctx, accountsWithoutDefault, arg.AfterCreatedAt, arg.AfterID, arg.Batch)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +44,7 @@ func (q *Queries) AccountsWithoutDefault(ctx context.Context, limit int32) ([]Ac
 	var items []AccountsWithoutDefaultRow
 	for rows.Next() {
 		var i AccountsWithoutDefaultRow
-		if err := rows.Scan(&i.ID, &i.Type); err != nil {
+		if err := rows.Scan(&i.ID, &i.Type, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
