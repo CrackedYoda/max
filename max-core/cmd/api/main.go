@@ -209,7 +209,7 @@ func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.
 // zero minimum it never touches wallets, RPC or the price feed.
 func newRegistrationGate(cfg config.Config, wallets maxids.WalletLister) maxids.BalanceGate {
 	feed := pricing.NewCached(
-		pricing.NewCoinGecko(cfg.Pricing.URL, &http.Client{Timeout: 10 * time.Second}),
+		pricing.NewCoinGecko(cfg.Pricing.URL, cfg.Pricing.APIKey, &http.Client{Timeout: 10 * time.Second}),
 		cfg.Pricing.TTL, cfg.Pricing.MaxAge, time.Now)
 
 	var gateChains []chains.Chain

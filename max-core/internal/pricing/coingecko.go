@@ -19,20 +19,23 @@ var coinGeckoIDs = map[string]string{
 }
 
 type coinGecko struct {
-	url string
-	hc  *http.Client
+	url    string
+	apiKey string
+	hc     *http.Client
 }
 
 // NewCoinGecko returns a Source backed by CoinGecko's simple/price endpoint.
 // An empty url uses the public default; a nil client uses http.DefaultClient.
-func NewCoinGecko(rawURL string, hc *http.Client) Source {
+// A non-empty apiKey is sent as the pro header for pro-api.coingecko.com and
+// as the demo header otherwise.
+func NewCoinGecko(rawURL, apiKey string, hc *http.Client) Source {
 	if rawURL == "" {
 		rawURL = defaultCoinGeckoURL
 	}
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	return &coinGecko{url: rawURL, hc: hc}
+	return &coinGecko{url: rawURL, apiKey: strings.TrimSpace(apiKey), hc: hc}
 }
 
 func (c *coinGecko) Fetch(ctx context.Context, symbols []string) (map[string]float64, error) {
@@ -58,6 +61,13 @@ func (c *coinGecko) Fetch(ctx context.Context, symbols []string) (map[string]flo
 		return nil, fmt.Errorf("%w: build request", ErrUnavailable)
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		header := "x-cg-demo-api-key"
+		if strings.HasPrefix(u.Host, "pro-api.") {
+			header = "x-cg-pro-api-key"
+		}
+		req.Header.Set(header, c.apiKey)
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: request failed", ErrUnavailable)

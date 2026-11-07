@@ -3,6 +3,7 @@ package pricing
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -121,7 +122,7 @@ func TestCoinGecko_ParsesSimplePrice(t *testing.T) {
 		_, _ = w.Write([]byte(`{"solana":{"usd":150.5},"ethereum":{"usd":3000},"polygon-ecosystem-token":{"usd":0.4}}`))
 	}))
 	defer srv.Close()
-	got, err := NewCoinGecko(srv.URL, srv.Client()).Fetch(context.Background(), []string{"SOL", "ETH", "POL"})
+	got, err := NewCoinGecko(srv.URL, "", srv.Client()).Fetch(context.Background(), []string{"SOL", "ETH", "POL"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestCoinGecko_NonOKStatusAndBadSymbol(t *testing.T) {
 		_, _ = w.Write([]byte("secret-body"))
 	}))
 	defer srv.Close()
-	cg := NewCoinGecko(srv.URL, srv.Client())
+	cg := NewCoinGecko(srv.URL, "", srv.Client())
 	_, err := cg.Fetch(context.Background(), []string{"SOL"})
 	if err == nil || !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v", err)
@@ -148,3 +149,26 @@ func TestCoinGecko_NonOKStatusAndBadSymbol(t *testing.T) {
 		t.Fatal("expected error for unknown symbol")
 	}
 }
+
+func TestCoinGecko_SendsAPIKeyHeader(t *testing.T) {
+	for _, tc := range []struct{ host, header string }{
+		{"api.coingecko.com", "x-cg-demo-api-key"},
+		{"pro-api.coingecko.com", "x-cg-pro-api-key"},
+	} {
+		var got http.Header
+		hc := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			got = r.Header.Clone()
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"solana":{"usd":1}}`)), Header: http.Header{}}, nil
+		})}
+		if _, err := NewCoinGecko("https://"+tc.host+"/api/v3/simple/price", "k123", hc).Fetch(context.Background(), []string{"SOL"}); err != nil {
+			t.Fatal(err)
+		}
+		if got.Get(tc.header) != "k123" {
+			t.Fatalf("%s: header %s not set", tc.host, tc.header)
+		}
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

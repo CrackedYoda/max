@@ -94,3 +94,44 @@ func TestLoad_RegistrationMinBalanceRejectsNonFinite(t *testing.T) {
 		})
 	}
 }
+
+func TestMainnetErrors(t *testing.T) {
+	ok := func() Config {
+		var c Config
+		c.Market.Assets = "solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+		c.Market.TreasurySolana = "6dQJ2kEq9u1Hf8rVzGfFqZ8wq7sYkq3nXyZ1Q2W3e4R5"
+		c.Registration.MinBalanceUSD = 100
+		c.Payments.RPCURLs = map[string]string{"solana": "https://rpc.example"}
+		return c
+	}
+	if errs := mainnetErrors(ok()); len(errs) != 0 {
+		t.Fatalf("valid mainnet config refused: %v", errs)
+	}
+	cases := map[string]func(*Config){
+		"testnet asset": func(c *Config) {
+			c.Market.Assets = "solana-devnet:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+		},
+		"example solana treasury": func(c *Config) { c.Market.TreasurySolana = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM" },
+		"example evm treasury":    func(c *Config) { c.Renames.TreasuryEVM = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed" },
+		"gate without mainnet rpc": func(c *Config) {
+			c.Payments.RPCURLs = map[string]string{"solana-devnet": "https://rpc.example"}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := ok()
+			mutate(&c)
+			if errs := mainnetErrors(c); len(errs) != 1 {
+				t.Fatalf("want 1 error, got %v", errs)
+			}
+		})
+	}
+	t.Run("gate off needs no rpc", func(t *testing.T) {
+		c := ok()
+		c.Registration.MinBalanceUSD = 0
+		c.Payments.RPCURLs = nil
+		if errs := mainnetErrors(c); len(errs) != 0 {
+			t.Fatalf("unexpected: %v", errs)
+		}
+	})
+}

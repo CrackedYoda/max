@@ -317,6 +317,21 @@ Codes: `MARKET_DISABLED`, `MARKET_PAUSED`, `NOT_LISTABLE` (`details.reason`), `L
 `PRICE_UNAVAILABLE`, plus `NAME_LISTED`, `OWNER_CHANGED`, `RENAME_PENDING` and `MAX_ID_LIMIT_REACHED`. Public
 `NOT_LISTABLE` reasons hide moderation and wallet changes as `unavailable` (`payout_wallet_removed` is shown only to the seller).
 
+#### Going to mainnet
+
+1. **max-core:** set `APP_ENV=production`.
+   - Set `RPC_URL_SOLANA`, plus `RPC_URL_ETHEREUM`, `RPC_URL_BASE`, `RPC_URL_ARBITRUM`, `RPC_URL_OPTIMISM` and `RPC_URL_POLYGON`, each from a dedicated provider. A chain without an RPC refuses payments and isn't counted by the $100 gate.
+   - Set `MARKET_ASSETS=solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`.
+   - Set real `TREASURY_SOLANA` and `RENAME_TREASURY_*` addresses that MAX controls.
+   - Set `PRICE_FEED_API_KEY`.
+
+   Boot fails if a market asset is on a testnet, if a treasury is still the `.env.example` placeholder, or if the gate is on with no mainnet RPC.
+2. **Web and app:** set `*_RPC_SOLANA` and the same EVM `*_RPC_*` keys, `*_MARKET_ASSETS=solana:EPjF…Dt1v:6` and `*_MARKET_TREASURY` (same as `TREASURY_SOLANA`).
+3. **Enable:** run the migrations, then set `MARKET_ENABLED=true`.
+   - Consider `MARKET_TRADING_PAUSED=true` for a first read-only day.
+   - Consider a `MARKET_REVIEW_THRESHOLD`.
+4. **Smoke test:** one small real sale end to end before announcing.
+
 ### Error codes worth handling in UI
 
 `MAX_ID_TAKEN`, `MAX_ID_RESERVED`, `MAX_ID_VERIFICATION_REQUIRED`, `MAX_ID_LIMIT_REACHED`,

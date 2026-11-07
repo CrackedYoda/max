@@ -56,7 +56,10 @@ type RegistrationConfig struct {
 }
 
 type PricingConfig struct {
-	URL    string
+	URL string
+	// APIKey is an optional CoinGecko key. The keyless endpoint is heavily
+	// rate-limited, so production should set one.
+	APIKey string
 	TTL    time.Duration
 	MaxAge time.Duration
 }
@@ -243,6 +246,7 @@ func Load() (Config, error) {
 	}
 	cfg.Pricing = PricingConfig{
 		URL:    get("PRICE_FEED_URL", "https://api.coingecko.com/api/v3/simple/price"),
+		APIKey: get("PRICE_FEED_API_KEY", ""),
 		TTL:    duration("PRICE_FEED_TTL", "60s"),
 		MaxAge: duration("PRICE_FEED_MAX_AGE", "5m"),
 	}
@@ -332,6 +336,7 @@ func Load() (Config, error) {
 				errs = append(errs, errors.New("wildcard CORS origins are not allowed in production"))
 			}
 		}
+		errs = append(errs, mainnetErrors(cfg)...)
 	}
 
 	return cfg, errors.Join(errs...)
@@ -345,4 +350,47 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// exampleAddresses are the placeholder treasuries shipped in .env.example
+// (the EIP-55 test vector and the Solana docs sample). Nobody at MAX holds
+// their keys, so fees sent there are lost.
+var exampleAddresses = []string{
+	"0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+	"9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+}
+
+// mainnetErrors refuses production settings that would lose real money or
+// silently break claims: testnet market assets, example treasuries, and a
+// registration gate with no mainnet chain to read balances from.
+func mainnetErrors(cfg Config) []error {
+	var errs []error
+	for _, entry := range splitList(cfg.Market.Assets) {
+		key, _, _ := strings.Cut(entry, ":")
+		if c, ok := chains.Lookup(strings.TrimSpace(key)); ok && c.Testnet {
+			errs = append(errs, fmt.Errorf("MARKET_ASSETS lists testnet chain %s in production", c.Key))
+		}
+	}
+	for name, addr := range map[string]string{
+		"TREASURY_EVM": cfg.Market.TreasuryEVM, "TREASURY_SOLANA": cfg.Market.TreasurySolana,
+		"RENAME_TREASURY_EVM": cfg.Renames.TreasuryEVM, "RENAME_TREASURY_SOLANA": cfg.Renames.TreasurySolana,
+	} {
+		for _, ex := range exampleAddresses {
+			if strings.EqualFold(strings.TrimSpace(addr), ex) {
+				errs = append(errs, fmt.Errorf("%s is the .env.example placeholder; set a treasury MAX controls", name))
+			}
+		}
+	}
+	if cfg.Registration.MinBalanceUSD > 0 {
+		mainnet := false
+		for _, c := range chains.Supported {
+			if !c.Testnet && chains.IsLinkable(c.Namespace) && cfg.Payments.RPCURLs[c.Key] != "" {
+				mainnet = true
+			}
+		}
+		if !mainnet {
+			errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD > 0 needs an RPC_URL_* for at least one mainnet chain; testnets are not counted in production"))
+		}
+	}
+	return errs
 }
