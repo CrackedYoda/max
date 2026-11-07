@@ -12,7 +12,7 @@ import { Banner, Heading } from "@/components/ui/Blocks";
 import { HandleInput, Segmented, TextField } from "@/components/ui/Fields";
 import { Icon } from "@/components/ui/Icon";
 import { errorCode, errorDetails, errorMessage } from "@/error/messages";
-import { useAvailability, useClaimId } from "@/hooks/queries";
+import { useAvailability, useClaimId, useMe } from "@/hooks/queries";
 import { useDebounced } from "@/hooks/useDebounced";
 import { toast } from "@/store/flows";
 import { handleSchema, stripPrefix } from "@/validation/identity";
@@ -29,6 +29,8 @@ export function ClaimForm() {
   const params = useSearchParams();
   const router = useRouter();
   const claim = useClaimId();
+  const me = useMe();
+  const defaultHandle = me.data?.defaultMaxId?.handle;
   const { control, register, handleSubmit, formState } = useForm<z.input<typeof schema>, unknown, z.output<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: { name: stripPrefix(params.get("name") ?? ""), type: "human", displayName: "" },
@@ -74,6 +76,7 @@ export function ClaimForm() {
   return (
     <main className="mx-auto flex max-w-[640px] flex-col gap-8 px-6 pb-24 pt-16">
       <Heading title="Claim your MAX ID" lead="This is the name people will type to pay you." />
+      {defaultHandle ? <p className="m-0 -mt-4 text-[15px] text-muted">You already have <span className="font-mono font-semibold text-ink">{defaultHandle}</span> for receiving.</p> : null}
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-7 rounded-2xl border border-line bg-surface p-7 shadow-[0_8px_24px_rgba(20,20,19,0.04)]">
         <div className="flex flex-col gap-2.5">
           <label htmlFor="claim-name" className="text-sm font-semibold">Handle</label>

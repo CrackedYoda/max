@@ -28,6 +28,7 @@ export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
           <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="m-0 text-2xl"><Handle name={id.name} /></h2>
             <KindBadge type={id.type} />
+            {id.isDefault ? <span className="rounded-full bg-clay-soft px-2.5 py-[3px] text-xs font-semibold text-clay-text">Default ID</span> : null}
             {id.status !== "active" ? <span className="rounded-full bg-danger-soft px-2.5 py-[3px] text-xs font-semibold text-[#9C2F2F]">Paused</span> : null}
           </div>
           <span className="text-sm text-muted">{id.displayName && id.displayName !== id.name ? id.displayName : "No display name"}</span>
@@ -42,7 +43,7 @@ export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
       </ul>
       <div className="flex flex-wrap gap-x-5 gap-y-2">
         <Link href={`/${id.handle}`} className="text-sm font-medium">View public profile</Link>
-        <Link href={`/rename/${id.id}`} className="text-sm font-medium">Rename</Link>
+        {id.isDefault ? null : <Link href={`/rename/${id.id}`} className="text-sm font-medium">Rename</Link>}
       </div>
       {editing ? <EditProfileDialog id={id} onClose={() => setEditing(false)} /> : null}
     </Card>

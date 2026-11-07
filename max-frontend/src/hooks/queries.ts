@@ -60,6 +60,11 @@ export function useMyIds() {
   return useQuery({ queryKey: keys.ids(accountId), queryFn: () => max().ids.list(), enabled: signedIn() });
 }
 
+/** The signed-in account with its default and primary MAX IDs. */
+export function useMe() {
+  return useQuery({ queryKey: keys.me, queryFn: () => max().auth.me(), enabled: signedIn() });
+}
+
 export function useWallets() {
   const accountId = useAccountId();
   return useQuery({ queryKey: keys.wallets(accountId), queryFn: () => max().wallets.list(), enabled: signedIn() });
@@ -91,7 +96,10 @@ export function usePayment(id: string | null) {
 export function useInvalidateAccount() {
   const qc = useQueryClient();
   const accountId = useAccountId();
-  return () => qc.invalidateQueries({ queryKey: keys.account(accountId) });
+return () => {
+    qc.invalidateQueries({ queryKey: keys.account(accountId) });
+    qc.invalidateQueries({ queryKey: keys.me });
+  };
 }
 
 export function useClaimId() {

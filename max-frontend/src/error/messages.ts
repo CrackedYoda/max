@@ -67,12 +67,16 @@ const COPY: Record<string, string> = {
   PENDING_APPROVAL: "This is waiting for approval.",
   INSUFFICIENT_REGISTRATION_BALANCE: "Your linked wallets don’t hold enough value to claim a MAX ID.",
   PRICE_UNAVAILABLE: "We couldn’t price your wallet balances just now. Try again in a minute.",
+  DEFAULT_ID_LOCKED: "Your default ID is for receiving and can’t be renamed or sold.",
   NAME_LISTED: "This name is listed for sale. Delist it before renaming.",
   OWNER_CHANGED: "This name changed owners while you were working. Reload to see the latest.",
 };
 
 export function errorMessage(err: unknown): string {
-  if (isMaxApiError(err)) return COPY[err.code] ?? err.message;
+  if (isMaxApiError(err)) {
+    if (err.code === "INVALID_MAX_ID" && /reserved format/i.test(err.message)) return "That name looks like an auto-generated default ID, so it can’t be claimed. Pick another.";
+    return COPY[err.code] ?? err.message;
+  }
   if (err instanceof MaxNetworkError) return "Can’t reach MAX right now. Check your connection and try again.";
   if (err instanceof Error && err.message) return err.message;
   return "Something went wrong. Try again.";
