@@ -45,6 +45,11 @@ func TransferOwnership(ctx context.Context, q *generated.Queries, p TransferPara
 	if p.From == p.To {
 		return ErrTransferSameAccount
 	}
+	if row, err := q.LockMaxIDByID(ctx, p.MaxID); err == nil && row.IsDefault {
+		return ErrDefaultNotTransferable
+	} else if err != nil && !database.IsNoRows(err) {
+		return err
+	}
 	// A pending rename would finalize against the new owner's ID; the caller
 	// must resolve it first. Checked inside the caller's transaction.
 	if _, err := q.GetPendingRenameForMaxID(ctx, p.MaxID); err == nil {

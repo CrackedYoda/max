@@ -229,6 +229,7 @@ type MaxID struct {
 	UpdatedAt         time.Time
 	OwnerChangedAt    *time.Time
 	ListableAt        time.Time
+	IsDefault         bool
 }
 
 type MaxIDDestination struct {

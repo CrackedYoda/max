@@ -15,7 +15,7 @@ func baseEnv(t *testing.T) {
 		"MARKET_HOLD_PERIOD", "MARKET_BUY_LOCK", "MARKET_OFFER_PAY_WINDOW",
 		"MARKET_REVIEW_THRESHOLD", "MARKET_MIN_OFFER", "TREASURY_EVM", "TREASURY_SOLANA",
 		"RENAME_TREASURY_EVM", "RENAME_TREASURY_SOLANA", "REGISTRATION_MIN_BALANCE_USD",
-		"PRICE_FEED_URL", "PRICE_FEED_TTL", "PRICE_FEED_MAX_AGE",
+		"PRICE_FEED_URL", "PRICE_FEED_TTL", "PRICE_FEED_MAX_AGE", "DEFAULT_ID_STYLE",
 	} {
 		t.Setenv(k, "")
 	}
@@ -134,4 +134,18 @@ func TestMainnetErrors(t *testing.T) {
 			t.Fatalf("unexpected: %v", errs)
 		}
 	})
+}
+
+func TestLoad_DefaultIDStyle(t *testing.T) {
+	baseEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.DefaultIDStyle != "random" {
+		t.Fatalf("default style: %q %v", cfg.DefaultIDStyle, err)
+	}
+	for _, v := range []string{"words", "bogus"} {
+		t.Setenv("DEFAULT_ID_STYLE", v)
+		if _, err := Load(); err == nil {
+			t.Fatalf("DEFAULT_ID_STYLE=%s should fail boot", v)
+		}
+	}
 }

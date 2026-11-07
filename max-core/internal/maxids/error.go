@@ -23,7 +23,11 @@ var (
 	ErrSettlementAsset       = shared.NewAppError("INVALID_SETTLEMENT_ASSET", http.StatusBadRequest, "settlement asset must be 'native' or a valid token address for the chain")
 	ErrSettlementNoWallet    = shared.NewAppError("SETTLEMENT_NO_WALLET", http.StatusBadRequest, "set a destination wallet on the settlement chain first")
 	ErrSettlementNotFound    = shared.NewAppError("SETTLEMENT_NOT_FOUND", http.StatusNotFound, "no settlement preference configured")
-	ErrMaxIDNotActive        = shared.NewAppError("MAX_ID_NOT_ACTIVE", http.StatusConflict, "MAX ID is not active")
+	// ErrDefaultNotTransferable backs the market and transfer paths: default IDs never move.
+	ErrDefaultNotTransferable = shared.NewAppError("DEFAULT_ID_LOCKED", http.StatusConflict, "default MAX IDs cannot be transferred, sold or renamed")
+	// ErrDefaultExists means the account already has a default ID.
+	ErrDefaultExists  = shared.NewAppError("DEFAULT_ID_EXISTS", http.StatusConflict, "this account already has a default MAX ID")
+	ErrMaxIDNotActive = shared.NewAppError("MAX_ID_NOT_ACTIVE", http.StatusConflict, "MAX ID is not active")
 )
 
 var (

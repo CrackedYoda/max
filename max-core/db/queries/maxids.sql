@@ -5,7 +5,8 @@ SELECT * FROM reserved_names WHERE canonical_name = $1 AND status = 'reserved';
 SELECT EXISTS (SELECT 1 FROM max_ids WHERE canonical_name = $1);
 
 -- name: CountMaxIDsByOwner :one
-SELECT count(*) FROM max_ids WHERE owner_account_id = $1;
+-- Default IDs do not count toward the per-account cap.
+SELECT count(*) FROM max_ids WHERE owner_account_id = $1 AND NOT is_default;
 
 -- name: CreateMaxID :one
 INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name)
@@ -85,3 +86,21 @@ VALUES ($1, $2, $3, 'transferred', $4);
 
 -- name: SetListableAfter :exec
 UPDATE max_ids SET listable_at = now() + make_interval(secs => sqlc.arg(hold_seconds)::int) WHERE id = sqlc.arg(id);
+
+-- name: CreateDefaultMaxID :one
+-- A taken name returns no row (the caller retries with a new name). A second
+-- default for the account still raises the max_ids_one_default violation.
+INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name, is_default, listable_at)
+VALUES ($1, $2, $3, '', true, timestamptz '9999-12-31 00:00:00+00')
+ON CONFLICT (canonical_name) DO NOTHING
+RETURNING *;
+
+-- name: GetDefaultMaxID :one
+SELECT * FROM max_ids WHERE owner_account_id = $1 AND is_default;
+
+-- name: AccountsWithoutDefault :many
+SELECT a.id, a.type FROM accounts a
+WHERE NOT EXISTS (SELECT 1 FROM max_ids m WHERE m.owner_account_id = a.id AND m.is_default)
+ORDER BY a.created_at
+LIMIT $1
+FOR UPDATE OF a SKIP LOCKED;
