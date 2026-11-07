@@ -10,6 +10,7 @@ import (
 	"github.com/max/max-core/internal/audit"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/shared"
 )
 
 const createDefaultAttempts = 5
@@ -28,6 +29,10 @@ func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer
 	for attempt := 0; attempt < createDefaultAttempts && !created; attempt++ {
 		name, err := namer.Generate()
 		if err != nil {
+			return MaxID{}, err
+		}
+		// Serialize with rename reservations and finalizations on this name.
+		if err := q.LockName(ctx, name); err != nil {
 			return MaxID{}, err
 		}
 		// Quarantined and pending-rename names are not in max_ids, so check them first.
@@ -53,7 +58,7 @@ func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer
 		created = true
 	}
 	if !created {
-		return MaxID{}, fmt.Errorf("default MAX ID: no free name after %d attempts", createDefaultAttempts)
+		return MaxID{}, shared.ErrInternal.WithError(fmt.Errorf("default MAX ID: no free name after %d attempts", createDefaultAttempts))
 	}
 
 	if err := q.CreateOwnershipEvent(ctx, generated.CreateOwnershipEventParams{
