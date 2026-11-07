@@ -1613,7 +1613,7 @@ func (q *Queries) GetMarketListingForUpdate(ctx context.Context, id uuid.UUID) (
 
 const getMarketNameFacts = `-- name: GetMarketNameFacts :one
 
-SELECT m.id, m.canonical_name, m.owner_account_id, m.status, a.status AS owner_status,
+SELECT m.id, m.canonical_name, m.owner_account_id, m.status, a.status AS owner_status, m.is_default,
        m.listable_at, m.rename_available_at,
        EXISTS (SELECT 1 FROM reserved_name_claims c
                WHERE c.max_id = m.id AND c.status IN ('pending_review', 'active', 'lapsed'))::boolean AS has_live_reserved_claim,
@@ -1633,6 +1633,7 @@ type GetMarketNameFactsRow struct {
 	OwnerAccountID       uuid.UUID
 	Status               string
 	OwnerStatus          string
+	IsDefault            bool
 	ListableAt           time.Time
 	RenameAvailableAt    time.Time
 	HasLiveReservedClaim bool
@@ -1652,6 +1653,7 @@ func (q *Queries) GetMarketNameFacts(ctx context.Context, id uuid.UUID) (GetMark
 		&i.OwnerAccountID,
 		&i.Status,
 		&i.OwnerStatus,
+		&i.IsDefault,
 		&i.ListableAt,
 		&i.RenameAvailableAt,
 		&i.HasLiveReservedClaim,

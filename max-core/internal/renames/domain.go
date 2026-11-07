@@ -64,6 +64,7 @@ type MaxIDInfo struct {
 	Name              string
 	Status            string
 	RenameAvailableAt time.Time
+	IsDefault         bool
 }
 
 type Eligibility struct {

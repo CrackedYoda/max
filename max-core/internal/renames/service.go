@@ -41,6 +41,8 @@ func (s *service) Eligibility(ctx context.Context, owner, maxID uuid.UUID) (Elig
 		return Eligibility{}, err
 	}
 	switch {
+	case m.IsDefault:
+		e.Reason = ErrDefaultNotRenameable.Message
 	case !s.cfg.Enabled():
 		e.Reason = "renames are not enabled"
 	case m.Status != "active":
@@ -67,6 +69,9 @@ func (s *service) Request(ctx context.Context, owner, maxID uuid.UUID, in Reques
 	if err != nil {
 		return RequestView{}, maxids.ErrInvalidName.WithMessage(err.Error())
 	}
+	if maxids.IsDefaultShape(newName) {
+		return RequestView{}, maxids.ErrInvalidName.WithMessage("this name uses a reserved format")
+	}
 	if reserved, err := s.repo.GetReserved(ctx, newName); err != nil {
 		return RequestView{}, err
 	} else if reserved != nil {
@@ -79,6 +84,9 @@ func (s *service) Request(ctx context.Context, owner, maxID uuid.UUID, in Reques
 	m, err := s.repo.GetOwnedMaxID(ctx, maxID, owner)
 	if err != nil {
 		return RequestView{}, err
+	}
+	if m.IsDefault {
+		return RequestView{}, ErrDefaultNotRenameable
 	}
 	if m.Name == newName {
 		return RequestView{}, ErrSameName

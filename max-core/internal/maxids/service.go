@@ -69,6 +69,10 @@ func (s *service) Claim(ctx context.Context, caller uuid.UUID, in ClaimInput) (M
 	if err != nil {
 		return MaxID{}, ErrInvalidName.WithMessage(err.Error())
 	}
+	// Default shapes belong to the system; nobody can claim one.
+	if IsDefaultShape(canonical) {
+		return MaxID{}, ErrInvalidName.WithMessage("this name uses a reserved format")
+	}
 
 	reserved, err := s.repo.GetReserved(ctx, canonical)
 	if err != nil {

@@ -150,3 +150,24 @@ func TestErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestListable_DefaultID(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	// A default is never listable, even when every other fact is clean, and
+	// the check wins over every other reason.
+	f := NameFacts{Status: "active", OwnerStatus: "active", ListableAt: past, RenameAvailableAt: past, IsDefault: true}
+	if ok, reason := Listable(f, now); ok || reason != ReasonDefaultID {
+		t.Fatalf("clean default: (%v,%q)", ok, reason)
+	}
+	f.Status, f.OwnerBanned = "released", true
+	if ok, reason := Listable(f, now); ok || reason != ReasonDefaultID {
+		t.Fatalf("default with other failures: (%v,%q)", ok, reason)
+	}
+}
+
+func TestPublicReason_DefaultMasked(t *testing.T) {
+	if got := PublicReason(ReasonDefaultID); got != ReasonUnavailable {
+		t.Fatalf("PublicReason(default_id) = %q", got)
+	}
+}
