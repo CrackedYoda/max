@@ -8,17 +8,44 @@ import type { Sale } from "@max/sdk";
 export type SignAttempt = { chain: string; blockhash: string; lastValidBlockHeight: number };
 export type StoredAttempt = SignAttempt & { sentAt: number };
 
-// Per sale id. Module memory survives the dialog closing; sessionStorage
-// survives a reload of the tab. Storage can be missing or throw (private
-// mode, blocked site data), so every access is guarded and memory still works.
+// Per sale id. localStorage is shared by every tab of this origin (and
+// survives reloads), so a second tab sees an attempt the first one sent.
+// Module memory backs it up when storage is missing or throws (private mode,
+// blocked site data); every storage access is guarded.
 const memory = new Map<string, StoredAttempt>();
-const KEY = (saleId: string) => `max:sale-attempt:${saleId}`;
+const PREFIX = "max:sale-attempt:";
+const KEY = (saleId: string) => `${PREFIX}${saleId}`;
+/** A blockhash is valid for ~1–2 minutes; an hour-old attempt can't land. */
+export const ATTEMPT_TTL_MS = 60 * 60 * 1000;
 
 function storage(): Storage | null {
   try {
-    return typeof sessionStorage === "undefined" ? null : sessionStorage;
+    return typeof localStorage === "undefined" ? null : localStorage;
   } catch {
     return null;
+  }
+}
+
+/** Drop attempts older than ATTEMPT_TTL_MS from memory and storage. */
+function prune(now: number): void {
+  for (const [id, a] of memory) if (now - a.sentAt > ATTEMPT_TTL_MS) memory.delete(id);
+  try {
+    const st = storage();
+    if (!st) return;
+    const stale: string[] = [];
+    for (let i = 0; i < st.length; i++) {
+      const k = st.key(i);
+      if (!k?.startsWith(PREFIX)) continue;
+      try {
+        const v: unknown = JSON.parse(st.getItem(k) ?? "null");
+        if (!valid(v) || now - v.sentAt > ATTEMPT_TTL_MS) stale.push(k);
+      } catch {
+        stale.push(k);
+      }
+    }
+    for (const k of stale) st.removeItem(k);
+  } catch {
+    // storage unavailable: memory was pruned
   }
 }
 
@@ -39,19 +66,24 @@ export function saveAttempt(saleId: string, attempt: SignAttempt, now = Date.now
   return stored;
 }
 
-export function loadAttempt(saleId: string): StoredAttempt | null {
-  const m = memory.get(saleId);
-  if (m) return m;
+/**
+ * The newest attempt for a sale: storage (which another tab may have written)
+ * merged with this tab's memory, keeping the larger lastValidBlockHeight.
+ */
+export function loadAttempt(saleId: string, now = Date.now()): StoredAttempt | null {
+  prune(now);
+  let stored: StoredAttempt | null = null;
   try {
     const raw = storage()?.getItem(KEY(saleId));
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!valid(parsed)) return null;
-    memory.set(saleId, parsed);
-    return parsed;
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (valid(parsed)) stored = parsed;
   } catch {
-    return null;
+    stored = null;
   }
+  const mem = memory.get(saleId) ?? null;
+  const newest = !stored ? mem : !mem ? stored : stored.lastValidBlockHeight >= mem.lastValidBlockHeight ? stored : mem;
+  if (newest) memory.set(saleId, newest);
+  return newest;
 }
 
 /** Only when the sale is recorded (MAX has its tx hash) or is terminal and unpaid. */

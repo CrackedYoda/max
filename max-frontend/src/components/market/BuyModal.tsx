@@ -46,8 +46,11 @@ type Phase =
    * second signature is offered only once the first attempt's blockhash has
    * expired (it can no longer land) and a last look found no payment.
    */
-  | { k: "uncertain"; view: SaleView; attempt: SignAttempt; expired: boolean; lookup: "checking" | "not_found" | "failed" }
+  | { k: "uncertain"; view: SaleView; attempt: SignAttempt; expired: boolean; lookup: "checking" | "not_found" | "failed"; reason: UncertainReason }
   | { k: "watching"; saleId: string };
+
+/** Why we're unsure: this dialog's wallet errored, or an earlier attempt (any tab, any reload) is on record. */
+type UncertainReason = "wallet_error" | "reopened";
 
 const STEP: Record<"connect" | "lock" | "sign" | "record", string> = {
   connect: "Connecting Phantom…",
@@ -84,7 +87,9 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
   const signing = phase.k === "working" && (phase.step === "sign" || phase.step === "record");
   // While a sent attempt can still land, closing would invite a second payment
   // from elsewhere; keep the dialog (and the tab) here until it's resolved.
-  const pendingAttempt = phase.k === "uncertain" && !phase.expired;
+  // If the network can't be reached to check, closing is allowed (with a
+  // warning): the shared attempt store still guards any reopen, in any tab.
+  const pendingAttempt = phase.k === "uncertain" && !phase.expired && phase.lookup !== "failed";
   const busy = signing || pendingAttempt;
   useEffect(() => {
     if (!busy) return;
@@ -107,7 +112,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
       }
       stop = true;
       window.clearInterval(id);
-      void lookForPayment(waiting.view, waiting.attempt, true);
+      void lookForPayment(waiting.view, waiting.attempt, true, waiting.reason);
     }, 5000);
     return () => {
       stop = true;
@@ -129,7 +134,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     const attempt = loadAttempt(s.id);
     const route = routeFor(s, !!view.instructions, attempt);
     if (route === "held") setPhase({ k: "held", saleId: s.id });
-    else if (route === "uncertain" && attempt) void lookForPayment(view, attempt, false);
+    else if (route === "uncertain" && attempt) void lookForPayment(view, attempt, false, "reopened");
     else if (route === "review") setPhase({ k: "review", view });
     else setPhase({ k: "watching", saleId: s.id });
   }
@@ -159,15 +164,19 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     }
   }
 
-  /** `retryConfirmed`: only from "Sign again", after the earlier attempt expired and the user confirmed. */
-  async function pay(view: SaleView, retryConfirmed = false) {
+  /**
+   * `confirmedFor`: the blockhash of the attempt the user just confirmed (from
+   * "Sign again", after it expired). Signing goes ahead only if that is still
+   * the newest attempt on record: another tab may have signed since.
+   */
+  async function pay(view: SaleView, confirmedFor?: string) {
     setError(null);
     setConfirmedRetry(false);
     // Every route into signing passes here: an earlier attempt for this sale
-    // (this dialog, a closed one, or before a reload) must be resolved first.
+    // (this dialog, a closed one, another tab, or before a reload) must be resolved first.
     const earlier = loadAttempt(view.sale.id);
-    if (earlier && !retryConfirmed) {
-      await lookForPayment(view, earlier, false);
+    if (earlier && earlier.blockhash !== confirmedFor) {
+      await lookForPayment(view, earlier, false, "reopened");
       return;
     }
     if (trusted.error) return setError(trusted.error);
@@ -182,7 +191,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     } catch (err) {
       if (err instanceof MaybeSentError) {
         setError(err.message);
-        await lookForPayment(view, err.attempt, false);
+        await lookForPayment(view, err.attempt, false, "wallet_error");
         return;
       }
       setPhase({ k: "review", view });
@@ -191,16 +200,17 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
   }
 
   /** After an uncertain wallet error: find the sale's tx on chain before anyone signs again. */
-  async function lookForPayment(view: SaleView, attempt: SignAttempt, expired: boolean) {
-    setPhase({ k: "uncertain", view, attempt, expired, lookup: "checking" });
+  async function lookForPayment(view: SaleView, attempt: SignAttempt, expired: boolean, reason: UncertainReason) {
+    if (reason === "reopened") setError(null);
+    setPhase({ k: "uncertain", view, attempt, expired, lookup: "checking", reason });
     try {
       const sig = await findSaleSignature(view);
       if (sig) {
         setError(null);
         await record(view, sig);
-      } else setPhase({ k: "uncertain", view, attempt, expired, lookup: "not_found" });
+      } else setPhase({ k: "uncertain", view, attempt, expired, lookup: "not_found", reason });
     } catch {
-      setPhase({ k: "uncertain", view, attempt, expired, lookup: "failed" });
+      setPhase({ k: "uncertain", view, attempt, expired, lookup: "failed", reason });
     }
   }
 
@@ -252,9 +262,15 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
           </>
         ) : phase.k === "uncertain" ? (
           <>
-            <Banner tone="warn" title="Your payment may already have been sent">
-              {error ?? "Phantom reported an error after signing started."} Don’t pay again until you’ve checked.
-            </Banner>
+            {phase.reason === "wallet_error" ? (
+              <Banner tone="warn" title="Your payment may already have been sent">
+                {error ?? "Phantom reported an error after signing started."} Don’t pay again until you’ve checked.
+              </Banner>
+            ) : (
+              <Banner tone="warn" title="A payment for this sale may already be on its way">
+                A payment was signed for this sale a moment ago, here or in another tab. Don’t pay again until you’ve checked.
+              </Banner>
+            )}
             {phase.lookup === "checking" ? (
               <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Looking for this payment in {shortAddress(phase.view.sale.buyerAddress)}’s recent transactions…</p>
             ) : (
@@ -264,14 +280,17 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
                     ? "We couldn’t reach the network to check. Check your wallet before retrying: open Phantom’s activity and look for this payment."
                     : `No payment for this sale shows up yet among ${shortAddress(phase.view.sale.buyerAddress)}’s last 20 transactions. A payment can take a minute to appear: check Phantom’s activity, then check again.`}
                 </p>
-                <Button variant="secondary" onClick={() => lookForPayment(phase.view, phase.attempt, phase.expired)}>Check again</Button>
+                {phase.lookup === "failed" ? (
+                  <p className="m-0 text-[13px] text-muted">You can close this. Reopening it, in this tab or another, checks again before any new payment.</p>
+                ) : null}
+                <Button variant="secondary" onClick={() => lookForPayment(phase.view, phase.attempt, phase.expired, phase.reason)}>Check again</Button>
                 {phase.expired ? (
                   <>
                     <label className="flex items-start gap-2.5 text-sm">
                       <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
                       I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
                     </label>
-                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view, true)}>Sign again</Button>
+                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view, phase.attempt.blockhash)}>Sign again</Button>
                   </>
                 ) : (
                   <p className="m-0 flex items-center gap-2 text-sm text-muted">
