@@ -86,10 +86,10 @@ export default function Ids() {
       {ids.error ? <Banner tone="danger">{errorMessage(ids.error)}</Banner> : null}
       {maxStatus === 'ready' && ids.isLoading ? <Loading label="Loading your IDs" /> : null}
       {ids.data?.map((id) => <IdCard key={id.id} id={id} />)}
-      {maxStatus === 'ready' && ids.data && !ids.data.length ? (
+      {maxStatus === 'ready' && ids.data && !ids.data.some((i) => !i.isDefault) ? (
         <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 10 }}>
           <AppText weight="semibold" size={16}>
-            No MAX ID yet
+            No claimed MAX ID yet
           </AppText>
           <AppText variant="small">Claim a handle so people can pay you by name.</AppText>
           <Button label="Claim your MAX ID" size="md" onPress={() => router.push('/claim')} />
