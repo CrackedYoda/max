@@ -154,11 +154,16 @@ function IdCard({ id }: { id: MaxId }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Handle name={id.handle} size={20} />
           <Pill small tone={id.type === 'agent' ? 'clay' : 'neutral'} label={id.type === 'agent' ? 'Agent' : 'Human'} />
+          {id.isDefault ? <Pill small tone="clay" label="Default ID" /> : null}
         </View>
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
           <Button label="Edit" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/edit-id', params: { id: id.id } })} />
-          <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
-          <Button label="Sell" variant="soft" size="sm" onPress={() => router.push({ pathname: '/sell', params: { id: id.id } })} />
+          {id.isDefault ? null : (
+            <>
+              <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
+              <Button label="Sell" variant="soft" size="sm" onPress={() => router.push({ pathname: '/sell', params: { id: id.id } })} />
+            </>
+          )}
         </View>
       </View>
       <View style={{ borderTopWidth: 1, borderTopColor: colors.sunken }}>

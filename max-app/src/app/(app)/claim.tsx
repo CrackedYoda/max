@@ -9,7 +9,7 @@ import { Button, LinkButton } from '@/components/ui/Button';
 import { HandleField } from '@/components/ui/Fields';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
 import { errorCode, errorDetails, errorMessage } from '@/error/messages';
-import { useAvailability, useClaimId, useMyIds } from '@/hooks/queries';
+import { useAvailability, useClaimId, useMe, useMyIds } from '@/hooks/queries';
 import { useDebounced } from '@/hooks/useDebounced';
 import { connectMax } from '@/services/session';
 import { toast } from '@/store/flows';
@@ -29,7 +29,10 @@ export default function Claim() {
   const accounts = useSession((s) => s.accounts);
   const maxStatus = useSession((s) => s.max);
   const ids = useMyIds();
-  const first = !ids.data?.length;
+  const me = useMe();
+  const defaultHandle = me.data?.defaultMaxId?.handle;
+  // The auto-created default does not count: the first claim is still the onboarding step.
+  const first = !ids.data?.some((x) => !x.isDefault);
 
   // Never show a verdict about a different name than the one in the field.
   const settled = q === debounced;
@@ -104,6 +107,8 @@ export default function Claim() {
           <Heading title="Now pick your name" lead="People will pay you by typing it." />
         </View>
       ) : null}
+
+      {defaultHandle ? <AppText variant="small">You already have {defaultHandle} for receiving.</AppText> : null}
 
       {maxStatus === 'connecting' || maxStatus === 'signed_out' ? <Banner>Connecting to MAX…</Banner> : null}
       {maxStatus === 'unavailable' ? (

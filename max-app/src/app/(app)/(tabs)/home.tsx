@@ -11,7 +11,7 @@ import { Icon, type IconName } from '@/components/ui/Icon';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { errorMessage } from '@/error/messages';
 import { useActivity } from '@/hooks/useActivity';
-import { useBalances, useMyIds } from '@/hooks/queries';
+import { useBalances, useMe, useMyIds } from '@/hooks/queries';
 import type { Balance } from '@/services/chain';
 import { useSession } from '@/store/session';
 import { colors, fonts, spacing } from '@/theme';
@@ -24,6 +24,7 @@ export default function Home() {
   const setPendingClaim = useSession((s) => s.setPendingClaim);
   const maxStatus = useSession((s) => s.max);
   const ids = useMyIds();
+  const me = useMe();
   const balances = useBalances();
   const activity = useActivity();
   const [refreshing, setRefreshing] = useState(false);
@@ -36,8 +37,9 @@ export default function Home() {
     }
   }, [pendingClaim, setPendingClaim]);
 
-  const primary = ids.data?.[0];
-  const name = primary?.displayName || (primary ? primary.handle : 'there');
+  const primary = me.data?.primaryMaxId ?? null;
+  const full = primary ? ids.data?.find((x) => x.id === primary.id) : undefined;
+  const name = full?.displayName || (primary ? primary.handle : 'there');
   const top = pickHeadline(balances.data ?? []);
 
   return (
@@ -49,7 +51,7 @@ export default function Home() {
           refreshing={refreshing}
           onRefresh={async () => {
             setRefreshing(true);
-            await Promise.allSettled([balances.refetch(), activity.refetch(), ids.refetch()]);
+            await Promise.allSettled([balances.refetch(), activity.refetch(), ids.refetch(), me.refetch()]);
             setRefreshing(false);
           }}
         />

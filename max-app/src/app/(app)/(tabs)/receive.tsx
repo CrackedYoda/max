@@ -11,7 +11,7 @@ import { CopyButton } from '@/components/ui/Fields';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { getEnv } from '@/config/env';
 import { errorMessage } from '@/error/messages';
-import { useMyIds } from '@/hooks/queries';
+import { useMe, useMyIds } from '@/hooks/queries';
 import { toast } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors, spacing } from '@/theme';
@@ -22,7 +22,9 @@ export default function Receive() {
   const ids = useMyIds();
   const accounts = useSession((s) => s.accounts);
   const maxReady = useSession((s) => s.max === 'ready');
-  const id = ids.data?.[0];
+  const me = useMe();
+  const primaryId = me.data?.primaryMaxId?.id;
+  const id = (primaryId ? ids.data?.find((x) => x.id === primaryId) : undefined) ?? ids.data?.[0];
   const link = id ? `${getEnv().webUrl}/${id.handle}` : null;
 
   // With a handle: where payments by name land. Without: this phone's own addresses.
