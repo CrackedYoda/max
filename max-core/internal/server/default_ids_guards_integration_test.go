@@ -35,6 +35,11 @@ func TestClaim_RefusesDefaultShapes(t *testing.T) {
 		if code != http.StatusBadRequest || errCode(body) != "INVALID_MAX_ID" || !strings.Contains(fmt.Sprint(body), "reserved format") {
 			t.Fatalf("claim %q: %d %v", name, code, body)
 		}
+		// Availability reports the same refusal, even for the caller's own default.
+		code, body = alice.c.do("GET", "/v1/ids/availability?name="+name, nil)
+		if d := data(t, body); code != http.StatusOK || d["available"] != false || d["reason"] != "invalid" || d["detail"] != "this name uses a reserved format" {
+			t.Fatalf("availability %q: %d %v", name, code, body)
+		}
 	}
 	// Ordinary names still work.
 	claimID(t, alice, "yoda")
