@@ -15,12 +15,23 @@ import (
 
 const createDefaultAttempts = 5
 
+// DefaultSource records, in the maxid.default_created audit entry, which path
+// created a default.
+type DefaultSource string
+
+const (
+	DefaultSourceLogin    DefaultSource = "login"
+	DefaultSourceAgent    DefaultSource = "agent"
+	DefaultSourceBackfill DefaultSource = "backfill"
+)
+
 // CreateDefault gives an account its default MAX ID inside the caller's
 // transaction. The name comes from namer; a name that is already taken or
 // held is retried with a fresh one, up to 5 attempts. A second default for the
 // same account returns ErrDefaultExists and is never retried. destWallet, when
-// set, becomes the destination for its namespace.
-func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer, owner uuid.UUID, typ Type, destWallet *WalletRef) (MaxID, error) {
+// set, becomes the destination for its namespace. source is recorded on the
+// audit entry.
+func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer, owner uuid.UUID, typ Type, destWallet *WalletRef, source DefaultSource) (MaxID, error) {
 	if !typ.Valid() {
 		return MaxID{}, ErrInvalidType
 	}
@@ -82,9 +93,40 @@ func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer
 	}
 	if err := audit.Write(ctx, q, audit.Entry{
 		Actor: &owner, Action: "maxid.default_created", ResourceType: "max_id", ResourceID: row.ID.String(),
-		Metadata: map[string]any{"name": row.CanonicalName, "type": string(typ)},
+		Metadata: map[string]any{"name": row.CanonicalName, "type": string(typ), "source": string(source)},
 	}); err != nil {
 		return MaxID{}, err
 	}
 	return out, nil
+}
+
+// FillDefaultDestination makes a newly linked wallet the destination of the
+// owner's default MAX ID for the wallet's namespace, inside the caller's
+// transaction, but only when the default has no destination there yet: an
+// existing destination is never overwritten. Like SetDestination it bumps the
+// resolution version and writes an audit entry. It reports whether it set one.
+func FillDefaultDestination(ctx context.Context, q *generated.Queries, owner uuid.UUID, wallet WalletRef) (bool, error) {
+	id, err := q.FillDefaultDestination(ctx, generated.FillDefaultDestinationParams{
+		ChainNamespace: string(wallet.Namespace), WalletID: wallet.ID, Owner: owner,
+	})
+	if database.IsNoRows(err) {
+		return false, nil // no active default, or it already has a destination here
+	}
+	if err != nil {
+		return false, err
+	}
+	row, err := q.BumpResolutionVersion(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if err := audit.Write(ctx, q, audit.Entry{
+		Actor: &owner, Action: "maxid.destination_set", ResourceType: "max_id", ResourceID: id.String(),
+		Metadata: map[string]any{
+			"namespace": string(wallet.Namespace), "wallet_id": wallet.ID.String(),
+			"resolution_version": row.ResolutionVersion, "via": "wallet_link",
+		},
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }

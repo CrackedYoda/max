@@ -49,7 +49,7 @@ func TestCreateDefault_OnePerAccount(t *testing.T) {
 	q := generated.New(env.pool)
 	ctx := context.Background()
 
-	m, err := maxids.CreateDefault(ctx, q, randomNamer(t), alice, maxids.TypeHuman, nil)
+	m, err := maxids.CreateDefault(ctx, q, randomNamer(t), alice, maxids.TypeHuman, nil, maxids.DefaultSourceLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,15 @@ func TestCreateDefault_OnePerAccount(t *testing.T) {
 	if err := env.pool.QueryRow(ctx, `SELECT listable_at >= '9999-01-01' FROM max_ids WHERE id = $1`, m.ID).Scan(&infinite); err != nil || !infinite {
 		t.Fatalf("listable_at far future: %v %v", infinite, err)
 	}
-	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'maxid.default_created' AND resource_id = $1`, m.ID.String()); n != 1 {
+	var renameForever bool
+	if err := env.pool.QueryRow(ctx, `SELECT extract(year FROM rename_available_at AT TIME ZONE 'UTC') = 9999 FROM max_ids WHERE id = $1`, m.ID).Scan(&renameForever); err != nil || !renameForever {
+		t.Fatalf("rename_available_at in 9999: %v %v", renameForever, err)
+	}
+	if n := count(t, env, `SELECT count(*) FROM audit_logs WHERE action = 'maxid.default_created' AND resource_id = $1 AND metadata->>'source' = 'login'`, m.ID.String()); n != 1 {
 		t.Fatalf("audit entries = %d", n)
 	}
 
-	_, err = maxids.CreateDefault(ctx, q, randomNamer(t), alice, maxids.TypeHuman, nil)
+	_, err = maxids.CreateDefault(ctx, q, randomNamer(t), alice, maxids.TypeHuman, nil, maxids.DefaultSourceLogin)
 	if !errors.Is(err, maxids.ErrDefaultExists) {
 		t.Fatalf("second default: %v", err)
 	}
@@ -78,7 +82,7 @@ func TestCreateDefault_SetsDestination(t *testing.T) {
 	alice := bareAccount(t, env, "human")
 	walletID := bareWallet(t, env, alice, "solana", "active", 0)
 	ref := &maxids.WalletRef{ID: walletID, Namespace: chains.NamespaceSolana}
-	m, err := maxids.CreateDefault(context.Background(), generated.New(env.pool), randomNamer(t), alice, maxids.TypeHuman, ref)
+	m, err := maxids.CreateDefault(context.Background(), generated.New(env.pool), randomNamer(t), alice, maxids.TypeHuman, ref, maxids.DefaultSourceLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,16 +96,16 @@ func TestCreateDefault_RetriesNameCollision(t *testing.T) {
 	alice, bob := bareAccount(t, env, "human"), bareAccount(t, env, "human")
 	q := generated.New(env.pool)
 	ctx := context.Background()
-	if _, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222"}}, alice, maxids.TypeHuman, nil); err != nil {
+	if _, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222"}}, alice, maxids.TypeHuman, nil, maxids.DefaultSourceLogin); err != nil {
 		t.Fatal(err)
 	}
-	m, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222", "bbbbbbbb33333333"}}, bob, maxids.TypeHuman, nil)
+	m, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222", "bbbbbbbb33333333"}}, bob, maxids.TypeHuman, nil, maxids.DefaultSourceLogin)
 	if err != nil || m.CanonicalName != "bbbbbbbb33333333" {
 		t.Fatalf("retry: %v %+v", err, m)
 	}
 	// Five collisions in a row give up.
 	carol := bareAccount(t, env, "human")
-	if _, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222"}}, carol, maxids.TypeHuman, nil); err == nil {
+	if _, err := maxids.CreateDefault(ctx, q, &fixedNamer{names: []string{"aaaaaaaa22222222"}}, carol, maxids.TypeHuman, nil, maxids.DefaultSourceLogin); err == nil {
 		t.Fatal("expected failure after 5 collisions")
 	}
 }
@@ -127,7 +131,7 @@ func TestMigration012_DownKeepsRows(t *testing.T) {
 	env := newTestEnv(t)
 	alice := bareAccount(t, env, "human")
 	ctx := context.Background()
-	if _, err := maxids.CreateDefault(ctx, generated.New(env.pool), randomNamer(t), alice, maxids.TypeHuman, nil); err != nil {
+	if _, err := maxids.CreateDefault(ctx, generated.New(env.pool), randomNamer(t), alice, maxids.TypeHuman, nil, maxids.DefaultSourceLogin); err != nil {
 		t.Fatal(err)
 	}
 	down, err := os.ReadFile("../../db/migrations/000012_default_max_ids.down.sql")
@@ -223,6 +227,9 @@ func TestLogin_NewAccountGetsDefault(t *testing.T) {
 		WHERE m.owner_account_id = $1 AND m.is_default AND d.chain_namespace = 'solana' AND d.wallet_id = $2`, alice.account, alice.walletID); n != 1 {
 		t.Fatal("destination is not the login wallet")
 	}
+	if n := defaultAudits(t, env, alice.account, "login"); n != 1 {
+		t.Fatalf("login-sourced audit entries = %d", n)
+	}
 	// A returning login does not create another.
 	alice.c.prove(alice.wallet, "login")
 	if n := defaults(t, env, alice.account); n != 1 {
@@ -288,9 +295,150 @@ func TestAgentCreate_GetsDefault(t *testing.T) {
 	if n := count(t, env, `SELECT count(*) FROM max_id_destinations d JOIN max_ids m ON m.id = d.max_id WHERE m.owner_account_id = $1`, agentID); n != 0 {
 		t.Fatalf("agent default destinations = %d", n)
 	}
+	if n := defaultAudits(t, env, agentID, "agent"); n != 1 {
+		t.Fatalf("agent-sourced audit entries = %d", n)
+	}
 	// The administrator still has exactly their own.
 	if n := defaults(t, env, admin.account); n != 1 {
 		t.Fatalf("admin defaults = %d", n)
+	}
+}
+
+// defaultAudits counts maxid.default_created entries for acct's default with
+// the given source.
+func defaultAudits(t *testing.T, env *testEnv, acct uuid.UUID, source string) int {
+	t.Helper()
+	return count(t, env, `SELECT count(*) FROM audit_logs l JOIN max_ids m ON l.resource_id = m.id::text
+		WHERE l.action = 'maxid.default_created' AND m.owner_account_id = $1 AND m.is_default AND l.metadata->>'source' = $2`, acct, source)
+}
+
+// defaultDest returns the wallet the account's default resolves to in ns, or uuid.Nil.
+func defaultDest(t *testing.T, env *testEnv, acct uuid.UUID, ns string) uuid.UUID {
+	t.Helper()
+	var w uuid.UUID
+	err := env.pool.QueryRow(context.Background(), `SELECT d.wallet_id FROM max_id_destinations d JOIN max_ids m ON m.id = d.max_id
+		WHERE m.owner_account_id = $1 AND m.is_default AND d.chain_namespace = $2`, acct, ns).Scan(&w)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func walletIDOf(t *testing.T, env *testEnv, address string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := env.pool.QueryRow(context.Background(), `SELECT id FROM wallets WHERE address = $1 AND status = 'active'`, address).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func defaultVersion(t *testing.T, env *testEnv, acct uuid.UUID) int {
+	t.Helper()
+	return count(t, env, `SELECT resolution_version FROM max_ids WHERE owner_account_id = $1 AND is_default`, acct)
+}
+
+// An agent's default has no destination until the agent links a wallet; the
+// link fills it, so the default resolves to that wallet.
+func TestLinkWallet_FillsAgentDefault(t *testing.T) {
+	env := newTestEnv(t)
+	admin := newParty(t, env)
+	code, body := admin.c.do("POST", "/v1/agents", map[string]any{"name": "Research Bot"})
+	if code != http.StatusCreated {
+		t.Fatalf("create agent: %d %v", code, body)
+	}
+	agentID := data(t, body)["id"].(string)
+	agentAcct := uuid.MustParse(agentID)
+	_, handle := defaultIDOf(t, env, agentAcct)
+	before := defaultVersion(t, env, agentAcct)
+
+	other := &client{t: t, h: env.handler}
+	if code, body := other.do("GET", "/v1/resolve/max."+handle+"?chain=solana", nil); code == http.StatusOK {
+		t.Fatalf("resolve before link should fail: %d %v", code, body)
+	}
+
+	wallet := newSol()
+	_, body = admin.c.do("POST", "/v1/agents/"+agentID+"/wallets/challenge", map[string]any{"namespace": "solana", "address": wallet.address()})
+	ch := data(t, body)
+	if code, body = admin.c.do("POST", "/v1/agents/"+agentID+"/wallets/verify", map[string]any{
+		"nonce": ch["nonce"], "signature": wallet.sign(ch["message"].(string)),
+	}); code != http.StatusOK {
+		t.Fatalf("agent wallet link: %d %v", code, body)
+	}
+
+	code, body = other.do("GET", "/v1/resolve/max."+handle+"?chain=solana", nil)
+	if code != http.StatusOK || data(t, body)["address"] != wallet.address() {
+		t.Fatalf("resolve after link: %d %v", code, body)
+	}
+	if after := defaultVersion(t, env, agentAcct); after != before+1 {
+		t.Fatalf("resolution_version %d -> %d", before, after)
+	}
+
+	// The agent detail marks the default.
+	code, body = admin.c.do("GET", "/v1/agents/"+agentID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("agent detail: %d %v", code, body)
+	}
+	ids := data(t, body)["ids"].([]any)
+	if len(ids) != 1 || ids[0].(map[string]any)["isDefault"] != true || ids[0].(map[string]any)["handle"] != "max."+handle {
+		t.Fatalf("agent detail ids = %v", ids)
+	}
+}
+
+// A human who logged in on EVM gets a Solana destination on the default when
+// linking Solana; existing destinations are never overwritten.
+func TestLinkWallet_FillsMissingNamespaceOnly(t *testing.T) {
+	env := newTestEnv(t)
+	evm := newEVM()
+	c := &client{t: t, h: env.handler}
+	if code, body := c.prove(evm, "login"); code != http.StatusOK {
+		t.Fatalf("login: %d %v", code, body)
+	}
+	evmWallet := walletIDOf(t, env, evm.address())
+	var acct uuid.UUID
+	if err := env.pool.QueryRow(context.Background(), `SELECT account_id FROM wallets WHERE id = $1`, evmWallet).Scan(&acct); err != nil {
+		t.Fatal(err)
+	}
+	if defaultDest(t, env, acct, "evm") != evmWallet || defaultDest(t, env, acct, "solana") != uuid.Nil {
+		t.Fatal("login default destinations wrong")
+	}
+
+	sol := newSol()
+	if code, body := c.prove(sol, "link"); code != http.StatusOK {
+		t.Fatalf("link solana: %d %v", code, body)
+	}
+	solWallet := walletIDOf(t, env, sol.address())
+	if got := defaultDest(t, env, acct, "solana"); got != solWallet {
+		t.Fatalf("solana destination = %s, want %s", got, solWallet)
+	}
+	if got := defaultDest(t, env, acct, "evm"); got != evmWallet {
+		t.Fatalf("evm destination changed to %s", got)
+	}
+	_, handle := defaultIDOf(t, env, acct)
+	code, body := (&client{t: t, h: env.handler}).do("GET", "/v1/resolve/max."+handle+"?chain=solana", nil)
+	if code != http.StatusOK || data(t, body)["address"] != sol.address() {
+		t.Fatalf("resolve solana: %d %v", code, body)
+	}
+
+	// A second wallet in a namespace that already has a destination leaves it alone.
+	version := defaultVersion(t, env, acct)
+	if code, body := c.prove(newSol(), "link"); code != http.StatusOK {
+		t.Fatalf("link second solana: %d %v", code, body)
+	}
+	if code, body := c.prove(newEVM(), "link"); code != http.StatusOK {
+		t.Fatalf("link second evm: %d %v", code, body)
+	}
+	if got := defaultDest(t, env, acct, "solana"); got != solWallet {
+		t.Fatalf("solana destination overwritten with %s", got)
+	}
+	if got := defaultDest(t, env, acct, "evm"); got != evmWallet {
+		t.Fatalf("evm destination overwritten with %s", got)
+	}
+	if v := defaultVersion(t, env, acct); v != version {
+		t.Fatalf("resolution_version bumped without a change: %d -> %d", version, v)
 	}
 }
 
@@ -314,6 +462,11 @@ func TestBackfill_Idempotent(t *testing.T) {
 	}
 	if c := count(t, env, `SELECT count(*) FROM max_ids WHERE is_default`); c != 3 {
 		t.Fatalf("defaults = %d", c)
+	}
+	for _, acct := range []uuid.UUID{human, agent, org} {
+		if c := defaultAudits(t, env, acct, "backfill"); c != 1 {
+			t.Fatalf("%s backfill-sourced audit entries = %d", acct, c)
+		}
 	}
 	for acct, typ := range map[uuid.UUID]string{human: "human", agent: "agent", org: "human"} {
 		if c := count(t, env, `SELECT count(*) FROM max_ids WHERE owner_account_id = $1 AND is_default AND type = $2`, acct, typ); c != 1 {
@@ -389,7 +542,7 @@ func TestBackfill_RacesCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := maxids.CreateDefault(ctx, generated.New(tx), randomNamer(t), acct, maxids.TypeHuman, nil); err != nil {
+	if _, err := maxids.CreateDefault(ctx, generated.New(tx), randomNamer(t), acct, maxids.TypeHuman, nil, maxids.DefaultSourceLogin); err != nil {
 		t.Fatal(err)
 	}
 	type result struct {

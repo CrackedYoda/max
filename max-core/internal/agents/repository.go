@@ -51,8 +51,9 @@ func (r *repository) CreateAgent(ctx context.Context, admin uuid.UUID, name, des
 		if err != nil {
 			return err
 		}
-		// An agent's default has no destination until it links a wallet.
-		if _, err := maxids.CreateDefault(ctx, q, r.namer, acct.ID, maxids.TypeAgent, nil); err != nil {
+		// An agent starts with no wallet, so its default starts with no
+		// destination; linking a wallet later fills it (auth LinkWallet).
+		if _, err := maxids.CreateDefault(ctx, q, r.namer, acct.ID, maxids.TypeAgent, nil, maxids.DefaultSourceAgent); err != nil {
 			return err
 		}
 		a = toAgent(row)

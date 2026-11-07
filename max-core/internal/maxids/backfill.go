@@ -150,7 +150,7 @@ func backfillAccount(ctx context.Context, tx pgx.Tx, namer DefaultNamer, owner u
 	if len(dests) > 0 {
 		first = &dests[0]
 	}
-	m, err := CreateDefault(ctx, q, namer, owner, typ, first)
+	m, err := CreateDefault(ctx, q, namer, owner, typ, first, DefaultSourceBackfill)
 	if errors.Is(err, ErrDefaultExists) {
 		return false, nil
 	}

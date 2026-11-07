@@ -98,8 +98,8 @@ func (q *Queries) CountMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UU
 }
 
 const createDefaultMaxID = `-- name: CreateDefaultMaxID :one
-INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name, is_default, listable_at)
-VALUES ($1, $2, $3, '', true, timestamptz '9999-12-31 00:00:00+00')
+INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name, is_default, listable_at, rename_available_at)
+VALUES ($1, $2, $3, '', true, timestamptz '9999-12-31 00:00:00+00', timestamptz '9999-12-31 00:00:00+00')
 ON CONFLICT (canonical_name) DO NOTHING
 RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default
 `
@@ -112,6 +112,9 @@ type CreateDefaultMaxIDParams struct {
 
 // A taken name returns no row (the caller retries with a new name). A second
 // default for the account still raises the max_ids_one_default violation.
+// listable_at and rename_available_at are both pushed to 9999: defaults are
+// never listable or renameable, and the dates keep it so for a binary that
+// predates is_default (for example after a down migration or a rollback).
 func (q *Queries) CreateDefaultMaxID(ctx context.Context, arg CreateDefaultMaxIDParams) (MaxID, error) {
 	row := q.db.QueryRow(ctx, createDefaultMaxID, arg.CanonicalName, arg.OwnerAccountID, arg.Type)
 	var i MaxID
@@ -244,6 +247,31 @@ func (q *Queries) DeleteDestination(ctx context.Context, arg DeleteDestinationPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const fillDefaultDestination = `-- name: FillDefaultDestination :one
+INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
+SELECT m.id, $1, $2
+FROM max_ids m
+WHERE m.owner_account_id = $3 AND m.is_default AND m.status = 'active'
+ON CONFLICT (max_id, chain_namespace) DO NOTHING
+RETURNING max_id
+`
+
+type FillDefaultDestinationParams struct {
+	ChainNamespace string
+	WalletID       uuid.UUID
+	Owner          uuid.UUID
+}
+
+// Gives the owner's active default a destination for the namespace only when it
+// has none; an existing destination is never overwritten. No row means nothing
+// was inserted.
+func (q *Queries) FillDefaultDestination(ctx context.Context, arg FillDefaultDestinationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, fillDefaultDestination, arg.ChainNamespace, arg.WalletID, arg.Owner)
+	var max_id uuid.UUID
+	err := row.Scan(&max_id)
+	return max_id, err
 }
 
 const getDefaultMaxID = `-- name: GetDefaultMaxID :one

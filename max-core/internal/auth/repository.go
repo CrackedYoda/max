@@ -116,7 +116,7 @@ func (r *repository) loginOnce(ctx context.Context, proof WalletProof) (acct Acc
 		// of a first-login race (which fails on CreateWallet above) rolls
 		// back without leaving an account or a default behind.
 		if _, err := maxids.CreateDefault(ctx, q, r.namer, a.ID, maxids.TypeHuman,
-			&maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)}); err != nil {
+			&maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)}, maxids.DefaultSourceLogin); err != nil {
 			return err
 		}
 		if err := audit.Write(ctx, q, audit.Entry{
@@ -161,10 +161,18 @@ func (r *repository) LinkWallet(ctx context.Context, accountID uuid.UUID, proof 
 			return err
 		}
 		out = toWallet(nw)
-		return audit.Write(ctx, q, audit.Entry{
+		if err := audit.Write(ctx, q, audit.Entry{
 			Actor: &accountID, Action: "wallet.linked", ResourceType: "wallet", ResourceID: nw.ID.String(),
 			Metadata: map[string]any{"namespace": nw.ChainNamespace, "address": nw.Address},
-		})
+		}); err != nil {
+			return err
+		}
+		// The first wallet linked in a namespace becomes the default MAX ID's
+		// destination there (agents start with none; humans with only their
+		// login namespace). An existing destination is left alone.
+		_, err = maxids.FillDefaultDestination(ctx, q, accountID,
+			maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)})
+		return err
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err, "wallets_active_address_uniq") {
