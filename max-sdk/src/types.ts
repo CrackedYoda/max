@@ -405,7 +405,8 @@ export interface AgentDetail extends Agent {
   policy: AgentPolicy;
   credentials: AgentCredential[];
   wallets: Wallet[];
-  ids: { id: string; handle: string; type: MaxIdType; status: string }[];
+  /** The agent's MAX IDs; `isDefault` marks its default ID. */
+  ids: { id: string; handle: string; type: MaxIdType; status: string; isDefault: boolean }[];
 }
 
 // ---- Renames ----

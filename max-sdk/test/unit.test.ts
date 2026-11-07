@@ -291,6 +291,17 @@ describe("default MAX IDs", () => {
       (e: unknown) => e instanceof MaxApiError && e.code === "DEFAULT_ID_LOCKED",
     );
   });
+
+  test("agents.get ids carry isDefault", async () => {
+    const { fetchFn } = mockFetch({
+      "GET /v1/agents/ag_1": ok({
+        id: "ag_1", name: "Bot", policy: {}, credentials: [], wallets: [],
+        ids: [{ id: "id_9", handle: "max.k7m2x9p4q8r3t5vz", type: "agent", status: "active", isDefault: true }],
+      }),
+    });
+    const agent = await client(fetchFn).agents.get("ag_1");
+    assert.equal(agent.ids[0]?.isDefault, true);
+  });
 });
 
 describe("units", () => {
