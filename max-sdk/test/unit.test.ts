@@ -267,6 +267,32 @@ describe("PolicySigner", () => {
   });
 });
 
+describe("default MAX IDs", () => {
+  test("me() exposes defaultMaxId and primaryMaxId", async () => {
+    const def = { id: "id_1", handle: "max.k7m2x9p4q8r3t5vz" };
+    const { fetchFn } = mockFetch({
+      "GET /v1/auth/me": ok({ id: "a1", type: "human", status: "active", createdAt: "2026-01-01T00:00:00Z", defaultMaxId: def, primaryMaxId: def }),
+    });
+    const me = await client(fetchFn).auth.me();
+    assert.deepEqual(me.defaultMaxId, def);
+    assert.equal(me.primaryMaxId?.handle, def.handle);
+  });
+
+  test("ids.list carries isDefault; renaming a default surfaces DEFAULT_ID_LOCKED", async () => {
+    const { fetchFn } = mockFetch({
+      "GET /v1/ids": ok([{ id: "id_1", name: "yoda", isDefault: false }, { id: "id_2", name: "k7m2x9p4q8r3t5vz", isDefault: true }]),
+      "POST /v1/ids/id_2/rename": json(409, { error: { code: "DEFAULT_ID_LOCKED", message: "default IDs cannot be renamed" } }),
+    });
+    const c = client(fetchFn);
+    const ids = await c.ids.list();
+    assert.deepEqual(ids.map((i) => i.isDefault), [false, true]);
+    await assert.rejects(
+      c.renames.request("id_2", { newName: "other", feeChain: "base", senderAddress: "0xabc" }),
+      (e: unknown) => e instanceof MaxApiError && e.code === "DEFAULT_ID_LOCKED",
+    );
+  });
+});
+
 describe("units", () => {
   test("parseUnits / formatUnits round-trip without floats", () => {
     assert.equal(parseUnits("0.1", 9), 100_000_000n);
