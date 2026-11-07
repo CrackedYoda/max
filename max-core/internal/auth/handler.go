@@ -75,12 +75,12 @@ func (h *Handler) Verify(c *gin.Context) {
 
 func (h *Handler) Me(c *gin.Context) {
 	p := shared.MustPrincipal(c)
-	acct, err := h.svc.Me(c.Request.Context(), p.AccountID)
+	res, err := h.svc.Me(c.Request.Context(), p.AccountID)
 	if err != nil {
 		shared.Fail(c, err)
 		return
 	}
-	shared.OK(c, toAccountResponse(acct))
+	shared.OK(c, toMeResponse(res))
 }
 
 func (h *Handler) Logout(c *gin.Context) {

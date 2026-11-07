@@ -33,6 +33,32 @@ type accountResponse struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type idRefResponse struct {
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+}
+
+type meResponse struct {
+	accountResponse
+	DefaultMaxID *idRefResponse `json:"defaultMaxId"`
+	PrimaryMaxID *idRefResponse `json:"primaryMaxId"`
+}
+
+func toIDRefResponse(r *IDRef) *idRefResponse {
+	if r == nil {
+		return nil
+	}
+	return &idRefResponse{ID: r.ID.String(), Handle: r.Handle}
+}
+
+func toMeResponse(m MeResult) meResponse {
+	return meResponse{
+		accountResponse: toAccountResponse(m.Account),
+		DefaultMaxID:    toIDRefResponse(m.DefaultMaxID),
+		PrimaryMaxID:    toIDRefResponse(m.PrimaryMaxID),
+	}
+}
+
 type walletResponse struct {
 	ID         string    `json:"id"`
 	Namespace  string    `json:"namespace"`

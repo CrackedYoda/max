@@ -41,8 +41,8 @@ go test -tags live -run Live ./internal/routing/nearintents/ # real (uncommitted
 | GET | `/healthz` | DB readiness |
 | GET | `/v1/chains` | Supported chains `{key,name,namespace,evmChainId,testnet,nativeCoin}` |
 | GET | `/v1/ids/availability?name=max.yoda` | `{name,handle,available,reason?,detail?,claimPolicy?}`; reason ∈ `taken`·`reserved`·`invalid` |
-| GET | `/v1/profiles/:maxId` | Public profile + `chains[{chain,reachable}]` |
-| GET | `/v1/resolve/:maxId?chain=solana&asset=<mint\|native>` | `{maxId,handle,type,displayName,chain,asset,address,resolutionVersion,resolvedAt,notes[]}`; `NO_COMPATIBLE_WALLET` if no wallet on that chain (never guesses) |
+| GET | `/v1/profiles/:maxId` | Public profile + `isDefault` + `chains[{chain,reachable}]` |
+| GET | `/v1/resolve/:maxId?chain=solana&asset=<mint\|native>` | `{maxId,handle,type,displayName,isDefault,chain,asset,address,resolutionVersion,resolvedAt,notes[]}`; `NO_COMPATIBLE_WALLET` if no wallet on that chain (never guesses) |
 
 ### Wallet proof (login + linking)
 
@@ -60,16 +60,22 @@ Each nonce is single-use (a failed attempt burns it) and expires after `AUTH_CHA
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/v1/auth/me` | Account |
+| GET | `/v1/auth/me` | Account plus `defaultMaxId` and `primaryMaxId`, each `{id,handle}` (handle is `max.<name>`) or `null` if the account has no IDs yet. Primary is the oldest active claimed ID, else the default |
 | POST | `/v1/auth/logout` | 204, clears cookie |
 | GET | `/v1/wallets` | Linked wallets |
 | DELETE | `/v1/wallets/:id` | Clears destinations using it; `LAST_WALLET` if it is the only one |
 | POST | `/v1/ids` | `{name, type?: "human"\|"agent", displayName?}` — auto-sets first wallet per namespace as destination |
-| GET | `/v1/ids` | My MAX IDs with destinations |
+| GET | `/v1/ids` | My MAX IDs with destinations. Claimed IDs first (oldest first), the default ID last. Every ID response (list, get, patch, claim) carries `isDefault` |
 | GET | `/v1/ids/:id` | 404 if not mine |
 | PATCH | `/v1/ids/:id` | `{displayName, description, avatarUrl(https)}` |
 | PUT | `/v1/ids/:id/destinations/:namespace` | `{walletId}` — wallet must be mine and in that namespace |
 | DELETE | `/v1/ids/:id/destinations/:namespace` | |
+
+### Default MAX IDs
+
+Every human and agent account gets one default MAX ID (for example `max.u7k3q9x2m4tab8zz`) so it can receive payments from the start: at first login for humans, at creation for agents, and by a startup backfill for existing accounts. The name is 16 random characters, chosen by `DEFAULT_ID_STYLE` (`random`; `words` is reserved and not implemented yet, and an unknown value fails boot). Existing defaults keep their names when the style changes.
+
+A default ID resolves and shows a profile like any other ID (`isDefault: true`), and its destinations, profile and settlement preference are editable. It is not counted against the 10-ID cap, skips the balance gate, and can never be listed, sold, offered on, renamed, transferred or deleted. To get a real name, claim one. Users cannot claim names shaped like a default.
 
 ### Transfers (direct, same-chain)
 

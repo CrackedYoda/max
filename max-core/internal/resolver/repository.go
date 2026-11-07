@@ -35,7 +35,7 @@ func (r *repository) GetProfile(ctx context.Context, canonical string) (Profile,
 	}
 	p := Profile{
 		MaxID: row.ID, CanonicalName: row.CanonicalName, Type: row.Type,
-		DisplayName: row.DisplayName, Description: row.Description, AvatarURL: row.AvatarUrl,
+		DisplayName: row.DisplayName, Description: row.Description, AvatarURL: row.AvatarUrl, IsDefault: row.IsDefault,
 		ResolutionVersion: row.ResolutionVersion, OwnerChangedAt: row.OwnerChangedAt, Destinations: make(map[chains.Namespace]string, len(dests)),
 	}
 	for _, d := range dests {

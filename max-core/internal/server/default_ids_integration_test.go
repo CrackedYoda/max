@@ -449,3 +449,98 @@ func TestBackfill_LockAllowsForeignKeyInserts(t *testing.T) {
 		t.Fatalf("wallet insert blocked by backfill lock: %v", err)
 	}
 }
+
+func refOf(t *testing.T, m map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := m[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %v, want object", key, m[key])
+	}
+	return v
+}
+
+func TestMe_DefaultAndPrimary(t *testing.T) {
+	env := newTestEnv(t)
+	alice := newParty(t, env)
+
+	code, body := alice.c.do("GET", "/v1/auth/me", nil)
+	if code != http.StatusOK {
+		t.Fatalf("me: %d %v", code, body)
+	}
+	me := data(t, body)
+	def, prim := refOf(t, me, "defaultMaxId"), refOf(t, me, "primaryMaxId")
+	if def["id"] != prim["id"] || def["handle"] != prim["handle"] || !strings.HasPrefix(def["handle"].(string), "max.") {
+		t.Fatalf("new account: default %v primary %v", def, prim)
+	}
+
+	claimID(t, alice, "alice")
+	_, body = alice.c.do("GET", "/v1/auth/me", nil)
+	me = data(t, body)
+	def2, prim2 := refOf(t, me, "defaultMaxId"), refOf(t, me, "primaryMaxId")
+	if def2["id"] != def["id"] {
+		t.Fatalf("default changed: %v", def2)
+	}
+	if prim2["handle"] != "max.alice" {
+		t.Fatalf("primary after claim = %v", prim2)
+	}
+}
+
+func TestIDs_IsDefaultField(t *testing.T) {
+	env := newTestEnv(t)
+	alice := newParty(t, env)
+	claimID(t, alice, "alice")
+	claimID(t, alice, "alicetwo")
+
+	code, body := alice.c.do("GET", "/v1/ids", nil)
+	if code != http.StatusOK {
+		t.Fatalf("list: %d %v", code, body)
+	}
+	list := body["data"].([]any)
+	if len(list) != 3 {
+		t.Fatalf("ids = %d", len(list))
+	}
+	// Claimed IDs first (created_at order), the default last.
+	for i, want := range []struct {
+		handle string
+		def    bool
+	}{{"max.alice", false}, {"max.alicetwo", false}, {"", true}} {
+		row := list[i].(map[string]any)
+		if row["isDefault"] != want.def || (want.handle != "" && row["handle"] != want.handle) {
+			t.Fatalf("row %d = %v, want %+v", i, row, want)
+		}
+	}
+	defID := list[2].(map[string]any)["id"].(string)
+	code, body = alice.c.do("GET", "/v1/ids/"+defID, nil)
+	if code != http.StatusOK || data(t, body)["isDefault"] != true {
+		t.Fatalf("get default: %d %v", code, body)
+	}
+	code, body = alice.c.do("PATCH", "/v1/ids/"+defID, map[string]any{"displayName": "Me"})
+	if code != http.StatusOK || data(t, body)["isDefault"] != true {
+		t.Fatalf("patch default: %d %v", code, body)
+	}
+}
+
+func TestResolve_DefaultWorks(t *testing.T) {
+	env := newTestEnv(t)
+	alice := newParty(t, env)
+	_, body := alice.c.do("GET", "/v1/auth/me", nil)
+	handle := refOf(t, data(t, body), "defaultMaxId")["handle"].(string)
+
+	other := &client{t: t, h: env.handler}
+	code, body := other.do("GET", "/v1/resolve/"+handle+"?chain=solana", nil)
+	if code != http.StatusOK {
+		t.Fatalf("resolve default: %d %v", code, body)
+	}
+	if d := data(t, body); d["isDefault"] != true || d["address"] != alice.wallet.address() {
+		t.Fatalf("resolve = %v", d)
+	}
+	code, body = other.do("GET", "/v1/profiles/"+handle, nil)
+	if code != http.StatusOK || data(t, body)["isDefault"] != true {
+		t.Fatalf("profile default: %d %v", code, body)
+	}
+	claimID(t, alice, "alice")
+	_, body = other.do("GET", "/v1/profiles/max.alice", nil)
+	if data(t, body)["isDefault"] != false {
+		t.Fatalf("claimed profile isDefault: %v", body)
+	}
+}

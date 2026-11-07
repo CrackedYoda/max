@@ -222,6 +222,28 @@ func (r *repository) RevokeSession(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *repository) GetAccountIDs(ctx context.Context, id uuid.UUID) (*IDRef, *IDRef, error) {
+	rows, err := r.q.ListAccountIDRefs(ctx, id)
+	if err != nil {
+		return nil, nil, shared.ErrInternal.WithError(err)
+	}
+	// Rows arrive claimed-first (oldest first), the default last.
+	var def, claimed *IDRef
+	for _, row := range rows {
+		ref := &IDRef{ID: row.ID, Handle: maxids.Handle(row.CanonicalName)}
+		if row.IsDefault {
+			def = ref
+		} else if claimed == nil {
+			claimed = ref
+		}
+	}
+	primary := claimed
+	if primary == nil {
+		primary = def
+	}
+	return def, primary, nil
+}
+
 func toAccount(a generated.Account) Account {
 	return Account{ID: a.ID, Type: a.Type, Status: a.Status, CreatedAt: a.CreatedAt}
 }

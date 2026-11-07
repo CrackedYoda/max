@@ -349,6 +349,40 @@ func (q *Queries) GetReservedName(ctx context.Context, canonicalName string) (Re
 	return i, err
 }
 
+const listAccountIDRefs = `-- name: ListAccountIDRefs :many
+SELECT id, canonical_name, is_default FROM max_ids
+WHERE owner_account_id = $1 AND (is_default OR status = 'active')
+ORDER BY is_default, created_at, id
+`
+
+type ListAccountIDRefsRow struct {
+	ID            uuid.UUID
+	CanonicalName string
+	IsDefault     bool
+}
+
+// The default plus every active claimed ID, claimed (oldest first) before the default.
+// Callers derive the default and primary IDs from this in one round trip.
+func (q *Queries) ListAccountIDRefs(ctx context.Context, ownerAccountID uuid.UUID) ([]ListAccountIDRefsRow, error) {
+	rows, err := q.db.Query(ctx, listAccountIDRefs, ownerAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAccountIDRefsRow
+	for rows.Next() {
+		var i ListAccountIDRefsRow
+		if err := rows.Scan(&i.ID, &i.CanonicalName, &i.IsDefault); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDestinations = `-- name: ListDestinations :many
 SELECT d.chain_namespace, d.wallet_id, d.updated_at, w.address
 FROM max_id_destinations d
@@ -390,9 +424,10 @@ func (q *Queries) ListDestinations(ctx context.Context, maxID uuid.UUID) ([]List
 }
 
 const listMaxIDsByOwner = `-- name: ListMaxIDsByOwner :many
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE owner_account_id = $1 ORDER BY created_at
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE owner_account_id = $1 ORDER BY is_default, created_at, id
 `
 
+// Claimed IDs first (oldest first), the default last: clients that take the first entry get a claimed name.
 func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUID) ([]MaxID, error) {
 	rows, err := q.db.Query(ctx, listMaxIDsByOwner, ownerAccountID)
 	if err != nil {

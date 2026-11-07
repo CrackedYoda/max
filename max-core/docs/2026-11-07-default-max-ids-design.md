@@ -16,7 +16,7 @@ addresses and BTC support, get their own specs.
 
 | Topic | Decision |
 |---|---|
-| Format (v1) | Style A, `random`: 16 chars from `a-z0-9` minus `0 o 1 l i`, with ≥3 digits and ≥3 letters, e.g. `max.u7k3q9x2m4tab8` |
+| Format (v1) | Style A, `random`: 16 chars from `a-z0-9` minus `0 o 1 l i`, with ≥3 digits and ≥3 letters, e.g. `max.u7k3q9x2m4tab8zz` |
 | Switchable | A `DefaultNamer` interface. `DEFAULT_ID_STYLE=random\|words` chooses the generator for new defaults. `words` (`adjective-noun-NNNN`) is added later. Existing defaults keep their names. |
 | Reserved shapes | Users can never claim a name matching any style's shape (random or words), whichever style is active. |
 | Count | Exactly one default per account (human and agent) |

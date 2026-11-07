@@ -18,7 +18,8 @@ INSERT INTO max_id_ownership_events (max_id, previous_owner, next_owner, event_t
 VALUES ($1, $2, $3, $4);
 
 -- name: ListMaxIDsByOwner :many
-SELECT * FROM max_ids WHERE owner_account_id = $1 ORDER BY created_at;
+-- Claimed IDs first (oldest first), the default last: clients that take the first entry get a claimed name.
+SELECT * FROM max_ids WHERE owner_account_id = $1 ORDER BY is_default, created_at, id;
 
 -- name: GetMaxIDForOwner :one
 SELECT * FROM max_ids WHERE id = $1 AND owner_account_id = $2;
@@ -107,3 +108,10 @@ WHERE NOT EXISTS (SELECT 1 FROM max_ids m WHERE m.owner_account_id = a.id AND m.
 ORDER BY a.created_at, a.id
 LIMIT sqlc.arg(batch)
 FOR NO KEY UPDATE OF a SKIP LOCKED;
+
+-- name: ListAccountIDRefs :many
+-- The default plus every active claimed ID, claimed (oldest first) before the default.
+-- Callers derive the default and primary IDs from this in one round trip.
+SELECT id, canonical_name, is_default FROM max_ids
+WHERE owner_account_id = $1 AND (is_default OR status = 'active')
+ORDER BY is_default, created_at, id;
