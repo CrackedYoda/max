@@ -1,12 +1,13 @@
 "use client";
 
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type MaxIdType, type Namespace, type SaleStatus, type SearchParams } from "@max/sdk";
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type MaxIdType, type Namespace, type SearchParams } from "@max/sdk";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { max } from "@/api/client";
 import { keys } from "@/api/keys";
 import { getEnv } from "@/config/env";
 import { mintDecimals } from "@/services/market";
+import { isSaleTerminal } from "@/services/saleAttempts";
 import { useSession } from "@/store/session";
 
 export function useAccountId(): string {
@@ -178,8 +179,7 @@ export function useReservedClaims() {
 
 // ---- marketplace ----
 
-/** Sale statuses after which nothing more happens on its own. */
-export const SALE_TERMINAL: readonly SaleStatus[] = ["completed", "expired", "cancelled", "manual_review", "reversed"];
+export { isSaleTerminal } from "@/services/saleAttempts";
 
 /** Public listing search with cursor pagination. */
 export function useMarketSearch(params: Omit<SearchParams, "cursor">) {
@@ -255,8 +255,8 @@ export function useSale(id: string | null, enabled = true) {
     queryFn: () => max().market.getSale(id!),
     enabled: !!id && enabled,
     refetchInterval: (q) => {
-      const s = q.state.data?.sale.status;
-      return s && SALE_TERMINAL.includes(s) ? false : 3000;
+      const s = q.state.data?.sale;
+      return s && isSaleTerminal(s) ? false : 3000;
     },
   });
 }

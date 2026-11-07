@@ -6,7 +6,10 @@ import { Connection, PublicKey } from "@solana/web3.js";
 
 import { getEnv } from "@/config/env";
 
+import { clearAttempt, saveAttempt, type SignAttempt } from "./saleAttempts";
 import { isRejection, WalletError, type ConnectedWallet } from "./wallets";
+
+export type { SignAttempt };
 
 type Phantom = { signAndSendTransaction(tx: unknown): Promise<{ signature: string }> };
 
@@ -40,11 +43,17 @@ export async function signSale(view: SaleView, wallet: ConnectedWallet, expect: 
   // With NEXT_PUBLIC_MARKET_TREASURY set, the fee must go to that treasury.
   const treasury = getEnv().marketTreasury;
   const tx = buildVerifiedSolanaSaleTransaction(view, wallet.address, blockhash, { buyer: wallet.address, ...expect, ...(treasury ? { treasury } : {}) });
+  // Persist the attempt before the wallet sees it: if the dialog closes or the
+  // tab reloads mid-send, the next open must wait this blockhash out.
+  saveAttempt(view.sale.id, { chain: view.sale.chain, blockhash, lastValidBlockHeight });
   try {
     const { signature } = await (wallet.provider as unknown as Phantom).signAndSendTransaction(tx);
     return signature;
   } catch (err) {
-    if (isRejection(err)) throw new WalletError("Rejected in Phantom. Nothing was sent.", true);
+    if (isRejection(err)) {
+      clearAttempt(view.sale.id); // declined in the wallet: nothing was signed or sent
+      throw new WalletError("Rejected in Phantom. Nothing was sent.", true);
+    }
     // Anything else may have happened after the broadcast: never treat it as "not paid".
     throw new MaybeSentError(
       `Phantom reported an error${view.sale.chain.includes("devnet") ? " (is Phantom set to Devnet?)" : ""}, but the payment may still have been sent.`,
@@ -52,13 +61,6 @@ export async function signSale(view: SaleView, wallet: ConnectedWallet, expect: 
     );
   }
 }
-
-/**
- * The blockhash a signed transaction was built with. Until the chain passes
- * lastValidBlockHeight that transaction can still land, so signing a second
- * one before then could pay twice.
- */
-export type SignAttempt = { chain: string; blockhash: string; lastValidBlockHeight: number };
 
 /** The wallet failed after signing started: the transaction may or may not be on chain. */
 export class MaybeSentError extends Error {

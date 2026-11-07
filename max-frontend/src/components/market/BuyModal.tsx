@@ -6,8 +6,9 @@ import { useEffect, useState } from "react";
 
 import { max } from "@/api/client";
 import { marketErrorMessage } from "@/error/market";
-import { SALE_TERMINAL, useInvalidateMarket, useSale, useTrustedDecimals, useWallets } from "@/hooks/queries";
+import { isSaleTerminal, useInvalidateMarket, useSale, useTrustedDecimals, useWallets } from "@/hooks/queries";
 import { attemptExpired, findSaleSignature, MaybeSentError, signSale, type SignAttempt } from "@/services/market";
+import { clearAttempt, loadAttempt, routeFor, settleAttempt } from "@/services/saleAttempts";
 import { useSession } from "@/store/session";
 import { shortAddress } from "@/utils/format";
 import { displayDecimal, pinnedPriceBase } from "@/utils/money";
@@ -80,7 +81,11 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
   const approved = phase.k === "held" && sale.data?.sale.status === "locked" && !sale.data.sale.txHash && sale.data.instructions ? sale.data : null;
   const reviewView = phase.k === "review" || (phase.k === "working" && phase.view) ? phase.view! : approved;
 
-  const busy = phase.k === "working" && (phase.step === "sign" || phase.step === "record");
+  const signing = phase.k === "working" && (phase.step === "sign" || phase.step === "record");
+  // While a sent attempt can still land, closing would invite a second payment
+  // from elsewhere; keep the dialog (and the tab) here until it's resolved.
+  const pendingAttempt = phase.k === "uncertain" && !phase.expired;
+  const busy = signing || pendingAttempt;
   useEffect(() => {
     if (!busy) return;
     const h = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -111,16 +116,21 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting?.attempt.blockhash, waiting?.lookup]);
 
-  const terminal = sale.data && SALE_TERMINAL.includes(sale.data.sale.status);
+  const terminal = sale.data && isSaleTerminal(sale.data.sale);
   useEffect(() => {
+    if (sale.data) settleAttempt(sale.data.sale);
     if (terminal) invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminal]);
+  }, [terminal, sale.data?.sale.txHash]);
 
   function advance(view: SaleView) {
     const s = view.sale;
-    if (s.status === "pending_review") setPhase({ k: "held", saleId: s.id });
-    else if (s.status === "locked" && !s.txHash && view.instructions) setPhase({ k: "review", view });
+    settleAttempt(s);
+    const attempt = loadAttempt(s.id);
+    const route = routeFor(s, !!view.instructions, attempt);
+    if (route === "held") setPhase({ k: "held", saleId: s.id });
+    else if (route === "uncertain" && attempt) void lookForPayment(view, attempt, false);
+    else if (route === "review") setPhase({ k: "review", view });
     else setPhase({ k: "watching", saleId: s.id });
   }
 
@@ -149,9 +159,17 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     }
   }
 
-  async function pay(view: SaleView) {
+  /** `retryConfirmed`: only from "Sign again", after the earlier attempt expired and the user confirmed. */
+  async function pay(view: SaleView, retryConfirmed = false) {
     setError(null);
     setConfirmedRetry(false);
+    // Every route into signing passes here: an earlier attempt for this sale
+    // (this dialog, a closed one, or before a reload) must be resolved first.
+    const earlier = loadAttempt(view.sale.id);
+    if (earlier && !retryConfirmed) {
+      await lookForPayment(view, earlier, false);
+      return;
+    }
     if (trusted.error) return setError(trusted.error);
     if (!pin) return setError("Couldn’t read this token’s decimals from the network, so the price can’t be checked. Nothing was signed.");
     if ("error" in pin) return setError(pin.error);
@@ -190,6 +208,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
     setPhase({ k: "working", step: "record", view });
     try {
       await max().market.submit(view.sale.id, txHash);
+      clearAttempt(view.sale.id); // recorded: MAX now tracks this tx
       setPhase({ k: "watching", saleId: view.sale.id });
     } catch (err) {
       // Already broadcast: only MAX's record of it failed. Never sign again.
@@ -252,7 +271,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
                       <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
                       I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
                     </label>
-                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view)}>Sign again</Button>
+                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view, true)}>Sign again</Button>
                   </>
                 ) : (
                   <p className="m-0 flex items-center gap-2 text-sm text-muted">
@@ -336,7 +355,7 @@ function SaleOutcome({ view, handle }: { view: SaleView; handle: string }) {
   const c = copy[s.status] ?? { tone: "info" as const, title: "In progress", body: "" };
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2"><SaleStatusPill status={s.status} />{!SALE_TERMINAL.includes(s.status) ? <Spinner className="text-muted" /> : null}</div>
+      <div className="flex items-center gap-2"><SaleStatusPill status={s.status} />{!isSaleTerminal(s) ? <Spinner className="text-muted" /> : null}</div>
       <Banner tone={c.tone} title={c.title}>{c.body}</Banner>
       {s.txHash ? (
         <div className="flex items-center gap-2">
