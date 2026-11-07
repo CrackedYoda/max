@@ -17,6 +17,11 @@ type Repository interface {
 	// Create claims the name and points it at the owner's first verified wallet
 	// in each namespace, atomically. Returns ErrNameTaken on a uniqueness race.
 	Create(ctx context.Context, owner uuid.UUID, canonical string, typ Type, displayName string) (MaxID, error)
+	// ListActiveWallets returns the owner's active linked wallets.
+	ListActiveWallets(ctx context.Context, owner uuid.UUID) ([]WalletRef, error)
+	// RecordGateCheck audits a registration balance gate evaluation. counted
+	// is nil when the gate passed without totalling every asset.
+	RecordGateCheck(ctx context.Context, owner uuid.UUID, requiredUSD float64, countedUSD *float64, passed bool) error
 	ListByOwner(ctx context.Context, owner uuid.UUID) ([]MaxID, error)
 	GetForOwner(ctx context.Context, id, owner uuid.UUID) (MaxID, error)
 	UpdateProfile(ctx context.Context, id, owner uuid.UUID, in ProfileInput) (MaxID, error)

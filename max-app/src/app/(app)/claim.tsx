@@ -8,7 +8,7 @@ import { Banner, Heading, Pill, Segmented } from '@/components/ui/Blocks';
 import { Button, LinkButton } from '@/components/ui/Button';
 import { HandleField } from '@/components/ui/Fields';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
-import { errorMessage } from '@/error/messages';
+import { errorCode, errorDetails, errorMessage } from '@/error/messages';
 import { useAvailability, useClaimId, useMyIds } from '@/hooks/queries';
 import { useDebounced } from '@/hooks/useDebounced';
 import { connectMax } from '@/services/session';
@@ -16,6 +16,7 @@ import { toast } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors } from '@/theme';
 import { shortAddress } from '@/utils/format';
+import { usd } from '@/utils/money';
 import { stripPrefix } from '@/validation/identity';
 
 export default function Claim() {
@@ -160,7 +161,30 @@ export default function Claim() {
         ) : null}
       </View>
 
-      {claim.error ? <Banner tone="danger">{errorMessage(claim.error)}</Banner> : null}
+      {claim.error ? (
+        errorCode(claim.error) === 'INSUFFICIENT_REGISTRATION_BALANCE' ? (
+          <RegistrationGate details={errorDetails(claim.error)} />
+        ) : (
+          <Banner tone="danger">{errorMessage(claim.error)}</Banner>
+        )
+      ) : null}
     </Screen>
+  );
+}
+
+/** INSUFFICIENT_REGISTRATION_BALANCE: counted vs required USD, both from the API's error details. */
+function RegistrationGate({ details }: { details?: Record<string, unknown> }) {
+  const required = usd(details?.requiredUsd);
+  const counted = usd(details?.countedUsd);
+  return (
+    <Banner tone="clay" title="Your linked wallets don’t hold enough to claim yet">
+      <View style={{ gap: 6 }}>
+        {required && counted ? (
+          <Banner.Text>{`MAX counted ${counted} across your linked wallets; claiming needs ${required}.`}</Banner.Text>
+        ) : null}
+        <Banner.Text>{`Hold at least ${required ?? 'the minimum'} in USDC, USDT, ETH, SOL or POL in a linked wallet, then try again. Nothing is spent or locked.`}</Banner.Text>
+        <LinkButton label="Add or import another account →" onPress={() => router.push('/add-account')} weight="semibold" color={colors.clayText} size={14} center={false} />
+      </View>
+    </Banner>
   );
 }

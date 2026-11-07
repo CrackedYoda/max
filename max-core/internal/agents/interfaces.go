@@ -77,6 +77,19 @@ type PolicyInput struct {
 	Limits            []LimitInput
 	AllowedRecipients []string
 	AllowAnyRecipient bool
+	// Market is the selling policy; nil keeps the current one.
+	Market *MarketPolicyInput
+}
+
+type MarketPolicyInput struct {
+	CanSell       bool
+	MinSalePrices []SaleMinimumInput
+}
+
+type SaleMinimumInput struct {
+	Chain  string
+	Asset  string // contract/mint, or "" / "native"
+	Amount string // base units
 }
 
 type AgentDetail struct {

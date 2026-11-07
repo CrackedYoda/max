@@ -7,6 +7,8 @@ export class MaxApiError extends Error {
     message: string,
     readonly status: number,
     readonly requestId?: string,
+    /** Machine-readable context from the API (e.g. INSUFFICIENT_FUNDS shortfalls). */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }

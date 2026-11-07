@@ -1,0 +1,388 @@
+"use client";
+
+import { isPendingApproval, type SaleView } from "@max/sdk";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+
+import { max } from "@/api/client";
+import { marketErrorMessage } from "@/error/market";
+import { isSaleTerminal, useInvalidateMarket, useSale, useTrustedDecimals, useWallets } from "@/hooks/queries";
+import { attemptExpired, findSaleSignature, MaybeSentError, signSale, type SignAttempt } from "@/services/market";
+import { clearAttempt, loadAttempt, routeFor, settleAttempt } from "@/services/saleAttempts";
+import { useSession } from "@/store/session";
+import { shortAddress } from "@/utils/format";
+import { displayDecimal, pinnedPriceBase } from "@/utils/money";
+
+import { Handle } from "../identity/Handle";
+import { Button, ButtonLink, Spinner } from "../ui/Button";
+import { Banner, ReviewRow } from "../ui/Blocks";
+import { CopyButton } from "../ui/Copy";
+import { Dialog } from "../ui/Dialog";
+import { Icon } from "../ui/Icon";
+
+import { connectLinkedSolana, SaleStatusPill, useCountdown, useIdempotencyKey, useNative } from "./shared";
+
+/**
+ * What the user clicked. These are the values the transaction is checked
+ * against before signing, so they come from the listing/offer shown, never
+ * from the sale MAX returns. `price` is the decimal amount shown to the user;
+ * it is converted with trusted decimals (env pin / chain), and
+ * `priceBaseUnits`, when the API sent one, must agree with that conversion.
+ */
+type Terms = { handle: string; chain: string; asset: string; symbol: string; price: string; priceBaseUnits?: string };
+export type PayTarget =
+  | (Terms & { kind: "listing"; listingId: string })
+  | (Terms & { kind: "offer"; offerId: string; fromAddress: string; priceBaseUnits: string })
+  | (Terms & { kind: "sale"; saleId: string });
+
+type Phase =
+  | { k: "intro" }
+  | { k: "working"; step: "connect" | "lock" | "sign" | "record"; view?: SaleView }
+  | { k: "review"; view: SaleView }
+  | { k: "held"; saleId: string }
+  | { k: "record_failed"; view: SaleView; txHash: string; error: string }
+  /**
+   * The wallet errored after signing began: the payment may be on chain. A
+   * second signature is offered only once the first attempt's blockhash has
+   * expired (it can no longer land) and a last look found no payment.
+   */
+  | { k: "uncertain"; view: SaleView; attempt: SignAttempt; expired: boolean; lookup: "checking" | "not_found" | "failed"; reason: UncertainReason }
+  | { k: "watching"; saleId: string };
+
+/** Why we're unsure: this dialog's wallet errored, or an earlier attempt (any tab, any reload) is on record. */
+type UncertainReason = "wallet_error" | "reopened";
+
+const STEP: Record<"connect" | "lock" | "sign" | "record", string> = {
+  connect: "Connecting Phantom…",
+  lock: "Reserving the name for you…",
+  sign: "Confirm in Phantom…",
+  record: "Recording the payment with MAX…",
+};
+
+export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): void }) {
+  const status = useSession((s) => s.status);
+  const path = usePathname();
+  const wallets = useWallets();
+  const invalidate = useInvalidateMarket();
+  const keyFor = useIdempotencyKey();
+  const native = useNative(target.chain);
+  const [phase, setPhase] = useState<Phase>({ k: "intro" });
+  // The raw error, formatted at render so late-arriving token decimals still apply.
+  const [failure, setFailure] = useState<unknown>(null);
+
+  const trusted = useTrustedDecimals(target.chain, target.asset);
+  const decimals = trusted.decimals;
+  const pin = decimals != null ? pinnedPriceBase(target.price, decimals, target.priceBaseUnits) : null;
+  const [confirmedRetry, setConfirmedRetry] = useState(false);
+  const units = { decimals, symbol: target.symbol, nativeSymbol: native.symbol, nativeDecimals: native.decimals, amount: target.price };
+  const error = failure == null ? null : typeof failure === "string" ? failure : marketErrorMessage(failure, units);
+  const setError = setFailure;
+
+  const watchId = phase.k === "held" || phase.k === "watching" ? phase.saleId : null;
+  const sale = useSale(watchId);
+  // An approved review sale comes back locked with its instructions: pay it here.
+  const approved = phase.k === "held" && sale.data?.sale.status === "locked" && !sale.data.sale.txHash && sale.data.instructions ? sale.data : null;
+  const reviewView = phase.k === "review" || (phase.k === "working" && phase.view) ? phase.view! : approved;
+
+  const signing = phase.k === "working" && (phase.step === "sign" || phase.step === "record");
+  // While a sent attempt can still land, closing would invite a second payment
+  // from elsewhere; keep the dialog (and the tab) here until it's resolved.
+  // If the network can't be reached to check, closing is allowed (with a
+  // warning): the shared attempt store still guards any reopen, in any tab.
+  const pendingAttempt = phase.k === "uncertain" && !phase.expired && phase.lookup !== "failed";
+  const busy = signing || pendingAttempt;
+  useEffect(() => {
+    if (!busy) return;
+    const h = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [busy]);
+
+  // Wait out the uncertain attempt: once its blockhash expires it can't land,
+  // so one last look decides whether signing again is safe.
+  const waiting = phase.k === "uncertain" && !phase.expired && phase.lookup !== "checking" ? phase : null;
+  useEffect(() => {
+    if (!waiting) return;
+    let stop = false;
+    const id = window.setInterval(async () => {
+      try {
+        if (!(await attemptExpired(waiting.attempt)) || stop) return;
+      } catch {
+        return; // RPC hiccup: ask again on the next beat
+      }
+      stop = true;
+      window.clearInterval(id);
+      void lookForPayment(waiting.view, waiting.attempt, true, waiting.reason);
+    }, 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting?.attempt.blockhash, waiting?.lookup]);
+
+  const terminal = sale.data && isSaleTerminal(sale.data.sale);
+  useEffect(() => {
+    if (sale.data) settleAttempt(sale.data.sale);
+    if (terminal) invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminal, sale.data?.sale.txHash]);
+
+  function advance(view: SaleView) {
+    const s = view.sale;
+    settleAttempt(s);
+    const attempt = loadAttempt(s.id);
+    const route = routeFor(s, !!view.instructions, attempt);
+    if (route === "held") setPhase({ k: "held", saleId: s.id });
+    else if (route === "uncertain" && attempt) void lookForPayment(view, attempt, false, "reopened");
+    else if (route === "review") setPhase({ k: "review", view });
+    else setPhase({ k: "watching", saleId: s.id });
+  }
+
+  async function start() {
+    setError(null);
+    try {
+      setPhase({ k: "working", step: "connect" });
+      const w = await connectLinkedSolana(wallets.data ?? [], target.kind === "offer" ? target.fromAddress : undefined);
+      setPhase({ k: "working", step: "lock" });
+      const res =
+        target.kind === "listing"
+          ? await max().market.buy(target.listingId, { fromAddress: w.address, idempotencyKey: keyFor(JSON.stringify(["buy", target.listingId, w.address])) })
+          : target.kind === "offer"
+            ? await max().market.payOffer(target.offerId, { idempotencyKey: keyFor(JSON.stringify(["pay", target.offerId])) })
+            : await max().market.getSale(target.saleId);
+      if (isPendingApproval(res)) {
+        setPhase({ k: "intro" });
+        setError("This is waiting for approval by the agent’s administrator.");
+        return;
+      }
+      invalidate();
+      advance(res);
+    } catch (err) {
+      setPhase({ k: "intro" });
+      setError(err);
+    }
+  }
+
+  /**
+   * `confirmedFor`: the blockhash of the attempt the user just confirmed (from
+   * "Sign again", after it expired). Signing goes ahead only if that is still
+   * the newest attempt on record: another tab may have signed since.
+   */
+  async function pay(view: SaleView, confirmedFor?: string) {
+    setError(null);
+    setConfirmedRetry(false);
+    // Every route into signing passes here: an earlier attempt for this sale
+    // (this dialog, a closed one, another tab, or before a reload) must be resolved first.
+    const earlier = loadAttempt(view.sale.id);
+    if (earlier && earlier.blockhash !== confirmedFor) {
+      await lookForPayment(view, earlier, false, "reopened");
+      return;
+    }
+    if (trusted.error) return setError(trusted.error);
+    if (!pin) return setError("Couldn’t read this token’s decimals from the network, so the price can’t be checked. Nothing was signed.");
+    if ("error" in pin) return setError(pin.error);
+    try {
+      setPhase({ k: "working", step: "connect", view });
+      const w = await connectLinkedSolana(wallets.data ?? [], view.sale.buyerAddress);
+      setPhase({ k: "working", step: "sign", view });
+      const sig = await signSale(view, w, { asset: target.asset, priceBaseUnits: pin.base });
+      await record(view, sig);
+    } catch (err) {
+      if (err instanceof MaybeSentError) {
+        setError(err.message);
+        await lookForPayment(view, err.attempt, false, "wallet_error");
+        return;
+      }
+      setPhase({ k: "review", view });
+      setError(err);
+    }
+  }
+
+  /** After an uncertain wallet error: find the sale's tx on chain before anyone signs again. */
+  async function lookForPayment(view: SaleView, attempt: SignAttempt, expired: boolean, reason: UncertainReason) {
+    if (reason === "reopened") setError(null);
+    setPhase({ k: "uncertain", view, attempt, expired, lookup: "checking", reason });
+    try {
+      const sig = await findSaleSignature(view);
+      if (sig) {
+        setError(null);
+        await record(view, sig);
+      } else setPhase({ k: "uncertain", view, attempt, expired, lookup: "not_found", reason });
+    } catch {
+      setPhase({ k: "uncertain", view, attempt, expired, lookup: "failed", reason });
+    }
+  }
+
+  async function record(view: SaleView, txHash: string) {
+    setPhase({ k: "working", step: "record", view });
+    try {
+      await max().market.submit(view.sale.id, txHash);
+      clearAttempt(view.sale.id); // recorded: MAX now tracks this tx
+      setPhase({ k: "watching", saleId: view.sale.id });
+    } catch (err) {
+      // Already broadcast: only MAX's record of it failed. Never sign again.
+      setPhase({ k: "record_failed", view, txHash, error: marketErrorMessage(err, units) });
+    }
+  }
+
+  const title = target.kind === "offer" || target.kind === "sale" ? <>Pay for <Handle name={target.handle} /></> : <>Buy <Handle name={target.handle} /></>;
+
+  return (
+    <Dialog title={title} labelId="buy-title" onClose={onClose} locked={busy}>
+      <div aria-live="polite" className="flex flex-col gap-5">
+        {status !== "authenticated" ? (
+          <>
+            <PriceLine price={target.price} symbol={target.symbol} />
+            <p className="m-0 text-[15px] text-muted">Sign in with a wallet to buy. Browsing the market doesn’t need one.</p>
+            <ButtonLink href={`/connect?next=${encodeURIComponent(path)}`}>Sign in to buy</ButtonLink>
+          </>
+        ) : phase.k === "intro" || (phase.k === "working" && !phase.view) ? (
+          <>
+            <PriceLine price={target.price} symbol={target.symbol} />
+            <p className="m-0 text-[15px] leading-relaxed text-muted">
+              {target.kind === "listing"
+                ? "Continuing reserves the name for you for 15 minutes and shows the full quote, including the network fee, before anything is signed."
+                : "Continuing fetches a fresh quote, including the network fee, before anything is signed."}
+            </p>
+            <p className="m-0 text-[13px] text-muted">You pay from a Solana wallet linked to your MAX account, with Phantom. MAX never holds funds: the payment goes straight to the seller and the MAX fee.</p>
+            {error ? <Banner tone="danger">{error}</Banner> : null}
+            <Button onClick={start} loading={phase.k === "working"}>{phase.k === "working" ? STEP[phase.step] : "Continue"}</Button>
+          </>
+        ) : reviewView ? (
+          <Review view={reviewView} target={target} nativeSymbol={native.symbol} error={error}
+            working={phase.k === "working" ? STEP[phase.step] : null} onPay={() => pay(reviewView)} />
+        ) : phase.k === "held" ? (
+          <>
+            <Banner tone="info" title="Held for review">
+              Large sales are checked by MAX before payment. Keep this open, or come back from your dashboard: once it’s approved you’ll have 15 minutes to pay. Nothing has been charged.
+            </Banner>
+            <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Checking every few seconds…</p>
+            {sale.data && sale.data.sale.status !== "pending_review" && sale.data.sale.status !== "locked" ? <SaleOutcome view={sale.data} handle={target.handle} /> : null}
+          </>
+        ) : phase.k === "uncertain" ? (
+          <>
+            {phase.reason === "wallet_error" ? (
+              <Banner tone="warn" title="Your payment may already have been sent">
+                {error ?? "Phantom reported an error after signing started."} Don’t pay again until you’ve checked.
+              </Banner>
+            ) : (
+              <Banner tone="warn" title="A payment for this sale may already be on its way">
+                A payment was signed for this sale a moment ago, here or in another tab. Don’t pay again until you’ve checked.
+              </Banner>
+            )}
+            {phase.lookup === "checking" ? (
+              <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Looking for this payment in {shortAddress(phase.view.sale.buyerAddress)}’s recent transactions…</p>
+            ) : (
+              <>
+                <p className="m-0 text-[15px] leading-relaxed">
+                  {phase.lookup === "failed"
+                    ? "We couldn’t reach the network to check. Check your wallet before retrying: open Phantom’s activity and look for this payment."
+                    : `No payment for this sale shows up yet among ${shortAddress(phase.view.sale.buyerAddress)}’s last 20 transactions. A payment can take a minute to appear: check Phantom’s activity, then check again.`}
+                </p>
+                {phase.lookup === "failed" ? (
+                  <p className="m-0 text-[13px] text-muted">You can close this. Reopening it, in this tab or another, checks again before any new payment.</p>
+                ) : null}
+                <Button variant="secondary" onClick={() => lookForPayment(phase.view, phase.attempt, phase.expired, phase.reason)}>Check again</Button>
+                {phase.expired ? (
+                  <>
+                    <label className="flex items-start gap-2.5 text-sm">
+                      <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={confirmedRetry} onChange={(e) => setConfirmedRetry(e.target.checked)} />
+                      I checked my wallet and this payment isn’t there. Paying again could otherwise charge me twice.
+                    </label>
+                    <Button variant="danger" disabled={!confirmedRetry} onClick={() => pay(phase.view, phase.attempt.blockhash)}>Sign again</Button>
+                  </>
+                ) : (
+                  <p className="m-0 flex items-center gap-2 text-sm text-muted">
+                    <Spinner />Waiting for the first attempt to expire. A signed payment can still land for about a minute; after that MAX checks once more and you can sign again safely.
+                  </p>
+                )}
+              </>
+            )}
+          </>
+        ) : phase.k === "record_failed" ? (
+          <>
+            <Banner tone="warn" title="Your payment was sent, but MAX hasn’t recorded it yet.">
+              Don’t pay again. This only links the transaction to the sale so it can be matched.
+            </Banner>
+            <code className="break-all rounded-xl bg-ivory p-3 font-mono text-[13px]">{phase.txHash}</code>
+            <p role="alert" className="m-0 text-sm text-danger">{phase.error}</p>
+            <Button onClick={() => record(phase.view, phase.txHash)}>Try recording again</Button>
+          </>
+        ) : phase.k === "watching" ? (
+          sale.data ? <SaleOutcome view={sale.data} handle={target.handle} /> : <p className="m-0 flex items-center gap-2 text-sm text-muted"><Spinner />Loading the sale…</p>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
+function PriceLine({ price, symbol }: { price: string; symbol: string }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="tabular text-[32px] font-semibold">{displayDecimal(price)}</span>
+      <span className="text-lg font-semibold text-muted">{symbol}</span>
+    </div>
+  );
+}
+
+function Review({ view, target, nativeSymbol, error, working, onPay }: {
+  view: SaleView; target: PayTarget; nativeSymbol: string; error: string | null; working: string | null; onPay(): void;
+}) {
+  const s = view.sale;
+  const q = view.quote;
+  const { label, secondsLeft } = useCountdown(s.lockExpiresAt);
+  const expired = !!s.lockExpiresAt && secondsLeft <= 0;
+  const sym = target.symbol;
+  return (
+    <>
+      {expired ? (
+        <Banner tone="danger" title="The payment window closed.">The name was released. Nothing was charged. Close this and start again if it’s still listed.</Banner>
+      ) : label ? (
+        <p className="m-0 flex items-center gap-2 self-start rounded-[10px] bg-clay-soft px-3 py-2 text-sm font-semibold text-clay-text">
+          <Icon name="lock" size={16} />Reserved for you · <span className="tabular">{label}</span> left to pay
+        </p>
+      ) : null}
+      <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-4 rounded-xl bg-ivory p-4">
+        <ReviewRow label="Price" value={`${displayDecimal(target.price)} ${sym}`} />
+        <ReviewRow label="Network fee" value={q ? `≈ ${q.networkFee} ${nativeSymbol}` : "—"} />
+        <ReviewRow label="Total you pay" value={q ? `${displayDecimal(target.price)} ${sym} + ${q.totalNative} ${nativeSymbol}` : `${displayDecimal(target.price)} ${sym}`} />
+        <ReviewRow label="Seller receives" value={`${displayDecimal(q?.sellerReceives ?? s.sellerReceives)} ${sym}`} />
+      </dl>
+      <p className="m-0 text-[13px] leading-relaxed text-muted">
+        The seller pays MAX’s {s.feeBps / 100}% fee ({displayDecimal(q?.fee ?? s.fee)} {sym}) out of the price. Paying from <span className="font-mono" title={s.buyerAddress}>{shortAddress(s.buyerAddress)}</span>.
+        The transaction is checked against this price before Phantom opens.
+      </p>
+      {error ? <Banner tone="danger">{error}</Banner> : null}
+      <Button onClick={onPay} disabled={expired} loading={!!working}>{working ?? `Sign and pay ${displayDecimal(target.price)} ${sym}`}</Button>
+    </>
+  );
+}
+
+function SaleOutcome({ view, handle }: { view: SaleView; handle: string }) {
+  const s = view.sale;
+  const copy: Record<string, { tone: "info" | "success" | "warn" | "danger"; title: string; body: string }> = {
+    submitted: { tone: "info", title: "Payment sent", body: "Waiting for the network to confirm it. You can close this; the sale finishes on its own." },
+    confirming: { tone: "info", title: "Confirming on the network", body: `${s.confirmations} confirmation${s.confirmations === 1 ? "" : "s"} so far. You can close this; the sale finishes on its own.` },
+    locked: { tone: "info", title: "Waiting for the payment", body: "MAX hasn’t seen the transaction yet." },
+    completed: { tone: "success", title: `max.${handle.replace(/^max\./, "")} is yours`, body: "It’s in your dashboard. Its payment details were reset: pick where it receives." },
+    expired: { tone: "danger", title: "The payment window closed", body: "If you already sent the payment, MAX will still match it. Otherwise nothing was charged." },
+    cancelled: { tone: "danger", title: "This sale was cancelled", body: s.statusReason ?? "The name was released." },
+    manual_review: { tone: "warn", title: "This sale needs a manual check", body: "Your payment arrived but the sale couldn’t complete automatically. MAX will contact you about the outcome." },
+    reversed: { tone: "danger", title: "This sale was reversed", body: s.statusReason ?? "The name went back to the seller." },
+  };
+  const c = copy[s.status] ?? { tone: "info" as const, title: "In progress", body: "" };
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2"><SaleStatusPill status={s.status} />{!isSaleTerminal(s) ? <Spinner className="text-muted" /> : null}</div>
+      <Banner tone={c.tone} title={c.title}>{c.body}</Banner>
+      {s.txHash ? (
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-xl bg-ivory p-3 font-mono text-[13px]" title={s.txHash}>{s.txHash}</code>
+          <CopyButton value={s.txHash} label="Copy transaction signature" />
+        </div>
+      ) : null}
+      {s.status === "completed" ? <ButtonLink href="/dashboard">Go to dashboard</ButtonLink> : null}
+    </div>
+  );
+}

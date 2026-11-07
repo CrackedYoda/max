@@ -49,6 +49,7 @@ function MainNav() {
   return (
     <nav aria-label="Main" className="flex flex-wrap items-center gap-1">
       <NavLink href="/send">Send</NavLink>
+      <NavLink href="/market">Market</NavLink>
       <NavLink href="/dashboard">Dashboard</NavLink>
       {status === "authenticated" ? <NavLink href="/agents">Agents</NavLink> : null}
       {status === "authenticated" ? (

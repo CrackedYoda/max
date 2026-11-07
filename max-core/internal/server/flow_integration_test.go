@@ -33,7 +33,9 @@ import (
 	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/auth"
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
 	"github.com/max/max-core/internal/renames"
@@ -61,6 +63,8 @@ type testEnv struct {
 	payRepo  payments.Repository
 	gateway  *stubGateway
 	provider *stubProvider
+	market   *market.Service
+	settle   *fakeSettle
 }
 
 // stubProvider stands in for NEAR Intents; adapter behaviour is covered by
@@ -107,8 +111,14 @@ func (s *stubGateway) Observe(context.Context, payments.Payment) (payments.Obser
 	return s.obs, nil
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 	t.Helper()
+	// The market is off unless an option enables it; the hold period is
+	// required either way, as in production (default 72h).
+	ec := envConfig{market: config.MarketConfig{HoldPeriod: 72 * time.Hour, MinOffer: "1"}}
+	for _, o := range opts {
+		o(&ec)
+	}
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
@@ -138,7 +148,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	_, _ = rand.Read(seed)
 	attestor, _ := agents.NewAttestor(seed)
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
-	maxidSvc := maxids.NewService(maxids.NewRepository(pool))
+	maxidSvc := maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))
 	agentSvc := agents.NewService(agents.Deps{
 		Repo: agents.NewRepository(pool), Payments: paySvc, Wallets: walletSvc, IDs: maxidSvc,
 		WalletProofs: authSvc, Attestor: attestor, CredentialSecret: strings.Repeat("a", 32), Log: zap.NewNop(),
@@ -154,7 +164,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	vcfg.ResultRedirect = "http://localhost:3000/verify/x"
 	verifySvc := verifications.NewService(verifications.NewRepository(pool), xc, vcfg, zap.NewNop())
 	admins := map[uuid.UUID]bool{}
+	marketSvc, fs := newTestMarket(t, pool, ec)
 	h := server.NewRouter(server.Deps{
+		Market:         market.NewHandler(marketSvc),
 		Verifications:  verifications.NewHandler(verifySvc),
 		IsAdmin:        func(id uuid.UUID) bool { return admins[id] },
 		Renames:        renames.NewHandler(renameSvc),
@@ -164,11 +176,11 @@ func newTestEnv(t *testing.T) *testEnv {
 		AuthService: authSvc,
 		Auth:        auth.NewHandler(authSvc, auth.CookieConfig{TTL: time.Hour}),
 		Wallets:     wallets.NewHandler(wallets.NewService(wallets.NewRepository(pool))),
-		MaxIDs:      maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool))),
+		MaxIDs:      maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))),
 		Resolver:    resolver.NewHandler(resolverSvc),
 		Payments:    payments.NewHandler(paySvc),
 	})
-	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov}
+	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov, market: marketSvc, settle: fs}
 }
 
 type client struct {
@@ -1026,6 +1038,15 @@ func TestFlow_PaidRename(t *testing.T) {
 		"idempotencyKey": "post-rename-0001", "resolutionVersion": versionBefore,
 	}); errCode(body) != "RESOLUTION_STALE" {
 		t.Fatalf("stale version after rename: %v", body)
+	}
+
+	// The rename restarts the market hold.
+	var listable time.Time
+	if err := env.pool.QueryRow(ctx, `SELECT listable_at FROM max_ids WHERE id = $1`, maxID).Scan(&listable); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(listable); d < 71*time.Hour || d > 73*time.Hour {
+		t.Fatalf("listable_at after rename in %v, want ~72h", d)
 	}
 
 	// 72h cooldown now applies.

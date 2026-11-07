@@ -16,15 +16,17 @@ const applyRename = `-- name: ApplyRename :one
 UPDATE max_ids
 SET canonical_name = $1,
     rename_available_at = now() + make_interval(secs => $2::int),
+    listable_at = now() + make_interval(secs => $3::int),
     resolution_version = resolution_version + 1,
     updated_at = now()
-WHERE id = $3 AND canonical_name = $4
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at
+WHERE id = $4 AND canonical_name = $5
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
 `
 
 type ApplyRenameParams struct {
 	NewName         string
 	CooldownSeconds int32
+	HoldSeconds     int32
 	ID              uuid.UUID
 	OldName         string
 }
@@ -33,6 +35,7 @@ func (q *Queries) ApplyRename(ctx context.Context, arg ApplyRenameParams) (MaxID
 	row := q.db.QueryRow(ctx, applyRename,
 		arg.NewName,
 		arg.CooldownSeconds,
+		arg.HoldSeconds,
 		arg.ID,
 		arg.OldName,
 	)
@@ -50,6 +53,8 @@ func (q *Queries) ApplyRename(ctx context.Context, arg ApplyRenameParams) (MaxID
 		&i.RenameAvailableAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
 	)
 	return i, err
 }

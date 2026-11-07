@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/max/max-core/internal/agents"
@@ -14,13 +17,18 @@ import (
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/evmrpc"
+	"github.com/max/max-core/internal/market"
+	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/payments"
+	"github.com/max/max-core/internal/pricing"
 	"github.com/max/max-core/internal/renames"
 	"github.com/max/max-core/internal/resolver"
 	"github.com/max/max-core/internal/routing/nearintents"
 	"github.com/max/max-core/internal/server"
 	"github.com/max/max-core/internal/shared"
+	"github.com/max/max-core/internal/solanarpc"
 	"github.com/max/max-core/internal/verifications"
 	"github.com/max/max-core/internal/wallets"
 	"github.com/max/max-core/internal/xapi"
@@ -60,7 +68,8 @@ func run() error {
 		SessionSecret: cfg.Auth.SessionSecret,
 	})
 	walletSvc := wallets.NewService(wallets.NewRepository(pool))
-	maxidSvc := maxids.NewService(maxids.NewRepository(pool))
+	maxidRepo := maxids.NewRepository(pool, maxids.WithHoldPeriod(cfg.Market.HoldPeriod))
+	maxidSvc := maxids.NewService(maxidRepo, newRegistrationGate(cfg, maxidRepo))
 	resolverSvc := resolver.NewService(resolver.NewRepository(pool))
 
 	cc := cfg.Payments.CrossChain
@@ -101,7 +110,7 @@ func run() error {
 		log.Warn("RENAME_FEES not set: renames are disabled")
 	}
 	renameSvc := renames.NewService(renames.NewRepository(pool), paymentSvc, renames.Config{
-		Quarantine: cfg.Renames.Quarantine, Fees: renameFees, Treasury: treasury,
+		Quarantine: cfg.Renames.Quarantine, HoldPeriod: cfg.Market.HoldPeriod, Fees: renameFees, Treasury: treasury,
 		LateSubmitGrace: paymentsCfg.LateSubmitGrace,
 	}, log.Named("renames"))
 	go renames.RunWorker(ctx, renameSvc, log.Named("renames"))
@@ -135,6 +144,14 @@ func run() error {
 	})
 	log.Info("agent authorization key", zap.String("key_id", attestor.KeyID()))
 
+	marketSvc, err := newMarket(cfg, pool, log.Named("market"))
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if marketSvc.Config().Enabled {
+		go market.RunWorker(ctx, marketSvc, 15*time.Second, log.Named("market"))
+	}
+
 	router := server.NewRouter(server.Deps{
 		Logger:         log,
 		Pool:           pool,
@@ -151,6 +168,7 @@ func run() error {
 		MaxIDs:         maxids.NewHandler(maxidSvc),
 		Resolver:       resolver.NewHandler(resolverSvc),
 		Payments:       payments.NewHandler(paymentSvc),
+		Market:         market.NewHandler(marketSvc),
 	})
 
 	return server.Run(cfg.HTTP.Addr, router, log)
@@ -162,4 +180,59 @@ func adminSet(ids []uuid.UUID) func(uuid.UUID) bool {
 		set[id] = true
 	}
 	return func(id uuid.UUID) bool { return set[id] }
+}
+
+// newMarket validates the market settings (startup fails when an enabled
+// market lacks a treasury or RPC for an asset) and builds the service with a
+// Solana settlement adapter over the configured RPC URLs.
+func newMarket(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*market.Service, error) {
+	mcfg, err := market.NewConfig(cfg.Market, cfg.Payments.RPCURLs)
+	if err != nil {
+		return nil, err
+	}
+	sol := map[string]settle.SolanaRPC{}
+	for _, a := range mcfg.Assets {
+		if url, ok := cfg.Payments.RPCURLs[a.Chain.Key]; ok && a.Chain.Namespace == chains.NamespaceSolana {
+			sol[a.Chain.Key] = solanarpc.New(url)
+		}
+	}
+	adapters := map[chains.Namespace]settle.Adapter{chains.NamespaceSolana: settle.NewSolana(sol)}
+	if !mcfg.Enabled {
+		log.Info("MARKET_ENABLED=false: marketplace routes return 404")
+	}
+	policy := market.NewAgentPolicy(agents.NewRepository(pool), market.NewAgentStore(pool))
+	return market.NewService(market.NewRepository(pool), adapters, mcfg, policy, log), nil
+}
+
+// newRegistrationGate builds the MAX ID claim balance gate. It counts wallets
+// on every chain that has an RPC URL, skipping testnets in production. With a
+// zero minimum it never touches wallets, RPC or the price feed.
+func newRegistrationGate(cfg config.Config, wallets maxids.WalletLister) maxids.BalanceGate {
+	feed := pricing.NewCached(
+		pricing.NewCoinGecko(cfg.Pricing.URL, &http.Client{Timeout: 10 * time.Second}),
+		cfg.Pricing.TTL, cfg.Pricing.MaxAge, time.Now)
+
+	var gateChains []chains.Chain
+	evm := map[string]settle.EVMRPC{}
+	sol := map[string]settle.SolanaRPC{}
+	for _, c := range chains.Supported {
+		url, ok := cfg.Payments.RPCURLs[c.Key]
+		if !ok || (c.Testnet && cfg.IsProduction()) {
+			continue
+		}
+		switch c.Namespace {
+		case chains.NamespaceEVM:
+			evm[c.Key] = evmrpc.New(url)
+		case chains.NamespaceSolana:
+			sol[c.Key] = solanarpc.New(url)
+		default:
+			continue
+		}
+		gateChains = append(gateChains, c)
+	}
+	readers := map[chains.Namespace]maxids.BalanceReader{
+		chains.NamespaceEVM:    settle.NewEVMBalances(evm),
+		chains.NamespaceSolana: settle.NewSolana(sol),
+	}
+	return maxids.NewBalanceGate(cfg.Registration.MinBalanceUSD, wallets, readers, feed, gateChains)
 }

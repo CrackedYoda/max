@@ -25,7 +25,7 @@ SELECT * FROM agent_policies WHERE agent_account_id = $1;
 
 -- name: UpdateAgentPolicy :one
 UPDATE agent_policies
-SET limits = $2, allowed_recipients = $3, allow_any_recipient = $4, version = version + 1, updated_at = now()
+SET limits = $2, allowed_recipients = $3, allow_any_recipient = $4, market = $5, version = version + 1, updated_at = now()
 WHERE agent_account_id = $1
 RETURNING *;
 
@@ -58,13 +58,27 @@ WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 mi
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(agent_key)::text, 0));
 
 -- name: ListAgentSpend24h :many
+-- Committed spend over the rolling window: approved transfers plus approved
+-- market buys and offer payments, so splitting a budget across transfers and
+-- the marketplace cannot exceed it. A market authorization whose action
+-- failed, or whose sale expired or was cancelled, does not count.
 SELECT a.chain, a.asset_address, a.amount_base_units
 FROM agent_transfer_authorizations a
 JOIN payments p ON p.id = a.payment_id
 WHERE a.agent_account_id = $1
   AND a.decision IN ('auto_approved', 'approved')
   AND a.created_at > now() - interval '24 hours'
-  AND p.status NOT IN ('EXPIRED', 'FAILED', 'REFUNDED');
+  AND p.status NOT IN ('EXPIRED', 'FAILED', 'REFUNDED')
+UNION ALL
+SELECT m.chain, m.asset_address, m.amount_base_units
+FROM agent_market_authorizations m
+LEFT JOIN market_sales s ON s.id = m.sale_id
+WHERE m.agent_account_id = $1
+  AND m.action IN ('buy', 'pay')
+  AND m.decision IN ('auto_approved', 'approved')
+  AND m.failure IS NULL
+  AND coalesce(m.decided_at, m.created_at) > now() - interval '24 hours'
+  AND (s.id IS NULL OR s.status NOT IN ('expired', 'cancelled'));
 
 -- name: CreateTransferAuthorization :one
 INSERT INTO agent_transfer_authorizations (

@@ -13,8 +13,18 @@ MCP server for **MAX**: lets an AI agent look up MAX IDs and **propose** payment
 | `max_propose_transfer` | Propose a payment from the agent's wallet. MAX policy decides | yes |
 | `max_get_transfer` | Decision and status of a proposal | yes |
 | `max_list_transfers` | The agent's sent and received payments | yes |
+| `market_search` | Search active MAX ID listings | no |
+| `market_get_listing` | Public market view of one name | no |
+| `market_list_name` | List a name for sale (needs the admin's `canSell` policy; may be held for approval) | yes |
+| `market_delist` | Remove a listing | yes |
+| `market_make_offer` | Offer on a name, from the operator's wallet. Never held: the spend policy applies when an accepted offer is paid | yes |
+| `market_accept_offer` | Accept an offer on a name the agent owns (may be held) | yes |
+| `market_buy` | Lock a listing; returns sale, quote and instructions. Never signs: verify with `assertSaleInstructionsMatch`, then sign with your own signer (may be held) | yes |
+| `market_get_sale` | Status of a sale | yes |
 
-Without `MAX_AGENT_KEY`, only the first four are registered.
+Market actions held by policy return `{status:"pending_approval", authorizationId, reasons}` until the administrator approves. The marketplace fee is 10%, taken from the seller's proceeds; Solana USDC only for now.
+
+Without `MAX_AGENT_KEY`, only the first four plus `market_search` and `market_get_listing` are registered.
 
 ## How it keeps the model out of the money path
 

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -16,16 +17,48 @@ import (
 )
 
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Database DatabaseConfig
-	Auth     AuthConfig
-	Payments PaymentsConfig
-	Agents   AgentsConfig
-	Renames  RenamesConfig
-	X        XConfig
+	App          AppConfig
+	HTTP         HTTPConfig
+	Database     DatabaseConfig
+	Auth         AuthConfig
+	Payments     PaymentsConfig
+	Agents       AgentsConfig
+	Renames      RenamesConfig
+	X            XConfig
+	Market       MarketConfig
+	Registration RegistrationConfig
+	Pricing      PricingConfig
 	// AdminAccountIDs may review reserved-name claims and revoke verifications.
 	AdminAccountIDs []uuid.UUID
+}
+
+// MarketConfig holds the name marketplace settings. Amounts are decimal
+// strings (e.g. "1" USDC) converted to base units against the asset's decimals.
+type MarketConfig struct {
+	Enabled       bool
+	TradingPaused bool
+	// Assets is a "chain:asset,..." list of settlement assets (verified tokens only).
+	Assets          string
+	FeeBPS          int
+	HoldPeriod      time.Duration
+	BuyLock         time.Duration
+	OfferPayWindow  time.Duration
+	ReviewThreshold string // empty = no admin review
+	MinOffer        string
+	TreasuryEVM     string
+	TreasurySolana  string
+}
+
+// RegistrationConfig gates new MAX ID claims on wallet balance.
+type RegistrationConfig struct {
+	// MinBalanceUSD of 0 disables the gate and the price feed is never called.
+	MinBalanceUSD float64
+}
+
+type PricingConfig struct {
+	URL    string
+	TTL    time.Duration
+	MaxAge time.Duration
 }
 
 type XConfig struct {
@@ -184,6 +217,34 @@ func Load() (Config, error) {
 	}
 	if cfg.Renames.Quarantine < 24*time.Hour {
 		errs = append(errs, errors.New("RENAME_QUARANTINE must be at least 24h"))
+	}
+
+	cfg.Market = MarketConfig{
+		Enabled:         boolean("MARKET_ENABLED", "false"),
+		TradingPaused:   boolean("MARKET_TRADING_PAUSED", "false"),
+		Assets:          get("MARKET_ASSETS", ""),
+		FeeBPS:          integer("MARKET_FEE_BPS", "1000"),
+		HoldPeriod:      duration("MARKET_HOLD_PERIOD", "72h"),
+		BuyLock:         duration("MARKET_BUY_LOCK", "15m"),
+		OfferPayWindow:  duration("MARKET_OFFER_PAY_WINDOW", "24h"),
+		ReviewThreshold: get("MARKET_REVIEW_THRESHOLD", ""),
+		MinOffer:        get("MARKET_MIN_OFFER", "1"),
+		TreasuryEVM:     get("TREASURY_EVM", cfg.Renames.TreasuryEVM),
+		TreasurySolana:  get("TREASURY_SOLANA", cfg.Renames.TreasurySolana),
+	}
+	if cfg.Market.FeeBPS < 0 || cfg.Market.FeeBPS > 5000 {
+		errs = append(errs, errors.New("MARKET_FEE_BPS must be between 0 and 5000"))
+	}
+	cfg.Registration = RegistrationConfig{MinBalanceUSD: number("REGISTRATION_MIN_BALANCE_USD", "100")}
+	if m := cfg.Registration.MinBalanceUSD; math.IsNaN(m) || math.IsInf(m, 0) {
+		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must be a finite number"))
+	} else if m < 0 {
+		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must not be negative"))
+	}
+	cfg.Pricing = PricingConfig{
+		URL:    get("PRICE_FEED_URL", "https://api.coingecko.com/api/v3/simple/price"),
+		TTL:    duration("PRICE_FEED_TTL", "60s"),
+		MaxAge: duration("PRICE_FEED_MAX_AGE", "5m"),
 	}
 
 	cfg.X = XConfig{

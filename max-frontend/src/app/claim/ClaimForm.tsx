@@ -8,10 +8,10 @@ import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/Button";
-import { Heading } from "@/components/ui/Blocks";
+import { Banner, Heading } from "@/components/ui/Blocks";
 import { HandleInput, Segmented, TextField } from "@/components/ui/Fields";
 import { Icon } from "@/components/ui/Icon";
-import { errorMessage } from "@/error/messages";
+import { errorCode, errorDetails, errorMessage } from "@/error/messages";
 import { useAvailability, useClaimId } from "@/hooks/queries";
 import { useDebounced } from "@/hooks/useDebounced";
 import { toast } from "@/store/flows";
@@ -40,8 +40,9 @@ export function ClaimForm() {
   const canonical = normalizeName(name);
   const avail = useAvailability(name);
 
+  const gated = errorCode(claim.error) === "INSUFFICIENT_REGISTRATION_BALANCE";
   const status: Status = (() => {
-    if (claim.error) return { kind: "bad", msg: errorMessage(claim.error) };
+    if (claim.error && !gated) return { kind: "bad", msg: errorMessage(claim.error) };
     if (!settled) return { kind: "idle", msg: raw.trim() ? "Checking…" : "" };
     if (!name.trim()) return { kind: "idle", msg: "3–32 lowercase letters, numbers or hyphens." };
     if (!canonical) return { kind: "bad", msg: "Use 3–32 lowercase letters, numbers or hyphens, not starting or ending with a hyphen." };
@@ -118,6 +119,8 @@ export function ClaimForm() {
           error={formState.errors.displayName?.message}
         />
 
+        {gated ? <RegistrationGate details={errorDetails(claim.error)} /> : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={!ready} loading={claim.isPending}>
             {ready && canonical ? `Claim max.${canonical}` : "Claim"}
@@ -126,6 +129,22 @@ export function ClaimForm() {
         </div>
       </form>
     </main>
+  );
+}
+
+const usd = (v: unknown): string | null =>
+  typeof v === "number" && Number.isFinite(v) ? `$${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` : null;
+
+/** INSUFFICIENT_REGISTRATION_BALANCE: counted vs required USD, both from the API. */
+function RegistrationGate({ details }: { details?: Record<string, unknown> }) {
+  const required = usd(details?.requiredUsd);
+  const counted = usd(details?.countedUsd);
+  return (
+    <Banner tone="warn" title="Your linked wallets don’t hold enough to claim yet">
+      {required && counted ? <>MAX counted {counted} across your linked wallets; claiming needs {required}. </> : null}
+      Hold at least {required ?? "the minimum"} in USDC/USDT/ETH/SOL/POL in a linked wallet, then try again. Nothing is spent or locked.{" "}
+      <Link href="/connect?mode=link&next=/claim" className="font-semibold">Link another wallet</Link>
+    </Banner>
   );
 }
 

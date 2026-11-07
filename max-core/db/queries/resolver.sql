@@ -1,5 +1,5 @@
 -- name: GetPublicMaxID :one
-SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version
+SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version, owner_changed_at
 FROM max_ids
 WHERE canonical_name = $1 AND status = 'active';
 

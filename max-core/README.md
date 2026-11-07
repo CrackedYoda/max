@@ -248,6 +248,75 @@ Native apps can't send their Bearer token from the OAuth browser sheet, so they 
 
 Set `X_CLIENT_ID`, `X_CLIENT_SECRET`, `X_REDIRECT_URI` (register it on your X app) and `X_RESULT_REDIRECT`. Set `X_NATIVE_RESULT_REDIRECT` to change the app's deep link.
 
+### Marketplace (fixed-price listings and offers, Solana USDC)
+
+Owners list MAX IDs at a fixed price or take offers; buyers pay the seller and the MAX treasury fee
+in one Solana transaction that they sign themselves. MAX never holds funds or signs. Design:
+`docs/2026-11-05-marketplace-design.md`. While `MARKET_ENABLED=false` every route below returns
+404 `MARKET_DISABLED` and the worker does not run.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MARKET_ENABLED` | `false` | Master switch for the routes and the worker. |
+| `MARKET_TRADING_PAUSED` | `false` | Trading pause. New listings, price changes, offers, accepts and buys return `MARKET_PAUSED`. Delist, withdraw offer and decline offer still work (closing never starts a trade), and pay, submit and open sales still finish. |
+| `MARKET_ASSETS` | none | `chain:asset` list of verified Solana tokens, for example `solana-devnet:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. |
+| `MARKET_FEE_BPS` | `1000` | The fee taken from the seller's proceeds: `price * bps / 10000`, rounded down. `0` to `5000`. |
+| `MARKET_HOLD_PERIOD` | `72h` | How long a name can't be listed after it is claimed, renamed or bought. Must be positive. |
+| `MARKET_BUY_LOCK` | `15m` | The buy-now payment window. |
+| `MARKET_OFFER_PAY_WINDOW` | `24h` | The payment window after an offer is accepted. |
+| `MARKET_REVIEW_THRESHOLD` | off | A decimal amount. Sales above it wait in `pending_review` for an admin. |
+| `MARKET_MIN_OFFER` | `1` | A decimal amount. It is the minimum offer and also the minimum listing price. When the fee is on it must be at least `ceil(10000 / MARKET_FEE_BPS)` base units of every asset, so the fee is never 0. |
+| `TREASURY_SOLANA`, `TREASURY_EVM` | `RENAME_TREASURY_*` | Where the fee is paid. |
+| `REGISTRATION_MIN_BALANCE_USD` | `100` | The balance needed to claim a name. `0` turns the gate off and never calls the price feed. |
+| `PRICE_FEED_URL`, `PRICE_FEED_TTL`, `PRICE_FEED_MAX_AGE` | CoinGecko, `60s`, `5m` | The registration gate's price feed. A stale or failed feed fails closed with `PRICE_UNAVAILABLE`. |
+
+Startup fails when the market is enabled and an asset has no treasury or no RPC URL.
+
+Routes (session, or an agent key with the scope shown):
+
+| Method | Path | Scope / notes |
+|---|---|---|
+| GET | `/v1/market/listings?q=&minPrice=&maxPrice=&sort=&cursor=` | Public search |
+| GET | `/v1/market/names/:name` | Public: listing, live offer count, last sale, listable |
+| GET | `/v1/market/eligibility/:maxId` | `market:read` |
+| POST / PATCH / DELETE | `/v1/market/listings[/:id]` | `market:sell` |
+| POST | `/v1/market/listings/:id/buy` `{fromAddress, idempotencyKey}` | `market:buy`: returns the sale, quote and instructions. A buyer has at most 2 open sales (`SALE_LIMIT`, `details.reason: open_sales`) and, after letting a buy-now sale expire unpaid, waits 1h before buying that listing again (`SALE_LIMIT`, `buy_cooldown`). Buys, offers and accepts count the buyer's MAX IDs plus purchases in progress against the 10-ID limit (`MAX_ID_LIMIT_REACHED`). |
+| POST / DELETE | `/v1/market/offers[/:id]` | `market:buy` |
+| POST | `/v1/market/offers/:id/accept`, `/decline` | `market:sell` |
+| POST | `/v1/market/offers/:id/pay`, `/v1/market/sales/:id/submit {txHash}` | `market:buy` |
+| GET | `/v1/market/sales/:id`, `/v1/market/me` | `market:read`. A buyer of a `locked` sale gets a fresh quote and instructions. |
+| GET | `/v1/agents/:agentId/market-authorizations?decision=` | Session, as the agent's administrator |
+| POST | `/v1/agent-approvals/market/:authorizationId/approve`, `/deny` | Session, as the agent's administrator |
+
+Admin routes are under `/v1/admin/market`. They need a session whose account is in `ADMIN_ACCOUNT_IDS`; everyone else gets 404. Every write records `audit_logs` with the admin, and a `market_sale_events` row when a sale is involved.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `listings`, `offers`, `sales` | Full data, including addresses and account ids. Filters: `?status=&accountId=&name=&limit=` (at most 100). `accountId` is the seller, the buyer, or either party. |
+| POST | `listings/:id/delist {reason}` | Moves an `active` listing to `admin_delisted`. The seller sees the reason. A `locked` listing returns `NAME_LOCKED`: cancel its sale first. |
+| POST | `sales/:id/approve {reason?}` | Moves `pending_review` to `locked`. The lock starts now: `MARKET_BUY_LOCK` for buy-now, `MARKET_OFFER_PAY_WINDOW` for an offer. |
+| POST | `sales/:id/deny {reason}` | Moves `pending_review` to `cancelled` and puts the listing back to active. The offer is declined with the note "denied by admin: …" and no strike. |
+| POST | `sales/:id/cancel {reason}` | Allowed for a `locked` sale with no transaction, or a `manual_review` sale. The listing goes back to active and an accepted offer expires with no strike. Refunds are handled off-platform. Submitted and confirming sales return 409. |
+| POST | `sales/:id/reverse {reason}` | For a `completed` sale while the buyer still owns the name. Ownership goes back to the seller with no destination preset; the listing stays `sold`; money is handled manually. Returns 409 `OWNER_CHANGED` or `RENAME_PENDING`. |
+| GET / POST | `restrictions` `{accountId, kind: ban\|offer_suspension, until?, reason}` | The GET lists active restrictions (`?accountId=&all=true`). A ban blocks listing, offers and buying. It does not close existing listings or offers. |
+| DELETE | `restrictions/:id` | Lifts a restriction (sets `lifted_at`). |
+
+**Worker.** When the market is enabled, `market.RunWorker` ticks every 15s. Each tick does the following:
+- Observes submitted sales and completes exact payments in one transaction (ownership transfer, listing sold, other offers superseded).
+- Moves mismatched payments to `manual_review`.
+- Judges a transaction submitted for a sale an admin cancelled after it was locked: the sale stays `cancelled` with the tx recorded, and moves to `manual_review` only once the finalized tx paid toward it. A sale denied in review takes no transaction.
+- Cancels sales left in `pending_review` for 24h ("review timed out", no strike; the offer is declined and the listing released).
+- Expires unpaid locks. An unpaid accepted offer lapses and records a strike; 3 strikes in 30 days bring a 30-day offer suspension. An unpaid buy-now sale starts the buyer's 1h cooldown on that listing.
+- Expires a submitted sale whose transaction is still not found, or still isn't a payment for the sale, 30m after the later of the lock end and the submission.
+- Late payments arrive through `submit` on an expired sale: they complete the sale if the seller still owns the name, and go to `manual_review` otherwise.
+- Rechecks offer funding every 5m and expires listings and offers.
+
+Codes: `MARKET_DISABLED`, `MARKET_PAUSED`, `NOT_LISTABLE` (`details.reason`), `LISTING_NOT_ACTIVE`, `NAME_LOCKED`,
+`SELF_TRADE`, `MARKET_RESTRICTED`, `ASSET_NOT_ACCEPTED`, `INSUFFICIENT_FUNDS`, `OFFER_LIMIT`, `SALE_LIMIT`, `OFFER_BELOW_MINIMUM`,
+`OFFER_UNFUNDED`, `SALE_EXPIRED`, `TX_MISMATCH`, `PENDING_APPROVAL` (202), `INSUFFICIENT_REGISTRATION_BALANCE`,
+`PRICE_UNAVAILABLE`, plus `NAME_LISTED`, `OWNER_CHANGED`, `RENAME_PENDING` and `MAX_ID_LIMIT_REACHED`. Public
+`NOT_LISTABLE` reasons hide moderation and wallet changes as `unavailable` (`payout_wallet_removed` is shown only to the seller).
+
 ### Error codes worth handling in UI
 
 `MAX_ID_TAKEN`, `MAX_ID_RESERVED`, `MAX_ID_VERIFICATION_REQUIRED`, `MAX_ID_LIMIT_REACHED`,
@@ -284,6 +353,9 @@ Also done: `renames` (paid renames with a 72h cooldown, name reservation, quaran
 
 Also done: `verifications` (X OAuth 2.0 + PKCE, reserved-name claims, manual review, re-verification,
 admin revocation).
+
+Also done: `market` (fixed-price listings, offers, Solana USDC settlement observed on chain,
+agent market policy, admin review/deny/cancel/reverse/delist and restrictions).
 
 TypeScript SDK: see `../max-sdk` (typed client, safe retries, agent `PolicySigner`).
 MCP server: see `../max-mcp` (read-only resolution + policy-bound proposals; never signs).

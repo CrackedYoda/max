@@ -1,5 +1,7 @@
 import { verifyAuthorization, type VerifyOptions } from "./authorization.js";
 import { HttpClient, enc, idempotencyKey, sleep, type ClientOptions } from "./http.js";
+import { MarketApi } from "./market.js";
+import type { AdminListing, AdminMarketFilter, AdminOffer, AdminSale, AgentActionResult, AgentMarketAuthorization, MarketRestriction, RestrictionKind } from "./market-types.js";
 import {
   TERMINAL_STATUSES,
   type Account,
@@ -7,6 +9,7 @@ import {
   type AgentCredential,
   type AgentDetail,
   type AgentLimit,
+  type AgentMarketPolicy,
   type AgentPolicy,
   type AgentScope,
   type AgentTransfer,
@@ -68,6 +71,8 @@ export class MaxClient {
   readonly agent: AgentRuntimeApi;
   /** Platform administration (accounts listed in ADMIN_ACCOUNT_IDS). */
   readonly admin: PlatformAdminApi;
+  /** The name marketplace: search, list, buy, offers, sales. */
+  readonly market: MarketApi;
 
   constructor(options: ClientOptions) {
     this.http = new HttpClient(options);
@@ -81,6 +86,7 @@ export class MaxClient {
     this.agents = new AgentsAdminApi(this.http);
     this.agent = new AgentRuntimeApi(this.http);
     this.admin = new PlatformAdminApi(this.http);
+    this.market = new MarketApi(this.http);
   }
 
   /** Supported chains. Anything not listed is refused rather than guessed. */
@@ -302,9 +308,13 @@ class AgentsAdminApi {
   resume(agentId: string): Promise<Agent> {
     return this.update(agentId, { status: "active" });
   }
+  /**
+   * Replace the policy. Omit `market` to keep the current selling policy;
+   * send it to replace it.
+   */
   setPolicy(
     agentId: string,
-    policy: { limits: Pick<AgentLimit, "chain" | "asset" | "maxPerTransfer" | "maxPer24h">[]; allowedRecipients?: string[]; allowAnyRecipient?: boolean },
+    policy: { limits: Pick<AgentLimit, "chain" | "asset" | "maxPerTransfer" | "maxPer24h">[]; allowedRecipients?: string[]; allowAnyRecipient?: boolean; market?: AgentMarketPolicy },
   ): Promise<AgentPolicy> {
     return this.http.put(`/v1/agents/${enc(agentId)}/policy`, { body: policy });
   }
@@ -337,6 +347,17 @@ class AgentsAdminApi {
   }
   deny(paymentId: string, reason?: string): Promise<AgentTransfer> {
     return this.http.post(`/v1/agent-approvals/${enc(paymentId)}/deny`, { body: { reason } });
+  }
+  /** Market actions the agent's policy held (or decided), newest first. */
+  marketAuthorizations(agentId: string, params: { decision?: Decision } = {}): Promise<AgentMarketAuthorization[]> {
+    return this.http.get(`/v1/agents/${enc(agentId)}/market-authorizations`, { query: params });
+  }
+  /** Approve a held market action; it runs now and the result carries the listing or sale. */
+  approveMarket(authorizationId: string): Promise<AgentActionResult> {
+    return this.http.post(`/v1/agent-approvals/market/${enc(authorizationId)}/approve`);
+  }
+  denyMarket(authorizationId: string): Promise<AgentActionResult> {
+    return this.http.post(`/v1/agent-approvals/market/${enc(authorizationId)}/deny`);
   }
 }
 
@@ -413,6 +434,43 @@ class PlatformAdminApi {
   }
   revokeVerification(id: string, note?: string): Promise<void> {
     return this.http.post(`/v1/admin/verifications/${enc(id)}/revoke`, { body: { note } });
+  }
+
+  // ---- Marketplace administration (/v1/admin/market) ----
+
+  marketListings(params: AdminMarketFilter = {}): Promise<AdminListing[]> {
+    return this.http.get("/v1/admin/market/listings", { query: { ...params } });
+  }
+  marketOffers(params: AdminMarketFilter = {}): Promise<AdminOffer[]> {
+    return this.http.get("/v1/admin/market/offers", { query: { ...params } });
+  }
+  marketSales(params: AdminMarketFilter = {}): Promise<AdminSale[]> {
+    return this.http.get("/v1/admin/market/sales", { query: { ...params } });
+  }
+  marketDelist(listingId: string, reason?: string): Promise<AdminListing> {
+    return this.http.post(`/v1/admin/market/listings/${enc(listingId)}/delist`, { body: { reason } });
+  }
+  marketApproveSale(saleId: string, reason?: string): Promise<AdminSale> {
+    return this.http.post(`/v1/admin/market/sales/${enc(saleId)}/approve`, { body: { reason } });
+  }
+  marketDenySale(saleId: string, reason?: string): Promise<AdminSale> {
+    return this.http.post(`/v1/admin/market/sales/${enc(saleId)}/deny`, { body: { reason } });
+  }
+  marketCancelSale(saleId: string, reason?: string): Promise<AdminSale> {
+    return this.http.post(`/v1/admin/market/sales/${enc(saleId)}/cancel`, { body: { reason } });
+  }
+  marketReverseSale(saleId: string, reason?: string): Promise<AdminSale> {
+    return this.http.post(`/v1/admin/market/sales/${enc(saleId)}/reverse`, { body: { reason } });
+  }
+  /** Active restrictions, or all of them with `all: true`. */
+  marketRestrictions(params: { accountId?: string; all?: boolean; limit?: number } = {}): Promise<MarketRestriction[]> {
+    return this.http.get("/v1/admin/market/restrictions", { query: { ...params } });
+  }
+  marketRestrict(input: { accountId: string; kind: RestrictionKind; until?: string; reason: string }): Promise<MarketRestriction> {
+    return this.http.post("/v1/admin/market/restrictions", { body: input });
+  }
+  marketLiftRestriction(restrictionId: string, reason?: string): Promise<MarketRestriction> {
+    return this.http.delete(`/v1/admin/market/restrictions/${enc(restrictionId)}`, { body: { reason } });
   }
 }
 

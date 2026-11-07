@@ -23,6 +23,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: tabIcon('home') }} />
       <Tabs.Screen name="send" options={{ title: 'Send', tabBarIcon: tabIcon('send') }} />
       <Tabs.Screen name="receive" options={{ title: 'Receive', tabBarIcon: tabIcon('receive') }} />
+      <Tabs.Screen name="market" options={{ title: 'Market', tabBarIcon: tabIcon('market') }} />
       <Tabs.Screen name="ids" options={{ title: 'IDs', tabBarIcon: tabIcon('ids') }} />
     </Tabs>
   );

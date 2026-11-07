@@ -22,6 +22,7 @@ type resolveResponse struct {
 	Address           string        `json:"address"`
 	ResolutionVersion int64         `json:"resolutionVersion"`
 	ResolvedAt        time.Time     `json:"resolvedAt"`
+	OwnerChangedAt    string        `json:"ownerChangedAt,omitempty"`
 	Notes             []string      `json:"notes"`
 }
 
@@ -36,14 +37,15 @@ type settlementResponse struct {
 }
 
 type profileResponse struct {
-	MaxID       string          `json:"maxId"`
-	Name        string          `json:"name"`
-	Handle      string          `json:"handle"`
-	Type        string          `json:"type"`
-	DisplayName string          `json:"displayName"`
-	Description string          `json:"description"`
-	AvatarURL   string          `json:"avatarUrl"`
-	Chains      []reachResponse `json:"chains"`
+	MaxID          string          `json:"maxId"`
+	Name           string          `json:"name"`
+	Handle         string          `json:"handle"`
+	Type           string          `json:"type"`
+	DisplayName    string          `json:"displayName"`
+	Description    string          `json:"description"`
+	AvatarURL      string          `json:"avatarUrl"`
+	Chains         []reachResponse `json:"chains"`
+	OwnerChangedAt string          `json:"ownerChangedAt,omitempty"`
 	// Settlement tells senders the recipient accepts quoted conversions into this asset.
 	Settlement *settlementResponse `json:"settlement,omitempty"`
 }
@@ -56,7 +58,7 @@ func toResolveResponse(r Resolution) resolveResponse {
 	return resolveResponse{
 		MaxID: r.MaxID.String(), Handle: r.Handle, Type: r.Type, DisplayName: r.DisplayName,
 		Chain: r.Chain, Asset: assetResponse{Kind: string(r.Asset.Kind), Address: r.Asset.Address},
-		Address: r.Address, ResolutionVersion: r.ResolutionVersion, ResolvedAt: r.ResolvedAt, Notes: notes,
+		Address: r.Address, ResolutionVersion: r.ResolutionVersion, ResolvedAt: r.ResolvedAt, OwnerChangedAt: rfc3339(r.OwnerChangedAt), Notes: notes,
 	}
 }
 
@@ -73,6 +75,13 @@ func toProfileResponse(p Profile, reach []ChainReach) profileResponse {
 		Settlement: st,
 		MaxID:      p.MaxID.String(), Name: p.CanonicalName, Handle: maxids.Handle(p.CanonicalName),
 		Type: p.Type, DisplayName: p.DisplayName, Description: p.Description,
-		AvatarURL: p.AvatarURL, Chains: rr,
+		AvatarURL: p.AvatarURL, Chains: rr, OwnerChangedAt: rfc3339(p.OwnerChangedAt),
 	}
+}
+
+func rfc3339(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

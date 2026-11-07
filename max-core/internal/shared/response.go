@@ -9,8 +9,9 @@ import (
 )
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 func OK(c *gin.Context, data any) {
@@ -40,5 +41,5 @@ func Fail(c *gin.Context, err error) {
 		log.Warn("request rejected", zap.String("code", appErr.Code), zap.Error(appErr))
 	}
 
-	c.AbortWithStatusJSON(appErr.Status, gin.H{"error": errorBody{Code: appErr.Code, Message: appErr.Message}})
+	c.AbortWithStatusJSON(appErr.Status, gin.H{"error": errorBody{Code: appErr.Code, Message: appErr.Message, Details: appErr.Details}})
 }

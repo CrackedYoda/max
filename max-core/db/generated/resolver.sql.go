@@ -7,12 +7,13 @@ package generated
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const getPublicMaxID = `-- name: GetPublicMaxID :one
-SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version
+SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version, owner_changed_at
 FROM max_ids
 WHERE canonical_name = $1 AND status = 'active'
 `
@@ -25,6 +26,7 @@ type GetPublicMaxIDRow struct {
 	Description       string
 	AvatarUrl         string
 	ResolutionVersion int64
+	OwnerChangedAt    *time.Time
 }
 
 func (q *Queries) GetPublicMaxID(ctx context.Context, canonicalName string) (GetPublicMaxIDRow, error) {
@@ -38,6 +40,7 @@ func (q *Queries) GetPublicMaxID(ctx context.Context, canonicalName string) (Get
 		&i.Description,
 		&i.AvatarUrl,
 		&i.ResolutionVersion,
+		&i.OwnerChangedAt,
 	)
 	return i, err
 }

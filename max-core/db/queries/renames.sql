@@ -25,6 +25,7 @@ RETURNING *;
 UPDATE max_ids
 SET canonical_name = sqlc.arg(new_name),
     rename_available_at = now() + make_interval(secs => sqlc.arg(cooldown_seconds)::int),
+    listable_at = now() + make_interval(secs => sqlc.arg(hold_seconds)::int),
     resolution_version = resolution_version + 1,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND canonical_name = sqlc.arg(old_name)

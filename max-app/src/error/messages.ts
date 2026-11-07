@@ -42,6 +42,26 @@ const COPY: Record<string, string> = {
   X_PROVIDER_ERROR: 'X didn’t respond. Try again in a moment.',
   NAME_NOT_RESERVED: 'That name isn’t reserved — claim it normally.',
   RESERVED_CLAIM_EXISTS: 'You’ve already claimed that name.',
+  // Marketplace (spec §9) and the name guards it adds.
+  MARKET_DISABLED: 'The marketplace isn’t open yet.',
+  MARKET_PAUSED: 'Trading is paused right now. Sales already in progress still complete.',
+  NOT_LISTABLE: 'This name can’t be sold right now.',
+  LISTING_NOT_ACTIVE: 'This listing isn’t available any more. It may have sold, or the seller changed it.',
+  NAME_LOCKED: 'A sale is in progress for this name, so it can’t be changed right now.',
+  SELF_TRADE: 'You can’t trade with yourself or with an account that shares a wallet with yours.',
+  MARKET_RESTRICTED: 'Your account can’t use the marketplace right now.',
+  ASSET_NOT_ACCEPTED: 'That token isn’t accepted on the marketplace.',
+  INSUFFICIENT_FUNDS: 'The paying wallet doesn’t hold enough to cover this.',
+  OFFER_LIMIT: 'You already have an open offer on this name, or 20 open offers in total. Withdraw one first.',
+  OFFER_BELOW_MINIMUM: 'That’s below the marketplace minimum.',
+  OFFER_UNFUNDED: 'The buyer’s wallet doesn’t cover this offer right now, so it can’t be accepted.',
+  SALE_EXPIRED: 'The payment window has closed. If you already sent the payment, MAX will still match it. Otherwise nothing was charged.',
+  TX_MISMATCH: 'That transaction doesn’t match this sale’s terms. Nothing was recorded.',
+  PENDING_APPROVAL: 'This is waiting for approval by the agent’s administrator.',
+  INSUFFICIENT_REGISTRATION_BALANCE: 'Your linked wallets don’t hold enough value to claim a MAX ID.',
+  PRICE_UNAVAILABLE: 'We couldn’t price your wallet balances just now. Try again in a minute.',
+  NAME_LISTED: 'This name is listed for sale. Delist it before renaming.',
+  OWNER_CHANGED: 'This name changed owners while you were working. Reload to see the latest.',
 };
 
 export function errorMessage(err: unknown): string {
@@ -49,6 +69,11 @@ export function errorMessage(err: unknown): string {
   if (err instanceof MaxNetworkError) return 'Can’t reach MAX right now. Check your connection and try again.';
   if (err instanceof Error && err.message) return err.message;
   return 'Something went wrong. Try again.';
+}
+
+/** The API's `error.details`, when it sent any. */
+export function errorDetails(err: unknown): Record<string, unknown> | undefined {
+  return isMaxApiError(err) ? err.details : undefined;
 }
 
 export function errorCode(err: unknown): string | undefined {

@@ -1,9 +1,12 @@
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type MaxIdType, type Namespace } from '@max/sdk';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type MaxIdType, type Namespace, type SaleStatus } from '@max/sdk';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 
 import { max } from '@/api/client';
 import { keys } from '@/api/keys';
-import { hasRpc, nativeBalance, usdcBalance, type Balance } from '@/services/chain';
+import { getEnv } from '@/config/env';
+import { hasRpc, mintDecimals, nativeBalance, usdcBalance, type Balance } from '@/services/chain';
+import { trustedDecimals } from '@/utils/money';
 import { useSession } from '@/store/session';
 
 export function useAccountId(): string {
@@ -169,4 +172,104 @@ export function useUpdateProfile() {
       max().ids.updateProfile(v.id, { displayName: v.displayName, description: v.description }),
     onSuccess: invalidate,
   });
+}
+
+// ---- marketplace ----
+
+/** A sale stops being polled once it reaches one of these. */
+export const SALE_TERMINAL: readonly SaleStatus[] = ['completed', 'expired', 'cancelled', 'manual_review', 'reversed'];
+
+const noRetryApiErrors = (n: number, e: unknown) => !isMaxApiError(e) && n < 2;
+
+/** Public listing search with cursor pagination. */
+export function useMarketSearch(q: string, sort: string) {
+  return useInfiniteQuery({
+    queryKey: keys.marketSearch(q, sort),
+    queryFn: ({ pageParam }) => max().market.search({ q: q || undefined, sort, cursor: pageParam || undefined }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.nextCursor || undefined,
+    retry: noRetryApiErrors,
+  });
+}
+
+/** Public market view of one name. */
+export function useMarketName(name: string | null) {
+  return useQuery({ queryKey: keys.marketName(name ?? ''), queryFn: () => max().market.getName(name!), enabled: !!name, retry: noRetryApiErrors });
+}
+
+export function useMarketInbox() {
+  const accountId = useAccountId();
+  return useQuery({ queryKey: keys.marketInbox(accountId), queryFn: () => max().market.inbox(), enabled: useReady(), retry: noRetryApiErrors });
+}
+
+export function useMarketEligibility(maxId: string) {
+  const accountId = useAccountId();
+  return useQuery({
+    queryKey: keys.marketEligibility(accountId, maxId),
+    queryFn: () => max().market.eligibility(maxId),
+    enabled: useReady() && !!maxId,
+    staleTime: 0,
+    retry: noRetryApiErrors,
+  });
+}
+
+/** Polls a sale every 3s until it reaches a terminal status. */
+export function useSale(id: string | null) {
+  const accountId = useAccountId();
+  return useQuery({
+    queryKey: keys.sale(accountId, id ?? ''),
+    queryFn: () => max().market.getSale(id!),
+    enabled: !!id,
+    refetchInterval: (q) => {
+      const s = q.state.data?.sale.status;
+      return s && SALE_TERMINAL.includes(s) ? false : 3000;
+    },
+  });
+}
+
+/**
+ * Token decimals from trusted sources only: the EXPO_PUBLIC_MARKET_ASSETS pin,
+ * cross-checked with the mint read through this app's RPC, or the chain alone.
+ * Never inferred from API fields.
+ */
+export function useTrustedDecimals(chain: string | undefined, mint: string | undefined): { decimals: number | null; error: string | null; loading: boolean } {
+  const pinned = getEnv().marketAssets.find((a) => a.chain === chain && a.asset === mint)?.decimals;
+  const onChain = useQuery({
+    queryKey: keys.mintDecimals(chain ?? '', mint ?? ''),
+    queryFn: () => mintDecimals(chain!, mint!),
+    enabled: !!chain && !!mint && hasRpc(chain),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  const t = trustedDecimals(pinned, onChain.data);
+  return { ...t, loading: t.decimals == null && !t.error && onChain.isLoading };
+}
+
+/**
+ * The decimals to pin a price with, right before signing: always reads the
+ * mint on chain (cached) and cross-checks the env pin. Throws a readable
+ * Error when they can't be established or disagree.
+ */
+export async function fetchTrustedDecimals(qc: QueryClient, chain: string, mint: string): Promise<number> {
+  const pinned = getEnv().marketAssets.find((a) => a.chain === chain && a.asset === mint)?.decimals;
+  let onChain: number;
+  try {
+    onChain = await qc.fetchQuery({ queryKey: keys.mintDecimals(chain, mint), queryFn: () => mintDecimals(chain, mint), staleTime: Infinity, gcTime: Infinity });
+  } catch {
+    throw new Error('Couldn’t read this token from the network, so the price can’t be checked. Nothing was signed.');
+  }
+  const t = trustedDecimals(pinned, onChain);
+  if (t.error || t.decimals == null) throw new Error(t.error ?? 'This token’s decimals are unknown, so nothing can be signed.');
+  return t.decimals;
+}
+
+/** Refresh everything market-related: public views and the account's inbox, IDs and sales. */
+export function useInvalidateMarket() {
+  const qc = useQueryClient();
+  const accountId = useAccountId();
+  // Stable, so flows can depend on it without restarting.
+  return useCallback(() => {
+    qc.invalidateQueries({ queryKey: keys.market });
+    qc.invalidateQueries({ queryKey: keys.account(accountId) });
+  }, [qc, accountId]);
 }

@@ -56,7 +56,8 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "lint": "expo lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:market": "node --test scripts/market-helpers.test.mjs"
   },
   "private": true
 }

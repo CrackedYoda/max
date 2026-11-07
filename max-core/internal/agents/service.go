@@ -3,6 +3,8 @@ package agents
 import (
 	"context"
 	"errors"
+	"math/big"
+	"regexp"
 	"strings"
 	"time"
 
@@ -111,6 +113,13 @@ func (s *service) SetPolicy(ctx context.Context, admin, agentID uuid.UUID, in Po
 	if err != nil {
 		return Policy{}, err
 	}
+	if in.Market == nil {
+		cur, err := s.Repo.GetPolicy(ctx, agentID)
+		if err != nil {
+			return Policy{}, err
+		}
+		p.Market = cur.Market
+	}
 	return s.Repo.UpdatePolicy(ctx, agentID, p, admin)
 }
 
@@ -157,6 +166,14 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 		p.Limits = append(p.Limits, AssetLimit{Chain: chain.Key, Asset: asset, MaxPerTransfer: perTx, MaxPer24h: perDay})
 	}
 
+	if in.Market != nil {
+		m, err := buildMarketPolicy(*in.Market)
+		if err != nil {
+			return Policy{}, err
+		}
+		p.Market = m
+	}
+
 	if len(in.AllowedRecipients) > maxAllowlistLength {
 		return Policy{}, ErrInvalidPolicy.WithMessage("allowlist is too long")
 	}
@@ -171,6 +188,43 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 	}
 	return p, nil
 }
+
+// buildMarketPolicy validates the selling policy. Minimums are per verified
+// asset, like limits, and exact base-unit integers.
+func buildMarketPolicy(in MarketPolicyInput) (MarketPolicy, error) {
+	m := MarketPolicy{CanSell: in.CanSell}
+	seen := map[string]bool{}
+	for _, sm := range in.MinSalePrices {
+		chain, ok := chains.Lookup(sm.Chain)
+		if !ok {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: unknown chain " + sm.Chain)
+		}
+		asset := ""
+		if a := strings.TrimSpace(sm.Asset); a != "" && !strings.EqualFold(a, "native") {
+			norm, err := chains.NormalizeAddress(chain.Namespace, a)
+			if err != nil {
+				return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: invalid asset address for " + chain.Key)
+			}
+			if _, ok := chains.LookupVerifiedToken(chain.Key, norm); !ok {
+				return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: only native coins and verified tokens are supported")
+			}
+			asset = norm
+		}
+		key := chain.Key + "|" + asset
+		if seen[key] {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: duplicate minimum for " + key)
+		}
+		seen[key] = true
+		if !baseUnitsRe.MatchString(sm.Amount) {
+			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: amount must be a whole number of base units")
+		}
+		v, _ := new(big.Int).SetString(sm.Amount, 10)
+		m.MinSalePrices = append(m.MinSalePrices, SaleMinimum{Chain: chain.Key, Asset: asset, Amount: v.String()})
+	}
+	return m, nil
+}
+
+var baseUnitsRe = regexp.MustCompile(`^[0-9]{1,78}$`)
 
 func (s *service) IssueCredential(ctx context.Context, admin, agentID uuid.UUID, name string, scopes []string, ttl time.Duration) (IssuedCredential, error) {
 	if _, err := s.Repo.GetForAdministrator(ctx, agentID, admin); err != nil {

@@ -116,6 +116,34 @@ func (c *Client) ERC20Decimals(ctx context.Context, token string) (int, error) {
 	return int(v.Int64()), nil
 }
 
+// Balance returns the native balance of addr in wei.
+func (c *Client) Balance(ctx context.Context, addr string) (*big.Int, error) {
+	var out string
+	if _, err := c.rpc.Call(ctx, "eth_getBalance", []any{addr, "latest"}, &out); err != nil {
+		return nil, err
+	}
+	v, ok := chains.ParseHexBig(out)
+	if !ok || strings.TrimPrefix(out, "0x") == "" {
+		return nil, fmt.Errorf("invalid eth_getBalance result %q", out)
+	}
+	return v, nil
+}
+
+// ERC20Balance calls balanceOf(owner) on a token contract. An empty result
+// (not a token contract) is an error rather than a zero balance.
+func (c *Client) ERC20Balance(ctx context.Context, token, owner string) (*big.Int, error) {
+	var out string
+	call := map[string]string{"to": token, "data": chains.EncodeERC20BalanceOf(strings.ToLower(owner))}
+	if _, err := c.rpc.Call(ctx, "eth_call", []any{call, "latest"}, &out); err != nil {
+		return nil, err
+	}
+	v, ok := chains.ParseHexBig(out)
+	if !ok || strings.TrimPrefix(out, "0x") == "" {
+		return nil, fmt.Errorf("token did not return a valid balanceOf() value")
+	}
+	return v, nil
+}
+
 func hexInt(s string) (int64, error) {
 	v, ok := chains.ParseHexBig(s)
 	if !ok || !v.IsInt64() {

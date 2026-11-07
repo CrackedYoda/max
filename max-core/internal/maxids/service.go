@@ -2,6 +2,7 @@ package maxids
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 
@@ -15,12 +16,15 @@ const MaxIDsPerAccount = 10
 
 type service struct {
 	repo Repository
+	gate BalanceGate
 }
 
 var _ Service = (*service)(nil)
 
-func NewService(repo Repository) Service {
-	return &service{repo: repo}
+// NewService builds the MAX ID service. A nil gate disables the registration
+// balance check.
+func NewService(repo Repository, gate BalanceGate) Service {
+	return &service{repo: repo, gate: gate}
 }
 
 func (s *service) CheckAvailability(ctx context.Context, name string) (Availability, error) {
@@ -85,11 +89,44 @@ func (s *service) Claim(ctx context.Context, caller uuid.UUID, in ClaimInput) (M
 		return MaxID{}, ErrIDLimitReached
 	}
 
+	if err := s.checkGate(ctx, caller); err != nil {
+		return MaxID{}, err
+	}
+
 	display := strings.TrimSpace(in.DisplayName)
 	if display == "" {
 		display = canonical
 	}
 	return s.repo.Create(ctx, caller, canonical, in.Type, display)
+}
+
+// checkGate runs the registration balance gate and audits the outcome. The
+// audit is best-effort: it must not turn a decided claim into an error.
+func (s *service) checkGate(ctx context.Context, caller uuid.UUID) error {
+	if s.gate == nil {
+		return nil
+	}
+	err := s.gate.Check(ctx, caller)
+	if e, ok := s.gate.(interface{ Enabled() bool }); ok && !e.Enabled() {
+		return err
+	}
+	var ae *shared.AppError
+	switch {
+	case err == nil:
+		_ = s.repo.RecordGateCheck(ctx, caller, minUSD(s.gate), nil, true)
+	case errors.As(err, &ae) && ae.Code == ErrInsufficientRegistrationBalance.Code:
+		required, _ := ae.Details["requiredUsd"].(float64)
+		counted, _ := ae.Details["countedUsd"].(float64)
+		_ = s.repo.RecordGateCheck(ctx, caller, required, &counted, false)
+	}
+	return err
+}
+
+func minUSD(g BalanceGate) float64 {
+	if m, ok := g.(interface{ MinUSD() float64 }); ok {
+		return m.MinUSD()
+	}
+	return 0
 }
 
 func (s *service) ListMine(ctx context.Context, caller uuid.UUID) ([]MaxID, error) {

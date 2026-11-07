@@ -4,11 +4,13 @@ import { isMaxApiError, normalizeName } from "@max/sdk";
 import { useParams } from "next/navigation";
 
 import { Handle } from "@/components/identity/Handle";
+import { MarketPanel } from "@/components/market/MarketPanel";
 import { ButtonLink } from "@/components/ui/Button";
-import { KindBadge, Skeleton } from "@/components/ui/Blocks";
+import { Banner, KindBadge, Skeleton } from "@/components/ui/Blocks";
 import { Icon } from "@/components/ui/Icon";
 import { errorMessage } from "@/error/messages";
 import { useProfile } from "@/hooks/queries";
+import { formatDate } from "@/utils/format";
 
 export function ProfileView() {
   const { handle: raw } = useParams<{ handle: string }>();
@@ -47,6 +49,15 @@ export function ProfileView() {
         {p?.description ? <p className="mx-0 mb-0 mt-1.5 max-w-[480px] whitespace-pre-line text-base leading-relaxed text-muted">{p.description}</p> : null}
       </div>
 
+      {/* The API only sends ownerChangedAt within 30 days of a sale. */}
+      {p?.ownerChangedAt ? (
+        <div className="w-full text-left">
+          <Banner tone="warn" title={`Owner changed on ${formatDate(p.ownerChangedAt)}`}>
+            This handle was sold recently. Its wallets and profile were reset when it changed hands, so make sure you’re paying who you think you are.
+          </Banner>
+        </div>
+      ) : null}
+
       <section aria-labelledby="chains" className="flex w-full flex-col gap-3 rounded-2xl border border-line bg-surface p-6 text-left">
         <h2 id="chains" className="m-0 text-[15px] font-semibold">Can receive on</h2>
         {p ? (
@@ -79,6 +90,8 @@ export function ProfileView() {
           </p>
         ) : null}
       </section>
+
+      <MarketPanel name={name} />
 
       <ButtonLink href={`/send?to=${name}`} className="gap-2">Send to max.{name}<Icon name="arrowRight" size={18} /></ButtonLink>
       <p className="m-0 text-[13px] text-muted">Addresses are resolved fresh each time you send. MAX never holds funds.</p>

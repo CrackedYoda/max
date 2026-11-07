@@ -55,3 +55,33 @@ ORDER BY d.chain_namespace;
 
 -- name: GetOwnedActiveWallet :one
 SELECT * FROM wallets WHERE id = $1 AND account_id = $2 AND status = 'active';
+
+-- name: LockMaxIDByID :one
+SELECT * FROM max_ids WHERE id = $1 FOR UPDATE;
+
+-- name: TransferMaxIDOwner :one
+-- Moves the ID to a new owner and resets its public identity. The WHERE clause
+-- pins the previous owner so a stale caller cannot transfer twice.
+UPDATE max_ids m
+SET owner_account_id = sqlc.arg(to_owner),
+    type = CASE WHEN (SELECT a.type FROM accounts a WHERE a.id = sqlc.arg(to_owner)) = 'agent' THEN 'agent' ELSE 'human' END,
+    display_name = '',
+    description = '',
+    avatar_url = '',
+    resolution_version = resolution_version + 1,
+    owner_changed_at = now(),
+    listable_at = now() + make_interval(secs => sqlc.arg(hold_seconds)::int),
+    rename_available_at = greatest(rename_available_at, now() + make_interval(secs => sqlc.arg(hold_seconds)::int)),
+    updated_at = now()
+WHERE m.id = sqlc.arg(id) AND m.owner_account_id = sqlc.arg(from_owner)
+RETURNING m.*;
+
+-- name: DeleteAllDestinations :exec
+DELETE FROM max_id_destinations WHERE max_id = $1;
+
+-- name: CreateTransferEvent :exec
+INSERT INTO max_id_ownership_events (max_id, previous_owner, next_owner, event_type, sale_id)
+VALUES ($1, $2, $3, 'transferred', $4);
+
+-- name: SetListableAfter :exec
+UPDATE max_ids SET listable_at = now() + make_interval(secs => sqlc.arg(hold_seconds)::int) WHERE id = sqlc.arg(id);

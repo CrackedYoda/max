@@ -12,6 +12,7 @@ import (
 
 	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/auth"
+	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/middleware"
 	"github.com/max/max-core/internal/payments"
@@ -39,6 +40,7 @@ type Deps struct {
 	MaxIDs         *maxids.Handler
 	Resolver       *resolver.Handler
 	Payments       *payments.Handler
+	Market         *market.Handler
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -160,6 +162,54 @@ func NewRouter(d Deps) *gin.Engine {
 	ops.POST("/reserved-claims/:id/deny", d.Verifications.AdminDeny)
 	ops.POST("/reserved-claims/:id/revoke", d.Verifications.AdminRevokeClaim)
 	ops.POST("/verifications/:id/revoke", d.Verifications.AdminRevokeVerification)
+
+	// Marketplace admin (spec §9 Admin); 404 while the market is disabled.
+	mops := ops.Group("/market", d.Market.Gate())
+	mops.GET("/listings", d.Market.AdminListings)
+	mops.GET("/offers", d.Market.AdminOffers)
+	mops.GET("/sales", d.Market.AdminSales)
+	mops.POST("/listings/:id/delist", d.Market.AdminDelist)
+	mops.POST("/sales/:id/approve", d.Market.AdminApproveSale)
+	mops.POST("/sales/:id/deny", d.Market.AdminDenySale)
+	mops.POST("/sales/:id/cancel", d.Market.AdminCancelSale)
+	mops.POST("/sales/:id/reverse", d.Market.AdminReverseSale)
+	mops.GET("/restrictions", d.Market.AdminRestrictions)
+	mops.POST("/restrictions", d.Market.AdminRestrict)
+	mops.DELETE("/restrictions/:id", d.Market.AdminLiftRestriction)
+
+	// Marketplace (spec §9). Every route 404s while the market is disabled;
+	// Trading() refuses new activity while paused. Reads, pay and submit stay
+	// open so in-flight sales can finish, and delist, withdraw and decline
+	// stay open because closing something never starts a trade.
+	listLimit := middleware.RateLimit(30, time.Minute)
+	mkt := v1.Group("/market", d.Market.Gate())
+	mkt.GET("/listings", lookupLimit, d.Market.Search)
+	mkt.GET("/names/:name", lookupLimit, d.Market.Name)
+	// Session or agent key (spec §8, §9): agents act under their scopes and
+	// the agent market policy.
+	mine := mkt.Group("", required)
+	trade := d.Market.Trading()
+	read, sell, buy := scope(agents.ScopeMarketRead), scope(agents.ScopeMarketSell), scope(agents.ScopeMarketBuy)
+	mine.GET("/eligibility/:maxId", read, d.Market.Eligibility)
+	mine.POST("/listings", sell, listLimit, trade, d.Market.CreateListing)
+	mine.PATCH("/listings/:id", sell, listLimit, trade, d.Market.UpdateListing)
+	mine.DELETE("/listings/:id", sell, listLimit, d.Market.DeleteListing)
+	mine.POST("/listings/:id/buy", buy, payLimit, trade, d.Market.Buy)
+	mine.POST("/offers", buy, listLimit, trade, d.Market.MakeOffer)
+	mine.DELETE("/offers/:id", buy, listLimit, d.Market.WithdrawOffer)
+	mine.POST("/offers/:id/accept", sell, listLimit, trade, d.Market.AcceptOffer)
+	mine.POST("/offers/:id/decline", sell, listLimit, d.Market.DeclineOffer)
+	// Paying an accepted offer, like submit, stays open while paused.
+	mine.POST("/offers/:id/pay", buy, payLimit, d.Market.PayOffer)
+	mine.POST("/sales/:id/submit", buy, payLimit, d.Market.Submit)
+	mine.GET("/sales/:id", read, d.Market.GetSale)
+	mine.GET("/me", read, d.Market.Me)
+
+	// Held agent market actions: the agent's administrator (session) decides.
+	admin.GET("/agents/:agentId/market-authorizations", d.Market.Gate(), d.Market.ListAgentAuthorizations)
+	approvals := admin.Group("/agent-approvals/market", d.Market.Gate())
+	approvals.POST("/:authorizationId/approve", d.Market.ApproveAgentAction)
+	approvals.POST("/:authorizationId/deny", d.Market.DenyAgentAction)
 
 	// Agent runtime: API keys only.
 	agent := v1.Group("/agent", required, agentOnly)

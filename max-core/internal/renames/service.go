@@ -214,7 +214,7 @@ func (s *service) reconcile(ctx context.Context, req Request) (Request, error) {
 	}
 	switch p.Status {
 	case payments.StatusCompleted:
-		return s.repo.Finalize(ctx, req.ID, s.cfg.Cooldown, s.cfg.Quarantine)
+		return s.repo.Finalize(ctx, req.ID, s.cfg.Cooldown, s.cfg.Quarantine, s.cfg.HoldPeriod)
 	case payments.StatusFailed, payments.StatusRefunded:
 		return s.close(ctx, req, StatusFailed, "fee payment failed: "+p.StatusReason)
 	case payments.StatusExpired:

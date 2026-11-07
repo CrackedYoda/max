@@ -150,14 +150,15 @@ function IdCard({ id }: { id: MaxId }) {
   const dest = (ns: 'evm' | 'solana') => id.destinations.find((d) => d.namespace === ns);
   return (
     <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 14 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 }}>
+      <View style={{ gap: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Handle name={id.handle} size={20} />
           <Pill small tone={id.type === 'agent' ? 'clay' : 'neutral'} label={id.type === 'agent' ? 'Agent' : 'Human'} />
         </View>
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
+        <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
           <Button label="Edit" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/edit-id', params: { id: id.id } })} />
+          <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
+          <Button label="Sell" variant="soft" size="sm" onPress={() => router.push({ pathname: '/sell', params: { id: id.id } })} />
         </View>
       </View>
       <View style={{ borderTopWidth: 1, borderTopColor: colors.sunken }}>

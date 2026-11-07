@@ -1,12 +1,13 @@
 import { TERMINAL_STATUSES, type Payment } from '@max/sdk';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
-import { Redirect, router } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StepUpModal } from '@/components/auth/StepUpModal';
+import { SaleReview } from '@/components/market/SaleReview';
 import { StatusPill } from '@/components/payments/PaymentRow';
 import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, ReviewRow } from '@/components/ui/Blocks';
@@ -35,11 +36,20 @@ type Phase =
   | { kind: 'sent'; ambiguous: boolean };
 
 /**
+ * The review sheet. `?flow=sale` is the marketplace variant (buy a listing,
+ * pay an accepted offer); its terms live in useSaleDraft, never in params.
+ */
+export default function ReviewRoute() {
+  const { flow } = useLocalSearchParams<{ flow?: string }>();
+  return flow === 'sale' ? <SaleReview /> : <Review />;
+}
+
+/**
  * Review sheet → sign on device → broadcast → record with MAX. Signing happens
  * at most once per payment: the signed bytes are kept, so every retry
  * re-broadcasts the same transaction and re-submits the same hash.
  */
-export default function Review() {
+function Review() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const accountId = useAccountId();

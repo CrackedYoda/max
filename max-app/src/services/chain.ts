@@ -1,4 +1,4 @@
-import type { Chain, Instructions, Payment } from '@max/sdk';
+import { assertSaleInstructionsMatch, type Chain, type Instructions, type Payment, type SaleExpectations, type SaleView } from '@max/sdk';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
@@ -20,6 +20,7 @@ import {
 
 import { getEnv, USDC } from '@/config/env';
 import type { EvmKey, SolanaKey } from '@/services/keys';
+import { assertSaleChain, canSignNewSale, matchSaleSignature, saleInstructions } from '@/services/saleTx';
 import * as vault from '@/services/vault';
 import type { SignedTx } from '@/store/flows';
 
@@ -58,7 +59,7 @@ function evmClient(chain: Chain): PublicClient {
 }
 
 const solConns = new Map<string, Connection>();
-function solConn(chain: Chain): Connection {
+function solConn(chain: Pick<Chain, 'key' | 'name'>): Connection {
   const rpc = getEnv().rpc[chain.key];
   if (!rpc) throw new ChainError(`${chain.name} isn’t set up in this app.`);
   let c = solConns.get(chain.key);
@@ -68,6 +69,12 @@ function solConn(chain: Chain): Connection {
   }
   return c;
 }
+
+/** A Solana connection for a chain known only by key (market sales carry the key). */
+const solConnForKey = (key: string) => {
+  if (!key.startsWith('solana')) throw new ChainError('Market sales settle on Solana only.');
+  return solConn({ key, name: key });
+};
 
 // ---- balances ----
 
@@ -207,14 +214,99 @@ export async function broadcast(chain: Chain, signed: SignedTx): Promise<void> {
       await solConn(chain).sendRawTransaction(Buffer.from(signed.raw, 'base64'), { skipPreflight: false, maxRetries: 3 });
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Already known/processed means the first attempt landed.
-    if (/already known|already been processed|nonce too low|AlreadyProcessed/i.test(msg)) return;
-    if (/insufficient funds|insufficient lamports|0x1\b|no record of a prior credit/i.test(msg)) throw new ChainError(`Not enough ${chain.nativeCoin} to cover the amount and network fee.`);
-    // Preflight rejected it: nothing was sent.
-    if (/simulation failed/i.test(msg)) throw new ChainError('The network rejected this transaction. Nothing was sent.');
-    if (/blockhash not found/i.test(msg)) throw new ChainError('The network moved on before this was sent. Review it again.');
-    // Timeouts and dropped connections: it may have gone out.
-    throw new ChainError('We couldn’t confirm the network received it.', true);
+    classifyBroadcastError(err, `Not enough ${chain.nativeCoin} to cover the amount and network fee.`);
   }
+}
+
+/**
+ * Returns when the error means the transaction already landed. Otherwise
+ * throws a ChainError: definite ("nothing was sent") or ambiguous (it may
+ * have gone out: never sign a second one).
+ */
+function classifyBroadcastError(err: unknown, insufficient: string): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Already known/processed means the first attempt landed.
+  if (/already known|already been processed|nonce too low|AlreadyProcessed/i.test(msg)) return;
+  if (/insufficient funds|insufficient lamports|0x1\b|no record of a prior credit/i.test(msg)) throw new ChainError(insufficient);
+  // Preflight rejected it: nothing was sent.
+  if (/simulation failed/i.test(msg)) throw new ChainError('The network rejected this transaction. Nothing was sent.');
+  if (/blockhash not found/i.test(msg)) throw new ChainError('The network moved on before this was sent. Review it again.');
+  // Timeouts and dropped connections: it may have gone out.
+  throw new ChainError('We couldn’t confirm the network received it.', true);
+}
+
+// ---- marketplace sales (Solana, multi-instruction) ----
+
+/** A mint's decimals read through this app's own RPC, never from MAX. */
+export async function mintDecimals(chainKey: string, mint: string): Promise<number> {
+  const supply = await solConnForKey(chainKey).getTokenSupply(new PublicKey(mint));
+  return supply.value.decimals;
+}
+
+/**
+ * Verifies a sale's instructions against what the user agreed to, then signs
+ * the multi-instruction transaction (create token accounts as needed, fee to
+ * MAX's treasury, the rest to the seller, the sale memo) with the on-device
+ * key for `expect.buyer`. `expect` must come from what the user tapped (the
+ * listing or offer) and trusted decimals, never from the sale response:
+ * `assertSaleInstructionsMatch` throws AuthorizationError on any mismatch, and
+ * nothing is signed. Not broadcast here: the caller keeps the bytes so a retry
+ * re-sends the same transaction.
+ */
+export async function signSale(view: SaleView, chainKey: string, expect: Required<Pick<SaleExpectations, 'buyer' | 'asset' | 'priceBaseUnits'>>): Promise<SignedTx> {
+  // `chainKey` is the tapped listing/offer's chain: the RPC is chosen by it, never by the sale.
+  assertSaleChain(view.sale.chain, chainKey);
+  // With EXPO_PUBLIC_MARKET_TREASURY set, the fee must go to that treasury.
+  const treasury = getEnv().marketTreasury;
+  assertSaleInstructionsMatch(view.sale, view.instructions, treasury ? { ...expect, treasury } : expect);
+  const key = vault.keyFor('solana', expect.buyer);
+  if (!key || key.namespace !== 'solana') throw new ChainError('The paying account isn’t on this phone.');
+  const payer = key.keypair.publicKey;
+  const tx = new Transaction();
+  tx.add(...saleInstructions(view.instructions?.solana, payer));
+  const { blockhash, lastValidBlockHeight } = await solConnForKey(chainKey).getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = payer;
+  tx.sign(key.keypair);
+  const sig = tx.signature;
+  if (!sig) throw new ChainError('Signing failed.');
+  // The blockhash travels with the bytes: a new signature waits until it expires.
+  return { namespace: 'solana', raw: tx.serialize().toString('base64'), hash: bs58.encode(sig), blockhash, lastValidBlockHeight };
+}
+
+/**
+ * Whether a new sale payment may be signed in place of `earlier`, whose fate
+ * is unknown: the finalized block height must be past its
+ * lastValidBlockHeight, so it can never land. Throws when the network can't
+ * be asked.
+ */
+export async function saleAttemptExpired(chainKey: string, earlier: SignedTx | null | undefined): Promise<boolean> {
+  if (!earlier) return true;
+  if (earlier.lastValidBlockHeight == null) return false;
+  return canSignNewSale(earlier, await solConnForKey(chainKey).getBlockHeight('finalized'));
+}
+
+/** Sends a signed sale payment; same definite/ambiguous classification as `broadcast`. */
+export async function broadcastSale(chainKey: string, signed: SignedTx): Promise<void> {
+  try {
+    await solConnForKey(chainKey).sendRawTransaction(Buffer.from(signed.raw, 'base64'), { skipPreflight: false, maxRetries: 3 });
+  } catch (err) {
+    classifyBroadcastError(err, 'The paying wallet doesn’t hold enough to cover the price and the network fee. Nothing was sent.');
+  }
+}
+
+/**
+ * After an uncertain send: is this sale paid on chain? Checks the signature
+ * this phone signed (if any), then the buyer's last 20 transactions for the
+ * `max:sale:<id>` memo. Returns the landed signature or null. Throws when the
+ * network can't be asked.
+ */
+export async function findSalePayment(chainKey: string, buyer: string, saleId: string, knownHash?: string): Promise<string | null> {
+  const conn = solConnForKey(chainKey);
+  if (knownHash) {
+    const st = (await conn.getSignatureStatuses([knownHash], { searchTransactionHistory: true })).value[0];
+    if (st && !st.err) return knownHash;
+  }
+  const sigs = await conn.getSignaturesForAddress(new PublicKey(buyer), { limit: 20 }, 'confirmed');
+  return matchSaleSignature(sigs, saleId);
 }

@@ -25,3 +25,25 @@ var (
 	ErrSettlementNotFound    = shared.NewAppError("SETTLEMENT_NOT_FOUND", http.StatusNotFound, "no settlement preference configured")
 	ErrMaxIDNotActive        = shared.NewAppError("MAX_ID_NOT_ACTIVE", http.StatusConflict, "MAX ID is not active")
 )
+
+var (
+	ErrInsufficientRegistrationBalance = shared.NewAppError("INSUFFICIENT_REGISTRATION_BALANCE", http.StatusForbidden, "linked wallets do not hold enough value to register a MAX ID")
+	ErrPriceUnavailable                = shared.NewAppError("PRICE_UNAVAILABLE", http.StatusServiceUnavailable, "wallet balances could not be priced right now; try again shortly")
+)
+
+var (
+	// ErrNameListed refuses renames while the name has a live listing.
+	ErrNameListed = shared.NewAppError("NAME_LISTED", http.StatusConflict, "this MAX ID is listed for sale; delist it before renaming")
+	// ErrNameLocked refuses edits while the name has an open sale.
+	ErrNameLocked = shared.NewAppError("NAME_LOCKED", http.StatusConflict, "this MAX ID has a sale in progress and cannot be changed")
+)
+
+var (
+	// ErrTransferOwnerMismatch means the ID is no longer held by the expected owner.
+	ErrTransferOwnerMismatch = shared.NewAppError("OWNER_CHANGED", http.StatusConflict, "the MAX ID is no longer held by the expected owner")
+	// ErrTransferSameAccount means a transfer named the same account on both sides.
+	ErrTransferSameAccount = shared.NewAppError("TRANSFER_SAME_ACCOUNT", http.StatusBadRequest, "cannot transfer a MAX ID to its current owner")
+	// ErrRenamePending refuses a transfer while a rename awaits payment. It
+	// shares its code with renames.ErrRenamePending, so errors.Is matches both.
+	ErrRenamePending = shared.NewAppError("RENAME_PENDING", http.StatusConflict, "a rename for this MAX ID is already awaiting payment")
+)

@@ -51,6 +51,8 @@ export interface Profile {
   avatarUrl: string;
   chains: { chain: Chain; reachable: boolean }[];
   settlement?: { chain: Chain; asset: AssetRef };
+  /** Set only when ownership changed in the last 30 days (a marketplace sale). */
+  ownerChangedAt?: string;
 }
 
 export interface Resolution {
@@ -65,6 +67,8 @@ export interface Resolution {
   resolutionVersion: number;
   resolvedAt: ISODate;
   notes: string[];
+  /** Set only when ownership changed in the last 30 days; show it before paying. */
+  ownerChangedAt?: string;
 }
 
 export interface Destination {
@@ -266,7 +270,10 @@ export type AgentScope =
   | "payments:submit"
   | "authorizations:read"
   | "wallets:link"
-  | "ids:write";
+  | "ids:write"
+  | "market:read"
+  | "market:sell"
+  | "market:buy";
 
 export type Decision = "auto_approved" | "pending_approval" | "approved" | "denied";
 
@@ -351,7 +358,15 @@ export interface AgentPolicy {
   limits: AgentLimit[];
   allowedRecipients: string[];
   allowAnyRecipient: boolean;
+  /** Selling policy for marketplace actions. */
+  market: AgentMarketPolicy;
   updatedAt: ISODate;
+}
+
+export interface AgentMarketPolicy {
+  canSell: boolean;
+  /** Per-asset floors an agent may sell a name for; `amount` is in base units. */
+  minSalePrices: { chain: string; asset: string; amount: string }[];
 }
 
 export interface AgentCredential {

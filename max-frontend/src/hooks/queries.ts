@@ -1,10 +1,13 @@
 "use client";
 
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type MaxIdType, type Namespace } from "@max/sdk";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type MaxIdType, type Namespace, type SearchParams } from "@max/sdk";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { max } from "@/api/client";
 import { keys } from "@/api/keys";
+import { getEnv } from "@/config/env";
+import { mintDecimals } from "@/services/market";
+import { isSaleTerminal } from "@/services/saleAttempts";
 import { useSession } from "@/store/session";
 
 export function useAccountId(): string {
@@ -172,4 +175,122 @@ export function useVerifications() {
 export function useReservedClaims() {
   const accountId = useAccountId();
   return useQuery({ queryKey: keys.reservedClaims(accountId), queryFn: () => max().reservedClaims.list(), enabled: signedIn() });
+}
+
+// ---- marketplace ----
+
+export { isSaleTerminal } from "@/services/saleAttempts";
+
+/** Public listing search with cursor pagination. */
+export function useMarketSearch(params: Omit<SearchParams, "cursor">) {
+  return useInfiniteQuery({
+    queryKey: keys.marketSearch(params),
+    queryFn: ({ pageParam }) => max().market.search({ ...params, cursor: pageParam || undefined }),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.nextCursor || undefined,
+    retry: (n, e) => !isMaxApiError(e) && n < 2,
+  });
+}
+
+/** Public market view of a name. A disabled market (404 MARKET_DISABLED) is not retried. */
+export function useMarketName(name: string | null) {
+  return useQuery({
+    queryKey: keys.marketName(name ?? ""),
+    queryFn: () => max().market.getName(name!),
+    enabled: !!name,
+    retry: (n, e) => !isMaxApiError(e) && n < 2,
+  });
+}
+
+/** Token decimals straight from the chain (not from MAX). */
+export function useMintDecimals(chain: string | undefined, mint: string | undefined) {
+  return useQuery({
+    queryKey: keys.mintDecimals(chain ?? "", mint ?? ""),
+    queryFn: () => mintDecimals(chain!, mint!),
+    enabled: !!chain && !!mint,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+}
+
+/**
+ * Token decimals from trusted sources only: the env pin for a configured
+ * market asset, cross-checked against the mint on chain, or the chain alone.
+ * Never inferred from API fields. `error` is set when the two disagree.
+ */
+export function useTrustedDecimals(chain: string | undefined, mint: string | undefined): { decimals: number | null; error: string | null; loading: boolean } {
+  const pinned = getEnv().marketAssets.find((a) => a.chain === chain && a.asset === mint)?.decimals;
+  const onChain = useMintDecimals(chain, mint);
+  if (pinned != null && onChain.data != null && onChain.data !== pinned) {
+    return { decimals: null, error: "This token’s decimals on chain don’t match MAX’s configuration, so nothing can be signed.", loading: false };
+  }
+  const decimals = pinned ?? onChain.data ?? null;
+  return { decimals, error: null, loading: decimals == null && onChain.isLoading };
+}
+
+export function useMarketInbox() {
+  const accountId = useAccountId();
+  return useQuery({
+    queryKey: keys.marketInbox(accountId),
+    queryFn: () => max().market.inbox(),
+    enabled: signedIn(),
+    retry: (n, e) => !isMaxApiError(e) && n < 2,
+  });
+}
+
+export function useMarketEligibility(maxId: string | null) {
+  const accountId = useAccountId();
+  return useQuery({
+    queryKey: keys.marketEligibility(accountId, maxId ?? ""),
+    queryFn: () => max().market.eligibility(maxId!),
+    enabled: signedIn() && !!maxId,
+  });
+}
+
+/** Polls a sale every 3s until it reaches a terminal status. */
+export function useSale(id: string | null, enabled = true) {
+  const accountId = useAccountId();
+  return useQuery({
+    queryKey: keys.sale(accountId, id ?? ""),
+    queryFn: () => max().market.getSale(id!),
+    enabled: !!id && enabled,
+    refetchInterval: (q) => {
+      const s = q.state.data?.sale;
+      return s && isSaleTerminal(s) ? false : 3000;
+    },
+  });
+}
+
+/** Refresh everything market-related: public views and the caller's inbox. */
+export function useInvalidateMarket() {
+  const qc = useQueryClient();
+  const accountId = useAccountId();
+  return () => {
+    qc.invalidateQueries({ queryKey: keys.market });
+    qc.invalidateQueries({ queryKey: keys.account(accountId) });
+  };
+}
+
+// ---- platform admin ----
+
+/**
+ * Whether the signed-in account is a MAX administrator. max-core's admin
+ * routes answer 404 to everyone else (middleware.Admin), so the probe is the
+ * server's own check; the page is a UX gate only.
+ */
+export function useIsMarketAdmin() {
+  const accountId = useAccountId();
+  const q = useQuery({
+    queryKey: keys.adminMarket(accountId, "probe", {}),
+    queryFn: () => max().admin.marketSales({ status: "pending_review", limit: 1 }),
+    enabled: signedIn(),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  return { isAdmin: q.isSuccess, isLoading: q.isLoading, error: q.error };
+}
+
+export function useAdminMarket<T>(what: string, filter: object, fn: () => Promise<T>, enabled = true) {
+  const accountId = useAccountId();
+  return useQuery({ queryKey: keys.adminMarket(accountId, what, filter), queryFn: fn, enabled: signedIn() && enabled });
 }

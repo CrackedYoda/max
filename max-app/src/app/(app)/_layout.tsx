@@ -18,6 +18,9 @@ export default function AppLayout() {
         <Stack.Screen name="security" />
         <Stack.Screen name="add-account" />
         <Stack.Screen name="rename" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="sell" />
+        <Stack.Screen name="market/[name]" />
+        <Stack.Screen name="market/offers" />
         <Stack.Screen name="verify" />
         <Stack.Screen name="verify/x" options={{ animation: 'none' }} />
       </Stack>
