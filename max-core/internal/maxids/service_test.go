@@ -232,6 +232,11 @@ func TestCheckAvailability(t *testing.T) {
 			if IsDefaultShape(strings.TrimPrefix(tt.name, "max.")) && a.Detail != "this name uses a reserved format" {
 				t.Errorf("detail = %q", a.Detail)
 			}
+			if bare := strings.TrimPrefix(tt.name, "max."); IsDefaultShape(bare) {
+				if a.CanonicalName != bare || a.Handle != Handle(bare) {
+					t.Errorf("canonical/handle = %q/%q, want %q/%q", a.CanonicalName, a.Handle, bare, Handle(bare))
+				}
+			}
 		})
 	}
 }

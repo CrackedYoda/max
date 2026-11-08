@@ -41,7 +41,7 @@ func (s *service) CheckAvailability(ctx context.Context, name string) (Availabil
 	}
 	// Default shapes can never be claimed, so report them the way Claim refuses them.
 	if IsDefaultShape(canonical) {
-		return Availability{Available: false, Reason: "invalid", Detail: reservedFormatDetail}, nil
+		return Availability{CanonicalName: canonical, Handle: Handle(canonical), Available: false, Reason: "invalid", Detail: reservedFormatDetail}, nil
 	}
 	out := Availability{CanonicalName: canonical, Handle: Handle(canonical)}
 
