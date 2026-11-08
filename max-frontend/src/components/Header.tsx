@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { useWallets } from "@/hooks/queries";
+import { useMe, useWallets } from "@/hooks/queries";
 import { logout } from "@/services/session";
 import { useSession } from "@/store/session";
 import { shortAddress } from "@/utils/format";
@@ -45,7 +45,9 @@ function MainNav() {
   const wallets = useWallets();
   const qc = useQueryClient();
   const router = useRouter();
+  const me = useMe();
   const first = wallets.data?.[0];
+  const primary = me.data?.primaryMaxId;
   return (
     <nav aria-label="Main" className="flex flex-wrap items-center gap-1">
       <NavLink href="/send">Send</NavLink>
@@ -54,7 +56,11 @@ function MainNav() {
       {status === "authenticated" ? <NavLink href="/agents">Agents</NavLink> : null}
       {status === "authenticated" ? (
         <>
-          {first ? (
+          {primary ? (
+            <span className="ml-2 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-sm" title={first?.address}>
+              {primary.handle}
+            </span>
+          ) : first ? (
             <span className="ml-2 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-sm" title={first.address}>
               {shortAddress(first.address)}
             </span>

@@ -13,18 +13,22 @@ import (
 	"github.com/max/max-core/internal/audit"
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/database"
+	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/shared"
 )
 
 type repository struct {
-	pool *pgxpool.Pool
-	q    *generated.Queries
+	pool  *pgxpool.Pool
+	q     *generated.Queries
+	namer maxids.DefaultNamer
 }
 
 var _ Repository = (*repository)(nil)
 
-func NewRepository(pool *pgxpool.Pool) Repository {
-	return &repository{pool: pool, q: generated.New(pool)}
+// NewRepository returns the auth repository. namer names the default MAX ID
+// every new account gets at its first login.
+func NewRepository(pool *pgxpool.Pool, namer maxids.DefaultNamer) Repository {
+	return &repository{pool: pool, q: generated.New(pool), namer: namer}
 }
 
 func (r *repository) CreateChallenge(ctx context.Context, c Challenge) error {
@@ -108,6 +112,13 @@ func (r *repository) loginOnce(ctx context.Context, proof WalletProof) (acct Acc
 		if err != nil {
 			return err
 		}
+		// The default MAX ID is created in the same transaction, so the loser
+		// of a first-login race (which fails on CreateWallet above) rolls
+		// back without leaving an account or a default behind.
+		if _, err := maxids.CreateDefault(ctx, q, r.namer, a.ID, maxids.TypeHuman,
+			&maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)}, maxids.DefaultSourceLogin); err != nil {
+			return err
+		}
 		if err := audit.Write(ctx, q, audit.Entry{
 			Actor: &a.ID, Action: "account.created", ResourceType: "account", ResourceID: a.ID.String(),
 			Metadata: map[string]any{"via_wallet": nw.ID.String(), "namespace": nw.ChainNamespace},
@@ -150,10 +161,18 @@ func (r *repository) LinkWallet(ctx context.Context, accountID uuid.UUID, proof 
 			return err
 		}
 		out = toWallet(nw)
-		return audit.Write(ctx, q, audit.Entry{
+		if err := audit.Write(ctx, q, audit.Entry{
 			Actor: &accountID, Action: "wallet.linked", ResourceType: "wallet", ResourceID: nw.ID.String(),
 			Metadata: map[string]any{"namespace": nw.ChainNamespace, "address": nw.Address},
-		})
+		}); err != nil {
+			return err
+		}
+		// The first wallet linked in a namespace becomes the default MAX ID's
+		// destination there (agents start with none; humans with only their
+		// login namespace). An existing destination is left alone.
+		_, err = maxids.FillDefaultDestination(ctx, q, accountID,
+			maxids.WalletRef{ID: nw.ID, Namespace: chains.Namespace(nw.ChainNamespace)})
+		return err
 	})
 	if err != nil {
 		if database.IsUniqueViolation(err, "wallets_active_address_uniq") {
@@ -209,6 +228,28 @@ func (r *repository) RevokeSession(ctx context.Context, id uuid.UUID) error {
 		return shared.ErrInternal.WithError(err)
 	}
 	return nil
+}
+
+func (r *repository) GetAccountIDs(ctx context.Context, id uuid.UUID) (*IDRef, *IDRef, error) {
+	rows, err := r.q.ListAccountIDRefs(ctx, id)
+	if err != nil {
+		return nil, nil, shared.ErrInternal.WithError(err)
+	}
+	// Rows arrive claimed-first (oldest first), the default last.
+	var def, claimed *IDRef
+	for _, row := range rows {
+		ref := &IDRef{ID: row.ID, Handle: maxids.Handle(row.CanonicalName)}
+		if row.IsDefault {
+			def = ref
+		} else if claimed == nil {
+			claimed = ref
+		}
+	}
+	primary := claimed
+	if primary == nil {
+		primary = def
+	}
+	return def, primary, nil
 }
 
 func toAccount(a generated.Account) Account {

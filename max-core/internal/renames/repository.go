@@ -35,7 +35,7 @@ func (r *repository) GetOwnedMaxID(ctx context.Context, id, owner uuid.UUID) (Ma
 		}
 		return MaxIDInfo{}, shared.ErrInternal.WithError(err)
 	}
-	return MaxIDInfo{ID: row.ID, Name: row.CanonicalName, Status: row.Status, RenameAvailableAt: row.RenameAvailableAt}, nil
+	return MaxIDInfo{ID: row.ID, Name: row.CanonicalName, Status: row.Status, RenameAvailableAt: row.RenameAvailableAt, IsDefault: row.IsDefault}, nil
 }
 
 func (r *repository) GetReserved(ctx context.Context, canonical string) (*maxids.Reserved, error) {

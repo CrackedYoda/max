@@ -91,7 +91,7 @@ func (r *repository) ListActiveWallets(ctx context.Context, owner uuid.UUID) ([]
 	}
 	out := make([]WalletRef, 0, len(rows))
 	for _, w := range rows {
-		out = append(out, WalletRef{Namespace: chains.Namespace(w.ChainNamespace), Address: w.Address})
+		out = append(out, WalletRef{ID: w.ID, Namespace: chains.Namespace(w.ChainNamespace), Address: w.Address})
 	}
 	return out, nil
 }
@@ -396,7 +396,7 @@ func (r *repository) hydrate(ctx context.Context, q *generated.Queries, row gene
 	}
 	m := MaxID{
 		ID: row.ID, CanonicalName: row.CanonicalName, OwnerAccountID: row.OwnerAccountID,
-		Type: Type(row.Type), Status: row.Status, DisplayName: row.DisplayName,
+		Type: Type(row.Type), Status: row.Status, IsDefault: row.IsDefault, DisplayName: row.DisplayName,
 		Description: row.Description, AvatarURL: row.AvatarUrl,
 		ResolutionVersion: row.ResolutionVersion, RenameAvailableAt: row.RenameAvailableAt,
 		CreatedAt: row.CreatedAt, Destinations: make([]Destination, 0, len(dests)),

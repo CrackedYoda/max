@@ -49,6 +49,8 @@ export interface Profile {
   displayName: string;
   description: string;
   avatarUrl: string;
+  /** True for the account's auto-created receiving ID: not sellable or renameable. */
+  isDefault: boolean;
   chains: { chain: Chain; reachable: boolean }[];
   settlement?: { chain: Chain; asset: AssetRef };
   /** Set only when ownership changed in the last 30 days (a marketplace sale). */
@@ -60,6 +62,8 @@ export interface Resolution {
   handle: string;
   type: MaxIdType;
   displayName: string;
+  /** True when the resolved ID is an account's default receiving ID. */
+  isDefault: boolean;
   chain: Chain;
   asset: AssetRef;
   address: string;
@@ -94,6 +98,8 @@ export interface MaxId {
   displayName: string;
   description: string;
   avatarUrl: string;
+  /** True for the account's auto-created receiving ID: not sellable or renameable. */
+  isDefault: boolean;
   resolutionVersion: number;
   renameAvailableAt: ISODate;
   createdAt: ISODate;
@@ -106,6 +112,19 @@ export interface Account {
   type: "human" | "agent" | "organization";
   status: "active" | "suspended";
   createdAt: ISODate;
+}
+
+export interface MaxIdRef {
+  id: string;
+  handle: string;
+}
+
+/** `GET /v1/auth/me`: the account plus its default and primary MAX IDs. */
+export interface Me extends Account {
+  /** The auto-created receiving ID, or null before one exists. */
+  defaultMaxId: MaxIdRef | null;
+  /** The ID to show as "yours": a claimed ID if any, otherwise the default. */
+  primaryMaxId: MaxIdRef | null;
 }
 
 export interface Wallet {
@@ -386,7 +405,8 @@ export interface AgentDetail extends Agent {
   policy: AgentPolicy;
   credentials: AgentCredential[];
   wallets: Wallet[];
-  ids: { id: string; handle: string; type: MaxIdType; status: string }[];
+  /** The agent's MAX IDs; `isDefault` marks its default ID. */
+  ids: { id: string; handle: string; type: MaxIdType; status: string; isDefault: boolean }[];
 }
 
 // ---- Renames ----

@@ -3,6 +3,7 @@ package maxids
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -216,6 +217,8 @@ func TestCheckAvailability(t *testing.T) {
 		{"admin", false, "reserved", PolicyBlocked},
 		{"max.solana", false, "reserved", PolicyXOAuth},
 		{"x", false, "invalid", ""},
+		{"max.u7k3q9x2m4tab8zz", false, "invalid", ""},
+		{"quiet-river-4821", false, "invalid", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -225,6 +228,14 @@ func TestCheckAvailability(t *testing.T) {
 			}
 			if a.Available != tt.wantAvail || a.Reason != tt.wantReason || a.ClaimPolicy != tt.wantPolicy {
 				t.Errorf("got %+v", a)
+			}
+			if IsDefaultShape(strings.TrimPrefix(tt.name, "max.")) && a.Detail != "this name uses a reserved format" {
+				t.Errorf("detail = %q", a.Detail)
+			}
+			if bare := strings.TrimPrefix(tt.name, "max."); IsDefaultShape(bare) {
+				if a.CanonicalName != bare || a.Handle != Handle(bare) {
+					t.Errorf("canonical/handle = %q/%q, want %q/%q", a.CanonicalName, a.Handle, bare, Handle(bare))
+				}
 			}
 		})
 	}

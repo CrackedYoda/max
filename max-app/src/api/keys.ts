@@ -12,6 +12,7 @@ export const keys = {
   marketName: (name: string) => ['market', 'name', name] as const,
   mintDecimals: (chain: string, mint: string) => ['mint-decimals', chain, mint] as const,
   account: (accountId: string) => ['account', accountId] as const,
+  me: (accountId: string) => [...keys.account(accountId), 'me'] as const,
   ids: (accountId: string) => [...keys.account(accountId), 'ids'] as const,
   wallets: (accountId: string) => [...keys.account(accountId), 'wallets'] as const,
   transfers: (accountId: string, direction: 'sent' | 'received') => [...keys.account(accountId), 'transfers', direction] as const,

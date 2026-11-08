@@ -177,7 +177,7 @@ func (h *Handler) ClaimID(c *gin.Context) {
 		shared.Fail(c, err)
 		return
 	}
-	shared.Created(c, gin.H{"id": m.ID.String(), "name": m.CanonicalName, "handle": m.Handle(), "type": string(m.Type)})
+	shared.Created(c, gin.H{"id": m.ID.String(), "name": m.CanonicalName, "handle": m.Handle(), "type": string(m.Type), "isDefault": m.IsDefault})
 }
 
 func (h *Handler) WalletChallenge(c *gin.Context) {

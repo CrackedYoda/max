@@ -50,7 +50,8 @@ export default function MarketName() {
     );
   }
 
-  const owned = !!myIds.data?.some((i) => i.id === v.maxId || i.name === name);
+  const mine = myIds.data?.find((i) => i.id === v.maxId || i.name === name);
+  const owned = !!mine;
   const listing = v.listing;
   const active = listing?.status === 'active';
   // v1 settles in USDC on Solana (spec §2): offers use the listing's asset, else the last sale's, else the configured one.
@@ -110,16 +111,20 @@ export default function MarketName() {
         <Card>
           <View style={{ gap: 12 }}>
             <AppText size={15}>This name is yours.</AppText>
-            <Button
-              label={active ? 'Edit listing' : listing ? 'View in My market' : 'Sell it'}
-              variant="secondary"
-              size="md"
-              onPress={() => {
-                const id = myIds.data?.find((i) => i.id === v.maxId || i.name === name)?.id;
-                if (listing && !active) router.push('/market/offers');
-                else if (id) router.push({ pathname: '/sell', params: { id } });
-              }}
-            />
+            {mine?.isDefault ? (
+              // Default IDs are never listable, so there is nothing to sell.
+              <AppText variant="small">It’s your default ID, for receiving, and can’t be sold.</AppText>
+            ) : (
+              <Button
+                label={active ? 'Edit listing' : listing ? 'View in My market' : 'Sell it'}
+                variant="secondary"
+                size="md"
+                onPress={() => {
+                  if (listing && !active) router.push('/market/offers');
+                  else if (mine) router.push({ pathname: '/sell', params: { id: mine.id } });
+                }}
+              />
+            )}
           </View>
         </Card>
       ) : !listing && !canOffer ? (

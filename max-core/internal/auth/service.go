@@ -159,8 +159,16 @@ func (s *service) Logout(ctx context.Context, sessionID uuid.UUID) error {
 	return s.repo.RevokeSession(ctx, sessionID)
 }
 
-func (s *service) Me(ctx context.Context, accountID uuid.UUID) (Account, error) {
-	return s.repo.GetAccount(ctx, accountID)
+func (s *service) Me(ctx context.Context, accountID uuid.UUID) (MeResult, error) {
+	acct, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return MeResult{}, err
+	}
+	def, primary, err := s.repo.GetAccountIDs(ctx, accountID)
+	if err != nil {
+		return MeResult{}, err
+	}
+	return MeResult{Account: acct, DefaultMaxID: def, PrimaryMaxID: primary}, nil
 }
 
 // hashToken uses HMAC rather than a bare hash so a leaked sessions table

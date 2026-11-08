@@ -225,7 +225,7 @@ func toAgentDetailResponse(d AgentDetail) agentDetailResponse {
 		out.Wallets = append(out.Wallets, walletJSON(w))
 	}
 	for _, m := range d.IDs {
-		out.IDs = append(out.IDs, map[string]any{"id": m.ID.String(), "handle": m.Handle(), "type": string(m.Type), "status": m.Status})
+		out.IDs = append(out.IDs, map[string]any{"id": m.ID.String(), "handle": m.Handle(), "type": string(m.Type), "status": m.Status, "isDefault": m.IsDefault})
 	}
 	return out
 }

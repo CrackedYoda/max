@@ -27,6 +27,20 @@ type Challenge struct {
 	ExpiresAt time.Time
 }
 
+// IDRef is a MAX ID as shown on the account: its id and max.<name> handle.
+type IDRef struct {
+	ID     uuid.UUID
+	Handle string
+}
+
+// MeResult is the account plus its default and primary MAX IDs. Both refs are
+// nil only when the account has no IDs yet (before the backfill has run).
+type MeResult struct {
+	Account      Account
+	DefaultMaxID *IDRef
+	PrimaryMaxID *IDRef
+}
+
 type Account struct {
 	ID        uuid.UUID
 	Type      string

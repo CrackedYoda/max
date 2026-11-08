@@ -12,11 +12,54 @@ import (
 	"github.com/google/uuid"
 )
 
+const accountsWithoutDefault = `-- name: AccountsWithoutDefault :many
+SELECT a.id, a.type, a.created_at FROM accounts a
+WHERE NOT EXISTS (SELECT 1 FROM max_ids m WHERE m.owner_account_id = a.id AND m.is_default)
+  AND (a.created_at, a.id) > ($1::timestamptz, $2::uuid)
+ORDER BY a.created_at, a.id
+LIMIT $3
+FOR NO KEY UPDATE OF a SKIP LOCKED
+`
+
+type AccountsWithoutDefaultParams struct {
+	AfterCreatedAt time.Time
+	AfterID        uuid.UUID
+	Batch          int32
+}
+
+type AccountsWithoutDefaultRow struct {
+	ID        uuid.UUID
+	Type      string
+	CreatedAt time.Time
+}
+
+// Keyset page after (after_created_at, after_id). NO KEY UPDATE does not block
+// foreign-key inserts (sessions, wallets, payments) that reference the account.
+func (q *Queries) AccountsWithoutDefault(ctx context.Context, arg AccountsWithoutDefaultParams) ([]AccountsWithoutDefaultRow, error) {
+	rows, err := q.db.Query(ctx, accountsWithoutDefault, arg.AfterCreatedAt, arg.AfterID, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AccountsWithoutDefaultRow
+	for rows.Next() {
+		var i AccountsWithoutDefaultRow
+		if err := rows.Scan(&i.ID, &i.Type, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpResolutionVersion = `-- name: BumpResolutionVersion :one
 UPDATE max_ids
 SET resolution_version = resolution_version + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default
 `
 
 func (q *Queries) BumpResolutionVersion(ctx context.Context, id uuid.UUID) (MaxID, error) {
@@ -37,14 +80,16 @@ func (q *Queries) BumpResolutionVersion(ctx context.Context, id uuid.UUID) (MaxI
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
 
 const countMaxIDsByOwner = `-- name: CountMaxIDsByOwner :one
-SELECT count(*) FROM max_ids WHERE owner_account_id = $1
+SELECT count(*) FROM max_ids WHERE owner_account_id = $1 AND NOT is_default
 `
 
+// Default IDs do not count toward the per-account cap.
 func (q *Queries) CountMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countMaxIDsByOwner, ownerAccountID)
 	var count int64
@@ -52,10 +97,51 @@ func (q *Queries) CountMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UU
 	return count, err
 }
 
+const createDefaultMaxID = `-- name: CreateDefaultMaxID :one
+INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name, is_default, listable_at, rename_available_at)
+VALUES ($1, $2, $3, '', true, timestamptz '9999-12-31 00:00:00+00', timestamptz '9999-12-31 00:00:00+00')
+ON CONFLICT (canonical_name) DO NOTHING
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default
+`
+
+type CreateDefaultMaxIDParams struct {
+	CanonicalName  string
+	OwnerAccountID uuid.UUID
+	Type           string
+}
+
+// A taken name returns no row (the caller retries with a new name). A second
+// default for the account still raises the max_ids_one_default violation.
+// listable_at and rename_available_at are both pushed to 9999: defaults are
+// never listable or renameable, and the dates keep it so for a binary that
+// predates is_default (for example after a down migration or a rollback).
+func (q *Queries) CreateDefaultMaxID(ctx context.Context, arg CreateDefaultMaxIDParams) (MaxID, error) {
+	row := q.db.QueryRow(ctx, createDefaultMaxID, arg.CanonicalName, arg.OwnerAccountID, arg.Type)
+	var i MaxID
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalName,
+		&i.OwnerAccountID,
+		&i.Type,
+		&i.Status,
+		&i.DisplayName,
+		&i.Description,
+		&i.AvatarUrl,
+		&i.ResolutionVersion,
+		&i.RenameAvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
+		&i.IsDefault,
+	)
+	return i, err
+}
+
 const createMaxID = `-- name: CreateMaxID :one
 INSERT INTO max_ids (canonical_name, owner_account_id, type, display_name)
 VALUES ($1, $2, $3, $4)
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default
 `
 
 type CreateMaxIDParams struct {
@@ -88,6 +174,7 @@ func (q *Queries) CreateMaxID(ctx context.Context, arg CreateMaxIDParams) (MaxID
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
@@ -162,8 +249,60 @@ func (q *Queries) DeleteDestination(ctx context.Context, arg DeleteDestinationPa
 	return result.RowsAffected(), nil
 }
 
+const fillDefaultDestination = `-- name: FillDefaultDestination :one
+INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
+SELECT m.id, $1, $2
+FROM max_ids m
+WHERE m.owner_account_id = $3 AND m.is_default AND m.status = 'active'
+ON CONFLICT (max_id, chain_namespace) DO NOTHING
+RETURNING max_id
+`
+
+type FillDefaultDestinationParams struct {
+	ChainNamespace string
+	WalletID       uuid.UUID
+	Owner          uuid.UUID
+}
+
+// Gives the owner's active default a destination for the namespace only when it
+// has none; an existing destination is never overwritten. No row means nothing
+// was inserted.
+func (q *Queries) FillDefaultDestination(ctx context.Context, arg FillDefaultDestinationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, fillDefaultDestination, arg.ChainNamespace, arg.WalletID, arg.Owner)
+	var max_id uuid.UUID
+	err := row.Scan(&max_id)
+	return max_id, err
+}
+
+const getDefaultMaxID = `-- name: GetDefaultMaxID :one
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE owner_account_id = $1 AND is_default
+`
+
+func (q *Queries) GetDefaultMaxID(ctx context.Context, ownerAccountID uuid.UUID) (MaxID, error) {
+	row := q.db.QueryRow(ctx, getDefaultMaxID, ownerAccountID)
+	var i MaxID
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalName,
+		&i.OwnerAccountID,
+		&i.Type,
+		&i.Status,
+		&i.DisplayName,
+		&i.Description,
+		&i.AvatarUrl,
+		&i.ResolutionVersion,
+		&i.RenameAvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerChangedAt,
+		&i.ListableAt,
+		&i.IsDefault,
+	)
+	return i, err
+}
+
 const getMaxIDForOwner = `-- name: GetMaxIDForOwner :one
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 AND owner_account_id = $2
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE id = $1 AND owner_account_id = $2
 `
 
 type GetMaxIDForOwnerParams struct {
@@ -189,6 +328,7 @@ func (q *Queries) GetMaxIDForOwner(ctx context.Context, arg GetMaxIDForOwnerPara
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
@@ -237,6 +377,40 @@ func (q *Queries) GetReservedName(ctx context.Context, canonicalName string) (Re
 	return i, err
 }
 
+const listAccountIDRefs = `-- name: ListAccountIDRefs :many
+SELECT id, canonical_name, is_default FROM max_ids
+WHERE owner_account_id = $1 AND (is_default OR status = 'active')
+ORDER BY is_default, created_at, id
+`
+
+type ListAccountIDRefsRow struct {
+	ID            uuid.UUID
+	CanonicalName string
+	IsDefault     bool
+}
+
+// The default plus every active claimed ID, claimed (oldest first) before the default.
+// Callers derive the default and primary IDs from this in one round trip.
+func (q *Queries) ListAccountIDRefs(ctx context.Context, ownerAccountID uuid.UUID) ([]ListAccountIDRefsRow, error) {
+	rows, err := q.db.Query(ctx, listAccountIDRefs, ownerAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAccountIDRefsRow
+	for rows.Next() {
+		var i ListAccountIDRefsRow
+		if err := rows.Scan(&i.ID, &i.CanonicalName, &i.IsDefault); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDestinations = `-- name: ListDestinations :many
 SELECT d.chain_namespace, d.wallet_id, d.updated_at, w.address
 FROM max_id_destinations d
@@ -278,9 +452,10 @@ func (q *Queries) ListDestinations(ctx context.Context, maxID uuid.UUID) ([]List
 }
 
 const listMaxIDsByOwner = `-- name: ListMaxIDsByOwner :many
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE owner_account_id = $1 ORDER BY created_at
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE owner_account_id = $1 ORDER BY is_default, created_at, id
 `
 
+// Claimed IDs first (oldest first), the default last: clients that take the first entry get a claimed name.
 func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUID) ([]MaxID, error) {
 	rows, err := q.db.Query(ctx, listMaxIDsByOwner, ownerAccountID)
 	if err != nil {
@@ -305,6 +480,7 @@ func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUI
 			&i.UpdatedAt,
 			&i.OwnerChangedAt,
 			&i.ListableAt,
+			&i.IsDefault,
 		); err != nil {
 			return nil, err
 		}
@@ -317,7 +493,7 @@ func (q *Queries) ListMaxIDsByOwner(ctx context.Context, ownerAccountID uuid.UUI
 }
 
 const lockMaxIDByID = `-- name: LockMaxIDByID :one
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 FOR UPDATE
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockMaxIDByID(ctx context.Context, id uuid.UUID) (MaxID, error) {
@@ -338,12 +514,13 @@ func (q *Queries) LockMaxIDByID(ctx context.Context, id uuid.UUID) (MaxID, error
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
 
 const lockMaxIDForOwner = `-- name: LockMaxIDForOwner :one
-SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at FROM max_ids WHERE id = $1 AND owner_account_id = $2 FOR UPDATE
+SELECT id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default FROM max_ids WHERE id = $1 AND owner_account_id = $2 FOR UPDATE
 `
 
 type LockMaxIDForOwnerParams struct {
@@ -369,6 +546,7 @@ func (q *Queries) LockMaxIDForOwner(ctx context.Context, arg LockMaxIDForOwnerPa
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
@@ -411,7 +589,7 @@ SET owner_account_id = $1,
     rename_available_at = greatest(rename_available_at, now() + make_interval(secs => $2::int)),
     updated_at = now()
 WHERE m.id = $3 AND m.owner_account_id = $4
-RETURNING m.id, m.canonical_name, m.owner_account_id, m.type, m.status, m.display_name, m.description, m.avatar_url, m.resolution_version, m.rename_available_at, m.created_at, m.updated_at, m.owner_changed_at, m.listable_at
+RETURNING m.id, m.canonical_name, m.owner_account_id, m.type, m.status, m.display_name, m.description, m.avatar_url, m.resolution_version, m.rename_available_at, m.created_at, m.updated_at, m.owner_changed_at, m.listable_at, m.is_default
 `
 
 type TransferMaxIDOwnerParams struct {
@@ -446,6 +624,7 @@ func (q *Queries) TransferMaxIDOwner(ctx context.Context, arg TransferMaxIDOwner
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }
@@ -454,7 +633,7 @@ const updateMaxIDProfile = `-- name: UpdateMaxIDProfile :one
 UPDATE max_ids
 SET display_name = $2, description = $3, avatar_url = $4, updated_at = now()
 WHERE id = $1
-RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at
+RETURNING id, canonical_name, owner_account_id, type, status, display_name, description, avatar_url, resolution_version, rename_available_at, created_at, updated_at, owner_changed_at, listable_at, is_default
 `
 
 type UpdateMaxIDProfileParams struct {
@@ -487,6 +666,7 @@ func (q *Queries) UpdateMaxIDProfile(ctx context.Context, arg UpdateMaxIDProfile
 		&i.UpdatedAt,
 		&i.OwnerChangedAt,
 		&i.ListableAt,
+		&i.IsDefault,
 	)
 	return i, err
 }

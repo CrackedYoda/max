@@ -4,6 +4,8 @@ import "time"
 
 // Reason codes returned by Listable.
 const (
+	// ReasonDefaultID: default IDs are never listable, offerable or buyable.
+	ReasonDefaultID      = "default_id"
 	ReasonNotActive      = "not_active"
 	ReasonOwnerSuspended = "owner_suspended"
 	ReasonReservedClaim  = "reserved_claim"
@@ -22,7 +24,7 @@ const (
 // seller's wallet changes from anyone but the owner.
 func PublicReason(reason string) string {
 	switch reason {
-	case ReasonMarketBanned, ReasonOwnerSuspended, ReasonPayoutWalletRemoved:
+	case ReasonDefaultID, ReasonMarketBanned, ReasonOwnerSuspended, ReasonPayoutWalletRemoved:
 		return ReasonUnavailable
 	}
 	return reason
@@ -36,12 +38,15 @@ type NameFacts struct {
 	ListableAt           time.Time
 	RenameAvailableAt    time.Time
 	OwnerBanned          bool
+	IsDefault            bool
 }
 
 // Listable reports whether a name may be listed or sold at now (spec §3). On
 // failure it returns the first failing reason in a fixed order.
 func Listable(f NameFacts, now time.Time) (ok bool, reason string) {
 	switch {
+	case f.IsDefault:
+		return false, ReasonDefaultID
 	case f.Status != "active":
 		return false, ReasonNotActive
 	case f.OwnerStatus != "active":

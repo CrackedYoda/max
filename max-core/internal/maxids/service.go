@@ -14,6 +14,13 @@ import (
 
 const MaxIDsPerAccount = 10
 
+// reservedFormatDetail explains why a default-shaped name is refused.
+const reservedFormatDetail = "this name uses a reserved format"
+
+// There is no delete-ID endpoint. If one is ever added here, it must refuse
+// default IDs (is_default): every account keeps exactly one default, which is
+// never deleted (spec 2026-11-07-default-max-ids-design.md, "Rules enforced").
+
 type service struct {
 	repo Repository
 	gate BalanceGate
@@ -31,6 +38,10 @@ func (s *service) CheckAvailability(ctx context.Context, name string) (Availabil
 	canonical, err := Normalize(name)
 	if err != nil {
 		return Availability{Available: false, Reason: "invalid", Detail: err.Error()}, nil
+	}
+	// Default shapes can never be claimed, so report them the way Claim refuses them.
+	if IsDefaultShape(canonical) {
+		return Availability{CanonicalName: canonical, Handle: Handle(canonical), Available: false, Reason: "invalid", Detail: reservedFormatDetail}, nil
 	}
 	out := Availability{CanonicalName: canonical, Handle: Handle(canonical)}
 
@@ -68,6 +79,10 @@ func (s *service) Claim(ctx context.Context, caller uuid.UUID, in ClaimInput) (M
 	canonical, err := Normalize(in.Name)
 	if err != nil {
 		return MaxID{}, ErrInvalidName.WithMessage(err.Error())
+	}
+	// Default shapes belong to the system; nobody can claim one.
+	if IsDefaultShape(canonical) {
+		return MaxID{}, ErrInvalidName.WithMessage(reservedFormatDetail)
 	}
 
 	reserved, err := s.repo.GetReserved(ctx, canonical)

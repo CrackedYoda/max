@@ -60,6 +60,12 @@ export function useMyIds() {
   return useQuery({ queryKey: keys.ids(accountId), queryFn: () => max().ids.list(), enabled: signedIn() });
 }
 
+/** The signed-in account with its default and primary MAX IDs. */
+export function useMe() {
+  const accountId = useAccountId();
+  return useQuery({ queryKey: keys.me(accountId), queryFn: () => max().auth.me(), enabled: signedIn() });
+}
+
 export function useWallets() {
   const accountId = useAccountId();
   return useQuery({ queryKey: keys.wallets(accountId), queryFn: () => max().wallets.list(), enabled: signedIn() });

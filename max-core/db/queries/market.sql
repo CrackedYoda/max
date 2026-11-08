@@ -178,7 +178,7 @@ SELECT * FROM market_sale_events WHERE sale_id = $1 ORDER BY created_at;
 -- name: GetMarketNameFacts :one
 -- Everything market.Listable needs about one MAX ID, read in the caller's
 -- transaction (after LockMaxIDByID when used for a write).
-SELECT m.id, m.canonical_name, m.owner_account_id, m.status, a.status AS owner_status,
+SELECT m.id, m.canonical_name, m.owner_account_id, m.status, a.status AS owner_status, m.is_default,
        m.listable_at, m.rename_available_at,
        EXISTS (SELECT 1 FROM reserved_name_claims c
                WHERE c.max_id = m.id AND c.status IN ('pending_review', 'active', 'lapsed'))::boolean AS has_live_reserved_claim,

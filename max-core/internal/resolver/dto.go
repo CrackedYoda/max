@@ -17,6 +17,7 @@ type resolveResponse struct {
 	Handle            string        `json:"handle"`
 	Type              string        `json:"type"`
 	DisplayName       string        `json:"displayName"`
+	IsDefault         bool          `json:"isDefault"`
 	Chain             chains.Chain  `json:"chain"`
 	Asset             assetResponse `json:"asset"`
 	Address           string        `json:"address"`
@@ -42,6 +43,7 @@ type profileResponse struct {
 	Handle         string          `json:"handle"`
 	Type           string          `json:"type"`
 	DisplayName    string          `json:"displayName"`
+	IsDefault      bool            `json:"isDefault"`
 	Description    string          `json:"description"`
 	AvatarURL      string          `json:"avatarUrl"`
 	Chains         []reachResponse `json:"chains"`
@@ -56,7 +58,7 @@ func toResolveResponse(r Resolution) resolveResponse {
 		notes = []string{}
 	}
 	return resolveResponse{
-		MaxID: r.MaxID.String(), Handle: r.Handle, Type: r.Type, DisplayName: r.DisplayName,
+		MaxID: r.MaxID.String(), Handle: r.Handle, Type: r.Type, DisplayName: r.DisplayName, IsDefault: r.IsDefault,
 		Chain: r.Chain, Asset: assetResponse{Kind: string(r.Asset.Kind), Address: r.Asset.Address},
 		Address: r.Address, ResolutionVersion: r.ResolutionVersion, ResolvedAt: r.ResolvedAt, OwnerChangedAt: rfc3339(r.OwnerChangedAt), Notes: notes,
 	}
@@ -74,7 +76,7 @@ func toProfileResponse(p Profile, reach []ChainReach) profileResponse {
 	return profileResponse{
 		Settlement: st,
 		MaxID:      p.MaxID.String(), Name: p.CanonicalName, Handle: maxids.Handle(p.CanonicalName),
-		Type: p.Type, DisplayName: p.DisplayName, Description: p.Description,
+		Type: p.Type, DisplayName: p.DisplayName, IsDefault: p.IsDefault, Description: p.Description,
 		AvatarURL: p.AvatarURL, Chains: rr, OwnerChangedAt: rfc3339(p.OwnerChangedAt),
 	}
 }

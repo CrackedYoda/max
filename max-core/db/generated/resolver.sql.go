@@ -13,7 +13,7 @@ import (
 )
 
 const getPublicMaxID = `-- name: GetPublicMaxID :one
-SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version, owner_changed_at
+SELECT id, canonical_name, type, display_name, description, avatar_url, resolution_version, owner_changed_at, is_default
 FROM max_ids
 WHERE canonical_name = $1 AND status = 'active'
 `
@@ -27,6 +27,7 @@ type GetPublicMaxIDRow struct {
 	AvatarUrl         string
 	ResolutionVersion int64
 	OwnerChangedAt    *time.Time
+	IsDefault         bool
 }
 
 func (q *Queries) GetPublicMaxID(ctx context.Context, canonicalName string) (GetPublicMaxIDRow, error) {
@@ -41,6 +42,7 @@ func (q *Queries) GetPublicMaxID(ctx context.Context, canonicalName string) (Get
 		&i.AvatarUrl,
 		&i.ResolutionVersion,
 		&i.OwnerChangedAt,
+		&i.IsDefault,
 	)
 	return i, err
 }

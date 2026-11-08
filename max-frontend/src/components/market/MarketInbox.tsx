@@ -46,9 +46,9 @@ export function MarketInbox({ ids, wallets, adminLink }: { ids: MaxId[]; wallets
       {inbox.isLoading ? <Skeleton className="h-40 w-full rounded-2xl" /> : data ? (
         <div className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr))]">
           <Panel title="My listings">
-            {ids.length ? ids.map((id) => (
+            {ids.some((i) => !i.isDefault) ? ids.filter((i) => !i.isDefault).map((id) => (
               <ListingRow key={id.id} id={id} listing={data.listings.find((l) => l.maxId === id.id && OPEN_LISTING.includes(l.status))} />
-            )) : <Empty>Claim a MAX ID first; then you can sell it here.</Empty>}
+            )) : <Empty>Claim a MAX ID to sell it here. Your default ID is for receiving only.</Empty>}
           </Panel>
 
           <Panel title="Offers received">

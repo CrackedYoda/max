@@ -54,14 +54,17 @@ function Dashboard() {
               <IdCardSkeleton />
               <IdCardSkeleton />
             </>
-          ) : ids.data?.length ? (
-            ids.data.map((id) => <IdCard key={id.id} id={id} wallets={wallets.data ?? []} />)
           ) : (
-            <Card className="flex flex-col items-start gap-3 p-6">
-              <h2 className="m-0 text-lg font-semibold">No MAX ID yet</h2>
-              <p className="m-0 text-[15px] text-muted">Claim a handle so people can pay you by name.</p>
-              <ButtonLink href="/claim" size="sm">Claim your MAX ID</ButtonLink>
-            </Card>
+            <>
+              {ids.data?.map((id) => <IdCard key={id.id} id={id} wallets={wallets.data ?? []} />)}
+              {ids.data && !ids.data.some((i) => !i.isDefault) ? (
+                <Card className="flex flex-col items-start gap-3 p-6">
+                  <h2 className="m-0 text-lg font-semibold">No claimed MAX ID yet</h2>
+                  <p className="m-0 text-[15px] text-muted">Claim a handle so people can pay you by name.</p>
+                  <ButtonLink href="/claim" size="sm">Claim your MAX ID</ButtonLink>
+                </Card>
+              ) : null}
+            </>
           )}
         </div>
       </section>

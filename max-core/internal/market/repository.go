@@ -51,7 +51,7 @@ func nameFacts(ctx context.Context, q *generated.Queries, maxID uuid.UUID) (Name
 	return NameFacts{
 		Status: row.Status, OwnerStatus: row.OwnerStatus, HasLiveReservedClaim: row.HasLiveReservedClaim,
 		RenamePending: row.RenamePending, ListableAt: row.ListableAt, RenameAvailableAt: row.RenameAvailableAt,
-		OwnerBanned: row.OwnerBanned,
+		OwnerBanned: row.OwnerBanned, IsDefault: row.IsDefault,
 	}, row, nil
 }
 

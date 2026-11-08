@@ -15,6 +15,9 @@ type Repository interface {
 	LoginWithWallet(ctx context.Context, proof WalletProof) (Account, Wallet, bool, error)
 	LinkWallet(ctx context.Context, accountID uuid.UUID, proof WalletProof) (Wallet, error)
 	GetAccount(ctx context.Context, id uuid.UUID) (Account, error)
+	// GetAccountIDs returns the account's default ID and its primary ID: the
+	// oldest active non-default ID, else the default. Nil when it has no IDs.
+	GetAccountIDs(ctx context.Context, id uuid.UUID) (def, primary *IDRef, err error)
 	CreateSession(ctx context.Context, accountID uuid.UUID, tokenHash []byte, ip, userAgent string, expiresAt time.Time) (Session, error)
 	GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, string, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) error
@@ -25,5 +28,5 @@ type Service interface {
 	Verify(ctx context.Context, in VerifyInput) (VerifyResult, error)
 	Authenticate(ctx context.Context, token string) (Session, error)
 	Logout(ctx context.Context, sessionID uuid.UUID) error
-	Me(ctx context.Context, accountID uuid.UUID) (Account, error)
+	Me(ctx context.Context, accountID uuid.UUID) (MeResult, error)
 }

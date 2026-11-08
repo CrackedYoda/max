@@ -89,6 +89,10 @@ func (f *fakeRepo) GetAccount(_ context.Context, id uuid.UUID) (Account, error) 
 	return a, nil
 }
 
+func (f *fakeRepo) GetAccountIDs(context.Context, uuid.UUID) (*IDRef, *IDRef, error) {
+	return nil, nil, nil
+}
+
 func (f *fakeRepo) CreateSession(_ context.Context, accountID uuid.UUID, hash []byte, _, _ string, exp time.Time) (Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

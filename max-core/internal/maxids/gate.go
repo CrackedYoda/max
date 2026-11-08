@@ -15,6 +15,7 @@ import (
 
 // WalletRef is a linked wallet the gate reads balances for.
 type WalletRef struct {
+	ID        uuid.UUID
 	Namespace chains.Namespace
 	Address   string
 }

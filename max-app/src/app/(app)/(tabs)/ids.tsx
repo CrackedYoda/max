@@ -86,10 +86,10 @@ export default function Ids() {
       {ids.error ? <Banner tone="danger">{errorMessage(ids.error)}</Banner> : null}
       {maxStatus === 'ready' && ids.isLoading ? <Loading label="Loading your IDs" /> : null}
       {ids.data?.map((id) => <IdCard key={id.id} id={id} />)}
-      {maxStatus === 'ready' && ids.data && !ids.data.length ? (
+      {maxStatus === 'ready' && ids.data && !ids.data.some((i) => !i.isDefault) ? (
         <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 10 }}>
           <AppText weight="semibold" size={16}>
-            No MAX ID yet
+            No claimed MAX ID yet
           </AppText>
           <AppText variant="small">Claim a handle so people can pay you by name.</AppText>
           <Button label="Claim your MAX ID" size="md" onPress={() => router.push('/claim')} />
@@ -154,11 +154,16 @@ function IdCard({ id }: { id: MaxId }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Handle name={id.handle} size={20} />
           <Pill small tone={id.type === 'agent' ? 'clay' : 'neutral'} label={id.type === 'agent' ? 'Agent' : 'Human'} />
+          {id.isDefault ? <Pill small tone="clay" label="Default ID" /> : null}
         </View>
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
           <Button label="Edit" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/edit-id', params: { id: id.id } })} />
-          <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
-          <Button label="Sell" variant="soft" size="sm" onPress={() => router.push({ pathname: '/sell', params: { id: id.id } })} />
+          {id.isDefault ? null : (
+            <>
+              <Button label="Rename" variant="secondary" size="sm" onPress={() => router.push({ pathname: '/rename', params: { id: id.id } })} />
+              <Button label="Sell" variant="soft" size="sm" onPress={() => router.push({ pathname: '/sell', params: { id: id.id } })} />
+            </>
+          )}
         </View>
       </View>
       <View style={{ borderTopWidth: 1, borderTopColor: colors.sunken }}>

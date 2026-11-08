@@ -26,11 +26,13 @@ const (
 )
 
 type MaxID struct {
-	ID                uuid.UUID
-	CanonicalName     string
-	OwnerAccountID    uuid.UUID
-	Type              Type
-	Status            string
+	ID             uuid.UUID
+	CanonicalName  string
+	OwnerAccountID uuid.UUID
+	Type           Type
+	Status         string
+	// IsDefault marks the account's auto-created receiving ID.
+	IsDefault         bool
 	DisplayName       string
 	Description       string
 	AvatarURL         string

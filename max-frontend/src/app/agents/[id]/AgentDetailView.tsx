@@ -207,6 +207,8 @@ function IdsSection({ agent }: { agent: AgentDetail }) {
   });
   const settled = q === debounced;
   const ok = settled && !!name && !!avail.data?.available;
+  // The default ID every agent gets doesn't count as a claimed handle.
+  const hasClaimed = agent.ids.some((i) => !i.isDefault);
   const msg = !q.trim() ? "3–32 lowercase letters, numbers or hyphens." : !settled || (name && !avail.data) ? "Checking…" : !name ? "Use 3–32 lowercase letters, numbers or hyphens." : avail.data?.available ? `${avail.data.handle} is available.` : `${avail.data?.handle} isn’t available.`;
 
   return (
@@ -218,13 +220,14 @@ function IdsSection({ agent }: { agent: AgentDetail }) {
             <li key={i.id} className="flex items-center gap-2.5 rounded-xl border border-line bg-surface px-4 py-3">
               <Handle name={i.handle} className="text-lg" />
               <Pill tone="clay">Agent</Pill>
+              {i.isDefault ? <Pill>Default ID</Pill> : null}
               <Link href={`/${i.handle}`} className="text-sm">Profile</Link>
             </li>
           ))}
         </ul>
       ) : null}
       <Card as="form" className="flex max-w-[640px] flex-col gap-3 p-6">
-        <label htmlFor="agent-handle" className="text-sm font-semibold">{agent.ids.length ? "Claim another handle" : "Claim a handle for this agent"}</label>
+        <label htmlFor="agent-handle" className="text-sm font-semibold">{hasClaimed ? "Claim another handle" : "Claim a handle for this agent"}</label>
         <HandleInput id="agent-handle" scale="md" value={q} onChange={(e) => setQ(stripPrefix(e.target.value))} placeholder="research-bot" tone={!settled || !q ? "neutral" : ok ? "ok" : "bad"} />
         <p aria-live="polite" className={`m-0 text-sm ${!q || !settled ? "text-muted" : ok ? "text-success" : "text-danger"}`}>{msg}</p>
         {claim.error ? <Banner tone="danger">{errorMessage(claim.error)}</Banner> : null}

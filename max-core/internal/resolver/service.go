@@ -77,7 +77,7 @@ func (s *service) Resolve(ctx context.Context, name, chainKey, assetParam string
 
 	res := Resolution{
 		MaxID: p.MaxID, Handle: maxids.Handle(p.CanonicalName), Type: p.Type,
-		DisplayName: p.DisplayName, Chain: chain, Asset: asset,
+		DisplayName: p.DisplayName, IsDefault: p.IsDefault, Chain: chain, Asset: asset,
 		Address:           chains.DisplayAddress(chain.Namespace, addr),
 		ResolutionVersion: p.ResolutionVersion, ResolvedAt: s.now().UTC(),
 		OwnerChangedAt: recentOwnerChange(p.OwnerChangedAt, s.now()),

@@ -159,6 +159,10 @@ If you build your own signer, call `verifyAuthorization(signed, await client.age
 
 Administrators handle held proposals with `max.agents.transfers(agentId, { decision: "pending_approval" })`, `approve(paymentId)` and `deny(paymentId, reason)`. Keys are managed with `rotateKey` and `revokeKey`, and `pause` / `resume` turn the agent off and on.
 
+## Default IDs
+
+Every account gets a default MAX ID (a random 16-character name) for receiving. Each ID carries `isDefault`; `max.auth.me()` returns `defaultMaxId` and `primaryMaxId` (`{ id, handle } | null`; the primary is a claimed ID if there is one, otherwise the default). Default IDs cannot be sold, listed or renamed: renaming throws `DEFAULT_ID_LOCKED`, and the market refuses them with `NOT_LISTABLE`. Claiming a default-shaped name fails with `INVALID_MAX_ID`. `max.ids.list()` returns claimed IDs first and the default last.
+
 ## Also covered
 
 - **Renames:** `max.renames.eligibility(id)`, `request(id, {...})`, `waitFor(id, requestId)`. Paid, with a 72h cooldown.

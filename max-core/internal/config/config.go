@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/maxids"
 )
 
 type Config struct {
@@ -28,6 +29,8 @@ type Config struct {
 	Market       MarketConfig
 	Registration RegistrationConfig
 	Pricing      PricingConfig
+	// DefaultIDStyle picks the generator for new default MAX IDs.
+	DefaultIDStyle string
 	// AdminAccountIDs may review reserved-name claims and revoke verifications.
 	AdminAccountIDs []uuid.UUID
 }
@@ -243,6 +246,10 @@ func Load() (Config, error) {
 		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must be a finite number"))
 	} else if m < 0 {
 		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must not be negative"))
+	}
+	cfg.DefaultIDStyle = get("DEFAULT_ID_STYLE", maxids.DefaultStyleRandom)
+	if _, err := maxids.NewDefaultNamer(cfg.DefaultIDStyle); err != nil {
+		errs = append(errs, fmt.Errorf("DEFAULT_ID_STYLE: %w", err))
 	}
 	cfg.Pricing = PricingConfig{
 		URL:    get("PRICE_FEED_URL", "https://api.coingecko.com/api/v3/simple/price"),

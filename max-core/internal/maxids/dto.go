@@ -58,6 +58,7 @@ type maxIDResponse struct {
 	Handle            string                `json:"handle"`
 	Type              string                `json:"type"`
 	Status            string                `json:"status"`
+	IsDefault         bool                  `json:"isDefault"`
 	DisplayName       string                `json:"displayName"`
 	Description       string                `json:"description"`
 	AvatarURL         string                `json:"avatarUrl"`
@@ -95,7 +96,7 @@ func toMaxIDResponse(m MaxID) maxIDResponse {
 	return maxIDResponse{
 		Settlement: settlement,
 		ID:         m.ID.String(), Name: m.CanonicalName, Handle: m.Handle(), Type: string(m.Type),
-		Status: m.Status, DisplayName: m.DisplayName, Description: m.Description,
+		Status: m.Status, IsDefault: m.IsDefault, DisplayName: m.DisplayName, Description: m.Description,
 		AvatarURL: m.AvatarURL, ResolutionVersion: m.ResolutionVersion,
 		RenameAvailableAt: m.RenameAvailableAt, CreatedAt: m.CreatedAt, Destinations: dests,
 	}

@@ -15,6 +15,7 @@ type Profile struct {
 	DisplayName       string
 	Description       string
 	AvatarURL         string
+	IsDefault         bool
 	ResolutionVersion int64
 	// OwnerChangedAt is the raw timestamp; the service drops it once stale.
 	OwnerChangedAt *time.Time
@@ -48,6 +49,7 @@ type Resolution struct {
 	Handle            string
 	Type              string
 	DisplayName       string
+	IsDefault         bool
 	Chain             chains.Chain
 	Asset             Asset
 	Address           string

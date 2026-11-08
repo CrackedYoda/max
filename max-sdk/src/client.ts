@@ -4,7 +4,7 @@ import { MarketApi } from "./market.js";
 import type { AdminListing, AdminMarketFilter, AdminOffer, AdminSale, AgentActionResult, AgentMarketAuthorization, MarketRestriction, RestrictionKind } from "./market-types.js";
 import {
   TERMINAL_STATUSES,
-  type Account,
+  type Me,
   type Agent,
   type AgentCredential,
   type AgentDetail,
@@ -144,7 +144,7 @@ class AuthApi {
     return this.verify({ nonce: ch.nonce, signature, ...(tokenDelivery ? { tokenDelivery } : {}) });
   }
 
-  me(): Promise<Account> {
+  me(): Promise<Me> {
     return this.http.get("/v1/auth/me");
   }
 

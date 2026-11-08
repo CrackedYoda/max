@@ -77,7 +77,7 @@ export function ConnectFlow() {
       }
       useSession.getState().setAuthenticated(res.account);
       const ids = await max().ids.list().catch(() => []);
-      router.push(next ?? (ids.length === 0 ? "/claim" : "/dashboard"));
+      router.push(next ?? (ids.some((i) => !i.isDefault) ? "/dashboard" : "/claim"));
     } catch (err) {
       setError(errorMessage(err));
       // A used or expired nonce can't be retried; fetch a fresh message to sign.

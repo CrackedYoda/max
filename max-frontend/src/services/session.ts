@@ -31,7 +31,6 @@ export async function logout(qc: QueryClient): Promise<void> {
     // Offline: the cookie still expires server-side.
   }
   if (accountId) qc.removeQueries({ queryKey: ["account", accountId] });
-  qc.removeQueries({ queryKey: ["me"] });
   useSendDraft.getState().reset();
   useWallet.getState().set(null);
   useSession.getState().setAnonymous();
