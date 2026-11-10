@@ -153,8 +153,11 @@ export default function MarketName() {
               ) : null}
               {active ? (
                 <AppText variant="small">
-                  Buy now reserves the name for you for 15 minutes and shows the full quote, including the network fee, before anything is signed. You pay from{' '}
-                  <Mono size={13}>{from ? shortAddress(from) : '—'}</Mono>.
+                  Buy now reserves the name for you for 15 minutes and shows the full quote, including the network fee, before anything is signed. {from ? (
+                    <>
+                      You pay from <Mono size={13}>{shortAddress(from)}</Mono>.
+                    </>
+                  ) : null}
                 </AppText>
               ) : null}
             </View>

@@ -6,8 +6,10 @@ export function shortAddress(addr: string, head = 4, tail = 4): string {
   return `${addr.slice(0, prefix + head)}…${addr.slice(-tail)}`;
 }
 
+const NAMESPACE_LABELS: Record<string, string> = { evm: "EVM", solana: "Solana", bitcoin: "Bitcoin", litecoin: "Litecoin", tron: "Tron" };
+
 export function namespaceLabel(ns: string): string {
-  return ns === "evm" ? "EVM" : ns === "solana" ? "Solana" : ns;
+  return NAMESPACE_LABELS[ns] ?? ns;
 }
 
 export function formatDate(iso: string | undefined): string {

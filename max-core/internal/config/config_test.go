@@ -149,3 +149,19 @@ func TestLoad_DefaultIDStyle(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_IgnoresRPCForReceiveOnlyChains(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("RPC_URL_BITCOIN", "https://btc.example")
+	t.Setenv("RPC_URL_BASE", "https://base.example")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Payments.RPCURLs["bitcoin"]; ok {
+		t.Error("bitcoin RPC URL must be ignored: MAX never sends there")
+	}
+	if cfg.Payments.RPCURLs["base"] != "https://base.example" {
+		t.Error("base RPC URL lost")
+	}
+}

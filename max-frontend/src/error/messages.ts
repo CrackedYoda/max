@@ -7,10 +7,12 @@ import { isMaxApiError, MaxNetworkError } from "@max/sdk";
 const COPY: Record<string, string> = {
   MAX_ID_TAKEN: "Someone already claimed that name. Try another.",
   MAX_ID_RESERVED: "That name is reserved and can’t be claimed.",
-  MAX_ID_VERIFICATION_REQUIRED: "Reserved — it can only be claimed by verifying the matching X account.",
+  MAX_ID_VERIFICATION_REQUIRED: "This name is reserved. Verify the matching X account to claim it.",
   MAX_ID_LIMIT_REACHED: "You’ve reached the limit of MAX IDs for this account.",
   MAX_ID_QUARANTINED: "That name was released recently and is temporarily unavailable.",
   INVALID_MAX_ID: "Use 3–32 lowercase letters, numbers or hyphens.",
+  INVALID_ADDRESS: "That address isn’t valid for this network. Check it and try again.",
+  CONFIRMATION_REQUIRED: "Confirm you control this address.",
   WALLET_ALREADY_LINKED: "That wallet is already linked to a MAX account.",
   LAST_WALLET: "You can’t remove your only wallet. Link another one first so you can still sign in.",
   CHALLENGE_INVALID: "That sign-in request expired. Try again.",
@@ -47,7 +49,7 @@ const COPY: Record<string, string> = {
   OAUTH_STATE_INVALID: "That X sign-in expired. Start again.",
   OAUTH_SESSION_MISMATCH: "Finish X verification in the same browser you started it in.",
   X_PROVIDER_ERROR: "X didn’t respond. Try again in a moment.",
-  NAME_NOT_RESERVED: "That name isn’t reserved — claim it normally.",
+  NAME_NOT_RESERVED: "That name isn’t reserved. Claim it normally.",
   RESERVED_CLAIM_EXISTS: "You’ve already claimed that name.",
   // Marketplace (spec §9).
   MARKET_DISABLED: "The marketplace isn’t open yet.",

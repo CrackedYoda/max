@@ -67,8 +67,12 @@ function Review() {
     try {
       const draft = useSendDraft.getState();
       // Fresh resolution every time: the sender signs for the wallet they see now.
-      const r = await max().resolve(t.handle, { chain: t.chain, asset: t.asset === 'native' ? undefined : t.asset });
-      const fingerprint = JSON.stringify([r.maxId, r.resolutionVersion, t.chain, t.asset, t.amount, t.senderAddress]);
+      // A converted payment resolves on the chain the recipient receives on.
+      const r = t.receiveChain
+        ? await max().resolve(t.handle, { chain: t.receiveChain })
+        : await max().resolve(t.handle, { chain: t.chain, asset: t.asset === 'native' ? undefined : t.asset });
+      const route = t.receiveChain ? { destinationChain: t.receiveChain, destinationAsset: 'native' } : {};
+      const fingerprint = JSON.stringify([r.maxId, r.resolutionVersion, t.chain, t.asset, t.amount, t.senderAddress, t.receiveChain ?? '']);
       let p = await max().transfers.prepare({
         recipient: t.handle,
         chain: t.chain,
@@ -77,6 +81,7 @@ function Review() {
         senderAddress: t.senderAddress,
         resolutionVersion: r.resolutionVersion,
         idempotencyKey: draft.keyFor(fingerprint),
+        ...route,
       });
       if (p.status === 'EXPIRED' && !useSendDraft.getState().signed) {
         // Same terms, but the old intent lapsed: start a new one.
@@ -89,6 +94,7 @@ function Review() {
           senderAddress: t.senderAddress,
           resolutionVersion: r.resolutionVersion,
           idempotencyKey: useSendDraft.getState().keyFor(fingerprint),
+          ...route,
         });
       }
       if (gen !== getGeneration()) return;
@@ -251,12 +257,26 @@ function Review() {
                     {payment.asset.kind === 'native' ? `${payment.chain.nativeCoin} (native)` : `${symbolOf(payment)} · ${shortAddress(payment.asset.address ?? '')}`}
                   </AppText>
                 </ReviewRow>
+                {payment.crossChain ? (
+                  <>
+                    <ReviewRow label="They receive about">
+                      <AppText weight="semibold" size={14}>
+                        {payment.crossChain.expectedAmountOut.display} {payment.crossChain.destinationAsset.symbol ?? payment.crossChain.destinationChain.nativeCoin} on {payment.crossChain.destinationChain.name}
+                      </AppText>
+                    </ReviewRow>
+                    <ReviewRow label="At least">
+                      <AppText size={14}>
+                        {payment.crossChain.minAmountOut.display} {payment.crossChain.destinationAsset.symbol ?? payment.crossChain.destinationChain.nativeCoin}
+                      </AppText>
+                    </ReviewRow>
+                  </>
+                ) : null}
                 <ReviewRow label="From">
                   <AppText size={14}>
                     {sender?.label ?? 'Account'} · <Mono size={14}>{shortAddress(terms.senderAddress)}</Mono>
                   </AppText>
                 </ReviewRow>
-                <ReviewRow label="Network fee">{fee === undefined ? '…' : fee === null ? '—' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
+                <ReviewRow label="Network fee">{fee === undefined ? '…' : fee === null ? 'Unavailable' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
                 <ReviewRow label="Resolution" last>
                   <Mono size={14}>v{payment.recipient.resolutionVersion}</Mono>
                 </ReviewRow>
@@ -327,7 +347,7 @@ function Sent({ payment: initial, ambiguous, onDone }: { payment: Payment; ambig
       </View>
       {ambiguous && !terminal ? (
         <AppText variant="small" style={{ textAlign: 'center' }}>
-          The connection dropped while sending. MAX is checking the network for it — it won’t be sent twice.
+          The connection dropped while sending. MAX is checking the network for it, so it won’t be sent twice.
         </AppText>
       ) : null}
       {p.txHash ? (

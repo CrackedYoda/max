@@ -216,7 +216,7 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
 
           {phase.kind === "record_failed" ? (
             <Banner tone="warn" title="Paid, but not recorded yet">
-              <span className="block">Your fee was sent ({shortAddress(phase.txHash, 6, 6)}). Retrying only tells MAX about it — you won’t pay twice.</span>
+              <span className="block">Your fee was sent ({shortAddress(phase.txHash, 6, 6)}). Retrying only tells MAX about it, so you won’t pay twice.</span>
               <span className="block text-[13px]">{phase.error}</span>
             </Banner>
           ) : null}
@@ -271,7 +271,7 @@ function RenameProgress({ maxId, requestId }: { maxId: MaxId; requestId: string 
         {!done && !failed ? (
           <>
             <StatusPill status={p.status} />
-            <p className="m-0 text-sm text-muted">This page updates on its own. You can leave — the rename finishes without you.</p>
+            <p className="m-0 text-sm text-muted">This page updates on its own. You can leave. The rename finishes without you.</p>
           </>
         ) : null}
         {failed ? <Banner tone="danger">{r.failureReason ?? "The fee wasn’t confirmed in time. Your handle is unchanged."}</Banner> : null}

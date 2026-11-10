@@ -2,7 +2,7 @@
 // Amounts are always strings: `baseUnits` is an integer string in the asset's
 // smallest unit; `display` is a trimmed decimal for humans.
 
-export type Namespace = "evm" | "solana" | "bitcoin";
+export type Namespace = "evm" | "solana" | "bitcoin" | "litecoin" | "tron";
 export type ISODate = string;
 
 export interface Chain {
@@ -15,6 +15,8 @@ export interface Chain {
   nativeDecimals: number;
   confirmations: number;
   explorerTxUrl: string;
+  /** Names resolve here, but MAX can't send, track or settle on this chain. */
+  receiveOnly: boolean;
 }
 
 export interface AssetRef {
@@ -77,10 +79,16 @@ export interface Resolution {
 
 export interface Destination {
   namespace: Namespace;
-  walletId: string;
   address: string;
+  /** "wallet": a linked, signature-verified wallet. "pasted": an owner-confirmed address. */
+  source: "wallet" | "pasted";
+  verified: boolean;
+  walletId: string | null;
   updatedAt: ISODate;
 }
+
+/** A linked wallet, or a pasted address the owner confirms they control. */
+export type DestinationTarget = { walletId: string } | { address: string; confirmed: true };
 
 export interface Settlement {
   chain: string;

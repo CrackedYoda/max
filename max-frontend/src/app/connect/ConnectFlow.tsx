@@ -113,7 +113,7 @@ export function ConnectFlow() {
         <Progress step={step} />
 
         <div className="flex flex-wrap items-start gap-6">
-          <section aria-labelledby="choose" className="flex flex-[1_1_300px] flex-col gap-3">
+          <section aria-labelledby="choose" className={cx("flex flex-col gap-3", wallet ? "flex-[1_1_300px]" : "w-full max-w-[440px]")}>
             <h2 id="choose" className="mb-1 mt-0 text-[15px] font-semibold text-muted">Choose a wallet</h2>
             <WalletOption
               letter="P" name="Phantom" sub="Solana"
@@ -137,28 +137,31 @@ export function ConnectFlow() {
                 <span className="text-muted">Wallet</span>
                 <span className="font-mono" title={wallet.address}>{shortAddress(wallet.address)}</span>
               </div>
+            ) : busy === "connect" ? (
+              <p role="status" className="m-0 text-sm text-muted">Waiting for your wallet…</p>
             ) : null}
+            {!wallet && error ? <p role="alert" className="m-0 text-sm text-danger">{error}</p> : null}
           </section>
 
+          {wallet ? (
           <section aria-labelledby="sign" className="flex min-w-0 flex-[999_1_460px] flex-col gap-5 rounded-2xl border border-line bg-surface p-7 shadow-[0_8px_24px_rgba(20,20,19,0.04)]">
             <div className="flex flex-col gap-1.5">
               <h2 id="sign" className="m-0 text-xl font-semibold">Review the message</h2>
-              <p className="m-0 text-[15px] text-muted">
-                {wallet ? `${wallet.label} will ask you to sign exactly this text.` : "Choose a wallet to see the message you’ll sign."}
-              </p>
+              <p className="m-0 text-[15px] text-muted">{wallet.label} will ask you to sign exactly this text.</p>
             </div>
             <pre aria-label="Message to sign" className="m-0 min-h-[160px] whitespace-pre-wrap break-all rounded-xl border border-line bg-ivory p-5 font-mono text-[13px] leading-[1.7] text-ink">
-              {challenge?.message ?? (busy === "connect" ? "Waiting for your wallet…" : "")}
+              {challenge?.message ?? ""}
             </pre>
             <Banner tone="success" icon="shield" title="This does not authorize any payment.">
               Signing only proves you own this wallet. No funds move and no fees are charged.
             </Banner>
             <div className="flex flex-wrap gap-3">
               <Button onClick={sign} loading={busy === "sign"} disabled={!challenge || !!busy}>Sign message</Button>
-              <Button variant="secondary" className="!font-medium" onClick={reset} disabled={!wallet || !!busy}>Use a different wallet</Button>
+              <Button variant="secondary" className="!font-medium" onClick={reset} disabled={!!busy}>Use a different wallet</Button>
             </div>
             {error ? <p role="alert" className="m-0 text-sm text-danger">{error}</p> : null}
           </section>
+          ) : null}
         </div>
       </main>
     </div>
@@ -188,7 +191,7 @@ function Progress({ step }: { step: Step }) {
     <ol aria-label="Progress" className="m-0 flex list-none flex-wrap gap-3 p-0 text-sm font-semibold">
       {steps.map(([s, label], i) => (
         <li key={s} className="contents">
-          {i > 0 ? <span aria-hidden="true" className="text-line-strong">—</span> : null}
+          {i > 0 ? <span aria-hidden="true" className="h-px w-6 self-center bg-line-strong" /> : null}
           <span aria-current={i === idx ? "step" : undefined} className={cx("flex items-center gap-2", i < idx ? "text-success" : i === idx ? "text-ink" : "text-muted")}>
             <span className={cx("inline-flex size-6 items-center justify-center rounded-full text-xs", i < idx ? "bg-success-soft" : i === idx ? "bg-clay text-white" : "border border-line")}>
               {i < idx ? <Icon name="check" size={14} strokeWidth={2.5} /> : i + 1}

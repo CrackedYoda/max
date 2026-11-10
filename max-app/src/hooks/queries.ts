@@ -1,4 +1,4 @@
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type MaxIdType, type Namespace, type SaleStatus } from '@max/sdk';
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type DestinationTarget, type MaxIdType, type Namespace, type SaleStatus } from '@max/sdk';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
@@ -24,7 +24,7 @@ export function useChains() {
 /** Chains this app can actually use: listed by MAX and with an RPC configured. */
 export function useUsableChains(): { chains: Chain[]; isLoading: boolean; error: unknown } {
   const q = useChains();
-  return { chains: (q.data ?? []).filter((c) => hasRpc(c.key)), isLoading: q.isLoading, error: q.error };
+  return { chains: (q.data ?? []).filter((c) => !c.receiveOnly && hasRpc(c.key)), isLoading: q.isLoading, error: q.error };
 }
 
 export function useAvailability(input: string) {
@@ -166,7 +166,7 @@ export function useClaimId() {
 export function useSetDestination() {
   const invalidate = useInvalidateAccount();
   return useMutation({
-    mutationFn: (v: { id: string; namespace: Namespace; walletId: string }) => max().ids.setDestination(v.id, v.namespace, v.walletId),
+    mutationFn: (v: { id: string; namespace: Namespace; target: DestinationTarget }) => max().ids.setDestination(v.id, v.namespace, v.target),
     onSuccess: invalidate,
   });
 }

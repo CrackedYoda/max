@@ -28,6 +28,7 @@ import { amountSchema, tokenAddressError } from "@/validation/payment";
 type Phase =
   | { kind: "review" }
   | { kind: "working"; step: "connect" | "prepare" | "sign" | "record" }
+  | { kind: "quote"; payment: Payment; wallet: ConnectedWallet }
   | { kind: "record_failed"; payment: Payment; txHash: string; error: string }
   | { kind: "sent"; paymentId: string };
 
@@ -38,6 +39,9 @@ export function SendFlow() {
   const chains = useChains();
   const [to, setTo] = useState(stripPrefix(params.get("to") ?? ""));
   const [chainKey, setChainKey] = useState(DEFAULT_CHAIN);
+  // "" pays and delivers on the same network; a receive-only chain key asks
+  // NEAR Intents to convert and deliver there.
+  const [receiveKey, setReceiveKey] = useState("");
   const [assetMode, setAssetMode] = useState<"native" | "token">("native");
   const [token, setToken] = useState("");
   const [amount, setAmount] = useState("");
@@ -49,10 +53,11 @@ export function SendFlow() {
   useEffect(() => discoverEvmProviders(setEvm), []);
 
   const chain = chains.data?.find((c) => c.key === chainKey);
+  const receiveChain = receiveKey && !chain?.testnet ? chains.data?.find((c) => c.key === receiveKey) : undefined;
   const handle = normalizeName(useDebounced(to));
   const tokenErr = assetMode === "token" && chain ? tokenAddressError(chain.namespace, token) : null;
   const assetParam = assetMode === "token" && !tokenErr ? token.trim() : "native";
-  const resolution = useResolve(handle, chainKey, assetMode === "token" && tokenErr ? "" : assetParam);
+  const resolution = useResolve(handle, receiveChain?.key ?? chainKey, receiveChain ? "native" : assetMode === "token" && tokenErr ? "" : assetParam);
   const amountOk = amountSchema.safeParse(amount).success;
   const busy = phase.kind === "working";
 
@@ -67,7 +72,7 @@ export function SendFlow() {
   // Editing the form after a send starts a new payment.
   const editing = () => {
     setError(null);
-    if (phase.kind === "sent") setPhase({ kind: "review" });
+    if (phase.kind === "sent" || phase.kind === "quote") setPhase({ kind: "review" });
   };
 
   async function ensureWallet(c: Chain): Promise<ConnectedWallet> {
@@ -91,19 +96,36 @@ export function SendFlow() {
       const w = await ensureWallet(chain);
       const draft = useSendDraft.getState();
       // One key per exact set of terms: a retry replays the same intent, never a second one.
-      const key = draft.keyFor(JSON.stringify([r.maxId, r.resolutionVersion, chain.key, assetParam, amount.trim(), w.address]));
+      const key = draft.keyFor(JSON.stringify([r.maxId, r.resolutionVersion, chain.key, assetParam, amount.trim(), w.address, receiveChain?.key ?? ""]));
 
       setPhase({ kind: "working", step: "prepare" });
       const payment = await max().transfers.prepare({
         recipient: r.handle, chain: chain.key, asset: assetParam, amount: amount.trim(),
         senderAddress: w.address, idempotencyKey: key, resolutionVersion: r.resolutionVersion,
+        ...(receiveChain ? { destinationChain: receiveChain.key, destinationAsset: "native" } : {}),
       });
       draft.setPayment(payment);
       if (payment.txHash) {
         setPhase({ kind: "sent", paymentId: payment.id });
         return;
       }
+      // A converted payment's output is a quote: show it before anything is signed.
+      if (payment.route === "cross_chain") {
+        setPhase({ kind: "quote", payment, wallet: w });
+        return;
+      }
+      await signAndRecord(payment, w);
+    } catch (err) {
+      setPhase({ kind: "review" });
+      if (errorCode(err) === "RESOLUTION_STALE") resolution.refetch();
+      setError(errorMessage(err));
+    }
+  }
 
+  async function signAndRecord(payment: Payment, w: ConnectedWallet) {
+    setError(null);
+    try {
+      const draft = useSendDraft.getState();
       setPhase({ kind: "working", step: "sign" });
       const txHash = draft.txHash ?? (await signAndSend(payment, w));
       draft.setTxHash(txHash);
@@ -127,8 +149,11 @@ export function SendFlow() {
     }
   }
 
+  const receiveOptions = useMemo(() => (chains.data ?? []).filter((c) => c.receiveOnly && !c.testnet), [chains.data]);
+
   const chainList = useMemo(() => {
-    const list = chains.data ?? [];
+    // MAX can't send on receive-only chains (Bitcoin, Litecoin, Tron).
+    const list = (chains.data ?? []).filter((c) => !c.receiveOnly);
     return [...list.filter((c) => !c.testnet), ...list.filter((c) => c.testnet)];
   }, [chains.data]);
 
@@ -163,7 +188,20 @@ export function SendFlow() {
             </div>
           </div>
 
-          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0">
+          {receiveOptions.length && !chain?.testnet ? (
+            <div className="flex flex-col gap-2.5">
+              <label htmlFor="receive" className="text-sm font-semibold">Recipient receives</label>
+              <select id="receive" value={receiveKey} disabled={busy}
+                onChange={(e) => { editing(); setReceiveKey(e.target.value); if (e.target.value) setAssetMode("native"); }}
+                className="min-h-12 rounded-xl border border-line bg-surface px-4 text-[15px] outline-none focus:border-ink">
+                <option value="">The same asset, on {chain?.name ?? "this network"}</option>
+                {receiveOptions.map((c) => <option key={c.key} value={c.key}>{c.nativeCoin} on {c.name}</option>)}
+              </select>
+              {receiveChain ? <p className="m-0 text-[13px] text-muted">Converted through NEAR Intents. You’ll see the quote before you sign.</p> : null}
+            </div>
+          ) : null}
+
+          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0" disabled={!!receiveChain}>
             <legend className="mb-2.5 p-0 text-sm font-semibold">Asset</legend>
             <Segmented label="Asset" value={assetMode} onChange={(v) => { editing(); setAssetMode(v); }}
               options={[{ value: "native", label: `Native (${chain?.nativeCoin ?? "…"})` }, { value: "token", label: "Token by contract" }]} />
@@ -174,7 +212,7 @@ export function SendFlow() {
               aria-invalid={assetMode === "token" && !!token && !!tokenErr}
               className="min-h-12 rounded-xl border border-line bg-surface px-4 font-mono text-sm outline-none focus:border-ink disabled:bg-ivory disabled:text-muted" />
             {assetMode === "token" && token && tokenErr ? <p role="alert" className="m-0 text-[13px] text-danger">{tokenErr}</p> : null}
-            <p className="m-0 text-[13px] text-muted">Tokens are never picked by symbol — only by exact address.</p>
+            <p className="m-0 text-[13px] text-muted">Paste the token’s contract address.</p>
           </fieldset>
 
           <div className="flex flex-col gap-2.5">
@@ -191,10 +229,12 @@ export function SendFlow() {
 
         <section aria-labelledby="confirm" aria-live="polite" className="flex min-w-0 flex-[1_1_420px] flex-col gap-4">
           <ReviewPanel
-            handle={handle} chain={chain} resolution={resolution.data} resolving={resolution.isFetching && !resolution.data}
+            handle={handle} chain={chain} receiveChain={receiveChain} resolution={resolution.data} resolving={resolution.isFetching && !resolution.data}
             resolveError={resolution.error} amount={amount} amountOk={amountOk} assetMode={assetMode} tokenOk={!tokenErr}
             phase={phase} error={error} wallet={wallet}
             onConfirm={(r) => confirm(r)}
+            onSignQuote={(p, w) => signAndRecord(p, w)}
+            onCancelQuote={() => setPhase({ kind: "review" })}
             onRetryRecord={(p, h) => record(p, h)}
           />
         </section>
@@ -204,14 +244,16 @@ export function SendFlow() {
 }
 
 function ReviewPanel(props: {
-  handle: string | null; chain?: Chain; resolution?: Resolution; resolving: boolean; resolveError: unknown;
+  handle: string | null; chain?: Chain; receiveChain?: Chain; resolution?: Resolution; resolving: boolean; resolveError: unknown;
   amount: string; amountOk: boolean; assetMode: "native" | "token"; tokenOk: boolean;
   phase: Phase; error: string | null; wallet: ConnectedWallet | null;
   onConfirm(r: Resolution): void; onRetryRecord(p: Payment, h: string): void;
+  onSignQuote(p: Payment, w: ConnectedWallet): void; onCancelQuote(): void;
 }) {
-  const { handle, chain, resolution: r, phase } = props;
+  const { handle, chain, receiveChain, resolution: r, phase } = props;
 
   if (phase.kind === "sent") return <SentCard paymentId={phase.paymentId} />;
+  if (phase.kind === "quote") return <QuoteCard payment={phase.payment} error={props.error} onSign={() => props.onSignQuote(phase.payment, phase.wallet)} onCancel={props.onCancelQuote} />;
   if (phase.kind === "record_failed") {
     return (
       <Card className="flex flex-col gap-4 p-7">
@@ -244,8 +286,8 @@ function ReviewPanel(props: {
     return (
       <div role="alert" className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-7">
         <span aria-hidden="true" className="inline-flex size-10 items-center justify-center rounded-full bg-sunken text-muted"><Icon name="ban" size={20} /></span>
-        <h2 id="confirm" className="m-0 text-xl font-semibold"><Handle name={handle} className="[&>span]:text-clay-text" /> has no wallet on {chain.name} yet</h2>
-        <p className="m-0 text-[15px] leading-relaxed text-muted">Nothing will be sent. Pick a network they can receive on, or ask them to add a {chain.name} wallet.</p>
+        <h2 id="confirm" className="m-0 text-xl font-semibold"><Handle name={handle} className="[&>span]:text-clay-text" /> has no address on {(receiveChain ?? chain).name} yet</h2>
+        <p className="m-0 text-[15px] leading-relaxed text-muted">Nothing will be sent. Pick a network they can receive on, or ask them to add a {(receiveChain ?? chain).name} address.</p>
         <Link href={`/max.${handle}`} className="text-[15px] font-medium">See where max.{handle} can receive</Link>
       </div>
     );
@@ -269,7 +311,7 @@ function ReviewPanel(props: {
       <div className="flex flex-col gap-1.5">
         <h2 id="confirm" className="m-0 text-sm font-semibold text-muted">Confirm payment</h2>
         <p className="m-0 flex flex-wrap items-center gap-2.5"><Handle name={r.handle} className="text-[26px]" /><KindBadge type={r.type} /></p>
-        {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}” — check it’s who you mean to pay.</span> : null}
+        {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}”. Check it’s who you mean to pay.</span> : null}
       </div>
       <div className="flex flex-col gap-2">
         <span className="text-[13px] font-semibold text-muted">Resolved address</span>
@@ -280,6 +322,7 @@ function ReviewPanel(props: {
       </div>
       <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
         <ReviewRow label="Network" value={<>{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</>} />
+        {receiveChain ? <ReviewRow label="They receive" value={`${receiveChain.nativeCoin} on ${receiveChain.name}`} /> : null}
         <ReviewRow label="Asset" value={assetText} />
         <ReviewRow label="Resolution version" value={r.resolutionVersion} mono />
         <ReviewRow label="Network fee" value={<span className="font-normal">Set in your wallet</span>} />
@@ -291,6 +334,33 @@ function ReviewPanel(props: {
       <Button className="min-h-14 rounded-[14px] text-[17px]" loading={!!working} disabled={!ready || !!working} onClick={() => props.onConfirm(r)}>{label}</Button>
       {chain.namespace === "solana" && chain.testnet ? <p className="m-0 text-center text-[13px] text-muted">Set Phantom to Devnet before signing.</p> : null}
       <p className="m-0 text-center text-[13px] text-muted">Check the address. Crypto transfers can’t be reversed.</p>
+    </div>
+  );
+}
+
+/** A converted payment's quote, shown before the sender signs anything. */
+function QuoteCard({ payment: p, error, onSign, onCancel }: { payment: Payment; error: string | null; onSign(): void; onCancel(): void }) {
+  const r = p.crossChain!;
+  const symbol = r.destinationAsset.symbol ?? r.destinationChain.nativeCoin;
+  return (
+    <div className="flex flex-col gap-5 rounded-2xl border border-line bg-surface p-7 shadow-[0_8px_24px_rgba(20,20,19,0.04)]">
+      <div className="flex flex-col gap-1.5">
+        <h2 id="confirm" className="m-0 text-sm font-semibold text-muted">Review the quote</h2>
+        <p className="m-0 flex flex-wrap items-center gap-2.5"><Handle name={p.recipient.handle} className="text-[26px]" /></p>
+      </div>
+      <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
+        <ReviewRow label="You pay" value={`${r.amountIn.display} ${p.asset.symbol ?? p.chain.nativeCoin} on ${p.chain.name}`} />
+        <ReviewRow label="They receive about" value={`${r.expectedAmountOut.display} ${symbol} on ${r.destinationChain.name}`} />
+        <ReviewRow label="At least" value={`${r.minAmountOut.display} ${symbol}`} />
+        <ReviewRow label="Usually arrives in" value={`${Math.max(1, Math.round(r.timeEstimateSeconds / 60))} min`} />
+      </dl>
+      {(p.warnings ?? []).map((w) => (
+        <div key={w} role="note" className="rounded-xl bg-clay-soft px-4 py-3.5 text-sm leading-normal text-[#7E3A20]">{w}</div>
+      ))}
+      {error ? <Banner tone="danger">{error}</Banner> : null}
+      <Button className="min-h-14 rounded-[14px] text-[17px]" onClick={onSign}>Confirm and sign in wallet</Button>
+      <Button variant="secondary" onClick={onCancel}>Back</Button>
+      <p className="m-0 text-center text-[13px] text-muted">If the conversion can’t complete, the funds are refunded to your wallet.</p>
     </div>
   );
 }

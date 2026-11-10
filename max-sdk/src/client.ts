@@ -22,6 +22,7 @@ import {
   type MaxId,
   type MaxIdType,
   type Namespace,
+  type DestinationTarget,
   type Payment,
   type PrepareTransferInput,
   type Profile,
@@ -42,7 +43,7 @@ import {
  * Solana: return the base58-encoded ed25519 signature over the UTF-8 bytes.
  */
 export interface WalletSigner {
-  namespace: Exclude<Namespace, "bitcoin">;
+  namespace: Extract<Namespace, "evm" | "solana">;
   address: string;
   signMessage(message: string): Promise<string>;
 }
@@ -179,8 +180,8 @@ class IdsApi {
   updateProfile(id: string, input: { displayName?: string; description?: string; avatarUrl?: string }): Promise<MaxId> {
     return this.http.patch(`/v1/ids/${enc(id)}`, { body: input });
   }
-  setDestination(id: string, namespace: Namespace, walletId: string): Promise<MaxId> {
-    return this.http.put(`/v1/ids/${enc(id)}/destinations/${enc(namespace)}`, { body: { walletId } });
+  setDestination(id: string, namespace: Namespace, target: DestinationTarget): Promise<MaxId> {
+    return this.http.put(`/v1/ids/${enc(id)}/destinations/${enc(namespace)}`, { body: target });
   }
   removeDestination(id: string, namespace: Namespace): Promise<MaxId> {
     return this.http.delete(`/v1/ids/${enc(id)}/destinations/${enc(namespace)}`);

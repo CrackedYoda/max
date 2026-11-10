@@ -10,6 +10,12 @@ func NormalizeAddress(ns Namespace, addr string) (string, error) {
 		return NormalizeEVMAddress(addr)
 	case NamespaceSolana:
 		return NormalizeSolanaAddress(addr)
+	case NamespaceBitcoin:
+		return normalizeUTXOAddress(bitcoinParams, addr)
+	case NamespaceLitecoin:
+		return normalizeUTXOAddress(litecoinParams, addr)
+	case NamespaceTron:
+		return NormalizeTronAddress(addr)
 	}
 	return "", ErrUnsupportedNamespace
 }

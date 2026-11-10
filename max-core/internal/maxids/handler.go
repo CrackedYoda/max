@@ -101,8 +101,18 @@ func (h *Handler) SetDestination(c *gin.Context) {
 		shared.Fail(c, err)
 		return
 	}
-	m, err := h.svc.SetDestination(c.Request.Context(), shared.MustPrincipal(c).AccountID, id,
-		c.Param("namespace"), uuid.MustParse(req.WalletID))
+	if err := req.validate(); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	caller := shared.MustPrincipal(c).AccountID
+	var m MaxID
+	var err error
+	if req.Address != "" {
+		m, err = h.svc.PasteDestination(c.Request.Context(), caller, id, c.Param("namespace"), req.Address, req.Confirmed)
+	} else {
+		m, err = h.svc.SetDestination(c.Request.Context(), caller, id, c.Param("namespace"), uuid.MustParse(req.WalletID))
+	}
 	if err != nil {
 		shared.Fail(c, err)
 		return

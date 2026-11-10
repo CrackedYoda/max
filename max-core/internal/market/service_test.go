@@ -761,3 +761,11 @@ func TestNameView_HidesExpiredListing(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAssets_RejectsReceiveOnly(t *testing.T) {
+	for _, s := range []string{"bitcoin:native", "tron:native", "litecoin:native"} {
+		if _, err := ParseAssets(s); err == nil {
+			t.Errorf("%s accepted", s)
+		}
+	}
+}

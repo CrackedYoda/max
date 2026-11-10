@@ -160,7 +160,7 @@ func backfillAccount(ctx context.Context, tx pgx.Tx, namer DefaultNamer, owner u
 	for i := 1; i < len(dests); i++ {
 		d := dests[i]
 		if err := q.UpsertDestination(ctx, generated.UpsertDestinationParams{
-			MaxID: m.ID, ChainNamespace: string(d.Namespace), WalletID: d.ID,
+			MaxID: m.ID, ChainNamespace: string(d.Namespace), WalletID: &d.ID,
 		}); err != nil {
 			return false, err
 		}

@@ -60,7 +60,7 @@ func (r *repository) Remove(ctx context.Context, accountID, walletID uuid.UUID) 
 			return ErrLastWallet
 		}
 
-		affected, err := q.DeleteDestinationsForWallet(ctx, walletID)
+		affected, err := q.DeleteDestinationsForWallet(ctx, &walletID)
 		if err != nil {
 			return err
 		}

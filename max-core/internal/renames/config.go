@@ -22,7 +22,7 @@ func ParseFees(spec string) ([]FeeOption, error) {
 		if len(parts) != 3 {
 			return nil, fmt.Errorf("rename fee %q must be chain:asset:amount", entry)
 		}
-		chain, ok := chains.Lookup(parts[0])
+		chain, ok := chains.LookupSendable(parts[0])
 		if !ok {
 			return nil, fmt.Errorf("rename fee: unknown chain %q", parts[0])
 		}

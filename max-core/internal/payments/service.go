@@ -88,6 +88,9 @@ func (s *service) Prepare(ctx context.Context, in PrepareInput) (Prepared, error
 	if !ok {
 		return Prepared{}, shared.NewAppError("UNSUPPORTED_CHAIN", 400, "chain is not supported")
 	}
+	if chain.ReceiveOnly {
+		return Prepared{}, receiveOnly(chain)
+	}
 	if !s.gateway.Configured(chain.Key) {
 		return Prepared{}, ErrChainNotConfigured
 	}
@@ -552,4 +555,8 @@ func normalizeTxHash(ns chains.Namespace, h string) (string, error) {
 		return h, nil
 	}
 	return "", ErrInvalidTxHash
+}
+
+func receiveOnly(c chains.Chain) error {
+	return ErrReceiveOnlyChain.WithMessage("MAX can't send on " + c.Name + " yet.")
 }

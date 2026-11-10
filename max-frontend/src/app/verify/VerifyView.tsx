@@ -65,7 +65,7 @@ export function VerifyView({ fromCallback = false }: { fromCallback?: boolean })
       {result === "verified" ? (
         <Banner tone="success" title={`Verified @${params.get("username")}`}>
           {renewed > 0 ? `Also renewed ${renewed} reserved ${renewed === 1 ? "name" : "names"}. ` : ""}
-          {name ? "Claim your name below now — the verification is fresh for 15 minutes." : "You can claim names reserved for this account."}
+          {name ? "Claim your name below now. The verification is valid for 15 minutes." : "You can claim names reserved for this account."}
         </Banner>
       ) : result === "error" ? (
         <Banner tone="danger" title="X verification didn’t finish">
@@ -145,10 +145,10 @@ function ClaimSection({
   if (name.trim()) {
     if (!settled || (canonical && avail.isFetching && !avail.data)) state = { tone: "muted", text: "Checking…" };
     else if (!canonical) state = { tone: "bad", text: "Use 3–32 lowercase letters, numbers or hyphens." };
-    else if (a?.available) state = { tone: "bad", text: `${a.handle} isn’t reserved — anyone can claim it.` };
+    else if (a?.available) state = { tone: "bad", text: `${a.handle} isn’t reserved. Anyone can claim it.` };
     else if (blocked) state = { tone: "bad", text: `${a!.handle} is permanently reserved and can’t be claimed.` };
-    else if (reservedFor && match && fresh) state = { tone: "ok", text: `Reserved for @${reservedFor} — you verified that account ${relativeTime(match.verifiedAt)}.` };
-    else if (reservedFor && match) state = { tone: "clay", text: `You verified @${reservedFor} ${relativeTime(match.verifiedAt)}. Claims need a verification from the last 15 minutes — verify again.` };
+    else if (reservedFor && match && fresh) state = { tone: "ok", text: `Reserved for @${reservedFor}. You verified that account ${relativeTime(match.verifiedAt)}.` };
+    else if (reservedFor && match) state = { tone: "clay", text: `You verified @${reservedFor} ${relativeTime(match.verifiedAt)}. Claims need a verification from the last 15 minutes. Verify again.` };
     else if (reservedFor) state = { tone: "clay", text: `Reserved for @${reservedFor} on X. Verify that account to claim it.` };
     else if (a) state = { tone: "bad", text: `${a.handle} isn’t available.` };
   }

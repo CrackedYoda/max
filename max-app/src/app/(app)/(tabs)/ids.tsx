@@ -16,7 +16,7 @@ import * as vault from '@/services/vault';
 import { toast } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors, spacing } from '@/theme';
-import { shortAddress } from '@/utils/format';
+import { DESTINATION_NAMESPACES, namespaceLabel, shortAddress } from '@/utils/format';
 
 export default function Ids() {
   const insets = useSafeAreaInsets();
@@ -147,7 +147,7 @@ export default function Ids() {
 }
 
 function IdCard({ id }: { id: MaxId }) {
-  const dest = (ns: 'evm' | 'solana') => id.destinations.find((d) => d.namespace === ns);
+  const dest = (ns: string) => id.destinations.find((d) => d.namespace === ns);
   return (
     <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 14 }}>
       <View style={{ gap: 10 }}>
@@ -167,21 +167,24 @@ function IdCard({ id }: { id: MaxId }) {
         </View>
       </View>
       <View style={{ borderTopWidth: 1, borderTopColor: colors.sunken }}>
-        {(['evm', 'solana'] as const).map((ns, i) => {
+        {DESTINATION_NAMESPACES.map((ns, i) => {
           const d = dest(ns);
           return (
             <Pressable
               key={ns}
               accessibilityRole="button"
-              accessibilityLabel={`${ns === 'evm' ? 'EVM' : 'Solana'} destination: ${d ? d.address : 'not set'}. Change`}
+              accessibilityLabel={`${namespaceLabel(ns)} destination: ${d ? d.address : 'not set'}${d?.source === 'pasted' ? ', unverified' : ''}. Change`}
               onPress={() => router.push({ pathname: '/destination', params: { id: id.id, ns } })}
-              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, borderBottomWidth: i === 0 ? 1 : 0, borderBottomColor: colors.sunken, opacity: pressed ? 0.6 : 1 })}>
+              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, borderBottomWidth: i < DESTINATION_NAMESPACES.length - 1 ? 1 : 0, borderBottomColor: colors.sunken, opacity: pressed ? 0.6 : 1 })}>
               <AppText weight="semibold" size={12} color={colors.muted} style={{ width: 64 }}>
-                {ns === 'evm' ? 'EVM' : 'Solana'}
+                {namespaceLabel(ns)}
               </AppText>
               <View style={{ flex: 1 }}>
                 {d ? (
-                  <Mono size={13}>{shortAddress(d.address)}</Mono>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Mono size={13}>{shortAddress(d.address)}</Mono>
+                    {d.source === 'pasted' ? <Pill small label="Unverified" /> : null}
+                  </View>
                 ) : (
                   <AppText weight="semibold" size={13} color={colors.clayText}>
                     Set destination

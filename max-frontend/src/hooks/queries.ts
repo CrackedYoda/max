@@ -1,6 +1,6 @@
 "use client";
 
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type MaxIdType, type Namespace, type SearchParams } from "@max/sdk";
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type DestinationTarget, type MaxIdType, type Namespace, type SearchParams } from "@max/sdk";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { max } from "@/api/client";
@@ -111,7 +111,7 @@ export function useClaimId() {
 export function useSetDestination() {
   const invalidate = useInvalidateAccount();
   return useMutation({
-    mutationFn: (v: { id: string; namespace: Namespace; walletId: string }) => max().ids.setDestination(v.id, v.namespace, v.walletId),
+    mutationFn: (v: { id: string; namespace: Namespace; target: DestinationTarget }) => max().ids.setDestination(v.id, v.namespace, v.target),
     onSuccess: invalidate,
   });
 }

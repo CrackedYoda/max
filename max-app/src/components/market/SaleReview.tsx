@@ -571,7 +571,7 @@ function Quote({ view, target: t, nativeSymbol, payerLabel }: { view: SaleView; 
             {displayDecimal(t.price)} {sym}
           </AppText>
         </ReviewRow>
-        <ReviewRow label="Network fee">{q ? `≈ ${q.networkFee} ${nativeSymbol}` : '—'}</ReviewRow>
+        <ReviewRow label="Network fee">{q ? `≈ ${q.networkFee} ${nativeSymbol}` : 'Unavailable'}</ReviewRow>
         <ReviewRow label="Total you pay">
           <AppText weight="semibold" size={14}>
             {q ? `${displayDecimal(t.price)} ${sym} + ${q.totalNative} ${nativeSymbol}` : `${displayDecimal(t.price)} ${sym}`}

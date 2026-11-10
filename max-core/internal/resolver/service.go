@@ -55,7 +55,7 @@ func (s *service) Resolve(ctx context.Context, name, chainKey, assetParam string
 	if !ok {
 		return Resolution{}, ErrUnsupportedChain
 	}
-	asset, err := parseAsset(chain.Namespace, assetParam)
+	asset, err := parseAsset(chain, assetParam)
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -88,19 +88,26 @@ func (s *service) Resolve(ctx context.Context, name, chainKey, assetParam string
 	if chain.Testnet {
 		res.Notes = append(res.Notes, "Testnet: assets on this chain have no real value.")
 	}
+	if chain.ReceiveOnly {
+		res.Notes = append(res.Notes, "Receive-only on MAX: send from your own wallet.")
+	}
 	return res, nil
 }
 
-func parseAsset(ns chains.Namespace, raw string) (Asset, error) {
+func parseAsset(chain chains.Chain, raw string) (Asset, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.EqualFold(raw, "native") {
 		return Asset{Kind: AssetNative}, nil
 	}
-	addr, err := chains.NormalizeAddress(ns, raw)
+	// Tokens on receive-only chains (e.g. TRC-20) are not supported yet.
+	if chain.ReceiveOnly {
+		return Asset{}, ErrInvalidAsset
+	}
+	addr, err := chains.NormalizeAddress(chain.Namespace, raw)
 	if err != nil {
 		return Asset{}, ErrInvalidAsset
 	}
-	return Asset{Kind: AssetToken, Address: chains.DisplayAddress(ns, addr)}, nil
+	return Asset{Kind: AssetToken, Address: chains.DisplayAddress(chain.Namespace, addr)}, nil
 }
 
 func (s *service) Settlement(ctx context.Context, name string) (*Settlement, error) {

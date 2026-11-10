@@ -57,8 +57,11 @@ func (m MaxID) Handle() string { return Handle(m.CanonicalName) }
 
 type Destination struct {
 	Namespace chains.Namespace
-	WalletID  uuid.UUID
+	// WalletID is the verified wallet behind the destination; nil when the
+	// owner pasted the address instead.
+	WalletID  *uuid.UUID
 	Address   string
+	Pasted    bool
 	UpdatedAt time.Time
 }
 

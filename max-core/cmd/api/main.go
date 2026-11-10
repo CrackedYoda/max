@@ -93,6 +93,9 @@ func run() error {
 	paymentRepo := payments.NewRepository(pool)
 	paymentSvc := payments.NewService(paymentRepo, resolverSvc, payments.NewGateway(cfg.Payments.RPCURLs), provider, paymentsCfg, log)
 	for _, c := range chains.Supported {
+		if c.ReceiveOnly {
+			continue
+		}
 		if _, ok := cfg.Payments.RPCURLs[c.Key]; !ok {
 			log.Warn("payments disabled for chain: no RPC URL", zap.String("chain", c.Key))
 		}

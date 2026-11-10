@@ -31,6 +31,11 @@ var (
 )
 
 var (
+	ErrInvalidAddress       = shared.NewAppError("INVALID_ADDRESS", http.StatusBadRequest, "address is not valid for this chain")
+	ErrConfirmationRequired = shared.NewAppError("CONFIRMATION_REQUIRED", http.StatusBadRequest, "confirm you control this address")
+)
+
+var (
 	ErrInsufficientRegistrationBalance = shared.NewAppError("INSUFFICIENT_REGISTRATION_BALANCE", http.StatusForbidden, "linked wallets do not hold enough value to register a MAX ID")
 	ErrPriceUnavailable                = shared.NewAppError("PRICE_UNAVAILABLE", http.StatusServiceUnavailable, "wallet balances could not be priced right now; try again shortly")
 )

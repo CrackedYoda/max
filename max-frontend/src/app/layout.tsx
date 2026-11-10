@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ["latin"], weight: ["400", "500", "600"], variabl
 const jetbrains = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-jetbrains" });
 
 export const metadata: Metadata = {
-  title: "MAX — Send crypto to a name",
+  title: "MAX · Send crypto to a name",
   description: "Claim a handle, link the wallets you already own, and get paid by anyone who types it. MAX never holds your funds or keys.",
 };
 

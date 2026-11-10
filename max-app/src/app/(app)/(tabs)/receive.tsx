@@ -17,6 +17,8 @@ import { useSession } from '@/store/session';
 import { colors, spacing } from '@/theme';
 import { namespaceLabel, shortAddress } from '@/utils/format';
 
+const RECEIVE_ONLY: string[] = ['bitcoin', 'litecoin', 'tron'];
+
 export default function Receive() {
   const insets = useSafeAreaInsets();
   const ids = useMyIds();
@@ -29,10 +31,16 @@ export default function Receive() {
 
   // With a handle: where payments by name land. Without: this phone's own addresses.
   const rows = id
-    ? id.destinations.map((d) => ({ key: d.namespace, label: d.namespace === 'evm' ? 'EVM chains' : namespaceLabel(d.namespace), address: d.address }))
+    ? id.destinations.map((d) => ({
+        key: d.namespace,
+        label: d.namespace === 'evm' ? 'EVM chains' : namespaceLabel(d.namespace),
+        address: d.address,
+        pasted: d.source === 'pasted',
+        receiveOnly: RECEIVE_ONLY.includes(d.namespace),
+      }))
     : [
-        ...(accounts.find((a) => a.evm)?.evm ? [{ key: 'evm', label: 'EVM chains', address: accounts.find((a) => a.evm)!.evm! }] : []),
-        ...(accounts.find((a) => a.solana)?.solana ? [{ key: 'solana', label: 'Solana', address: accounts.find((a) => a.solana)!.solana! }] : []),
+        ...(accounts.find((a) => a.evm)?.evm ? [{ key: 'evm', label: 'EVM chains', address: accounts.find((a) => a.evm)!.evm!, pasted: false, receiveOnly: false }] : []),
+        ...(accounts.find((a) => a.solana)?.solana ? [{ key: 'solana', label: 'Solana', address: accounts.find((a) => a.solana)!.solana!, pasted: false, receiveOnly: false }] : []),
       ];
 
   return (
@@ -63,7 +71,7 @@ export default function Receive() {
                   toast(`${id.handle} copied`);
                 }}
               />
-              <Button style={{ flex: 1 }} size="md" icon="share" label="Share" onPress={() => Share.share({ message: `Pay me at ${id.handle} — ${link}` })} />
+              <Button style={{ flex: 1 }} size="md" icon="share" label="Share" onPress={() => Share.share({ message: `Pay me at ${id.handle}: ${link}` })} />
             </View>
             <AppText variant="small" style={{ textAlign: 'center' }}>
               Senders only need your handle. You don’t need to do anything to receive.
@@ -86,7 +94,7 @@ export default function Receive() {
           {rows.map((r, i) => (
             <ListRow
               key={r.key}
-              title={r.label}
+              title={[r.label, r.pasted ? 'Unverified' : null, r.receiveOnly ? 'Receive-only' : null].filter(Boolean).join(' · ')}
               subtitle={<Mono size={13} color={colors.muted}>{shortAddress(r.address)}</Mono>}
               right={<CopyButton value={r.address} label={`Copy ${r.label} address`} what="Address copied" />}
               last={!id && i === rows.length - 1}
@@ -100,6 +108,22 @@ export default function Receive() {
         </List>
         {id && !id.destinations.length ? <Banner tone="clay">No destinations set: senders can’t pay this handle yet.</Banner> : null}
       </View>
+
+      {rows.some((r) => r.receiveOnly) ? (
+        <View style={{ gap: 10 }}>
+          <SectionTitle>Receive-only addresses</SectionTitle>
+          <AppText variant="small">MAX can’t send on these networks. Share the address or QR code with someone sending from their own wallet.</AppText>
+          {rows
+            .filter((r) => r.receiveOnly)
+            .map((r) => (
+              <View key={r.key} accessible accessibilityRole="image" accessibilityLabel={`QR code for your ${r.label} address`} style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, alignItems: 'center', gap: 10 }}>
+                <QRCode value={r.address} size={148} color={colors.ink} backgroundColor={colors.surface} ecl="M" />
+                <AppText weight="semibold">{r.label}</AppText>
+                <Mono size={12} color={colors.muted} selectable>{r.address}</Mono>
+              </View>
+            ))}
+        </View>
+      ) : null}
     </ScrollView>
   );
 }

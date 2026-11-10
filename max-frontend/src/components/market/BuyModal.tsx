@@ -345,7 +345,7 @@ function Review({ view, target, nativeSymbol, error, working, onPay }: {
       ) : null}
       <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-4 rounded-xl bg-ivory p-4">
         <ReviewRow label="Price" value={`${displayDecimal(target.price)} ${sym}`} />
-        <ReviewRow label="Network fee" value={q ? `≈ ${q.networkFee} ${nativeSymbol}` : "—"} />
+        <ReviewRow label="Network fee" value={q ? `≈ ${q.networkFee} ${nativeSymbol}` : ""} />
         <ReviewRow label="Total you pay" value={q ? `${displayDecimal(target.price)} ${sym} + ${q.totalNative} ${nativeSymbol}` : `${displayDecimal(target.price)} ${sym}`} />
         <ReviewRow label="Seller receives" value={`${displayDecimal(q?.sellerReceives ?? s.sellerReceives)} ${sym}`} />
       </dl>

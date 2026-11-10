@@ -12,6 +12,7 @@ import {
   assertSolanaTransferMatches,
   evmTransactionFromClaims,
   formatUnits,
+  looksLikeAddress,
   normalizeName,
   parseUnits,
   verifyAuthorization,
@@ -333,5 +334,48 @@ describe("native sessions", () => {
     assert.equal(res.sessionToken, "tok-native");
     await c.auth.me();
     assert.equal(calls[2]!.headers.get("Authorization"), "Bearer tok-native");
+  });
+});
+
+describe("pasted destinations", () => {
+  test("setDestination sends a wallet id or a confirmed address", async () => {
+    const { fetchFn, calls } = mockFetch({
+      "PUT /v1/ids/id_1/destinations/bitcoin": ok({ id: "id_1", destinations: [{ namespace: "bitcoin", source: "pasted", verified: false, walletId: null }] }),
+      "PUT /v1/ids/id_1/destinations/solana": ok({ id: "id_1", destinations: [] }),
+    });
+    const c = client(fetchFn);
+    const m = await c.ids.setDestination("id_1", "bitcoin", { address: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", confirmed: true });
+    assert.equal(m.destinations[0]!.source, "pasted");
+    await c.ids.setDestination("id_1", "solana", { walletId: "w_1" });
+    assert.deepEqual(calls.map((x) => x.body), [
+      { address: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", confirmed: true },
+      { walletId: "w_1" },
+    ]);
+  });
+
+  test("looksLikeAddress checks the shape per namespace", () => {
+    const good: [Parameters<typeof looksLikeAddress>[0], string][] = [
+      ["evm", "0x52908400098527886E0F7030069857D2E4169EE7"],
+      ["solana", "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"],
+      ["bitcoin", "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"],
+      ["bitcoin", "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"],
+      ["bitcoin", " bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297 "],
+      ["bitcoin", "BC1QAR0SRRR7XFKVY5L643LYDNW9RE59GTZZWF5MDQ"],
+      ["litecoin", "LaMT348PWRnrqeeWArpwQPbuanpXDZGEUz"],
+      ["litecoin", "MGxNPPB7eBoWPUaprtX9v9CXJZoD2465zN"],
+      ["litecoin", "ltc1qar0srrr7xfkvy5l643lydnw9re59gtzz24wl4s"],
+      ["tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"],
+    ];
+    for (const [ns, a] of good) assert.ok(looksLikeAddress(ns, a), `${ns} ${a}`);
+    const bad: [Parameters<typeof looksLikeAddress>[0], string][] = [
+      ["evm", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"],
+      ["bitcoin", "ltc1qar0srrr7xfkvy5l643lydnw9re59gtzz24wl4s"],
+      ["bitcoin", "LaMT348PWRnrqeeWArpwQPbuanpXDZGEUz"],
+      ["litecoin", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"],
+      ["tron", "0x52908400098527886E0F7030069857D2E4169EE7"],
+      ["solana", "0OIl"],
+      ["bitcoin", ""],
+    ];
+    for (const [ns, a] of bad) assert.ok(!looksLikeAddress(ns, a), `${ns} ${a}`);
   });
 });

@@ -37,7 +37,7 @@ const deleteDestinationsForWallet = `-- name: DeleteDestinationsForWallet :many
 DELETE FROM max_id_destinations WHERE wallet_id = $1 RETURNING max_id
 `
 
-func (q *Queries) DeleteDestinationsForWallet(ctx context.Context, walletID uuid.UUID) ([]uuid.UUID, error) {
+func (q *Queries) DeleteDestinationsForWallet(ctx context.Context, walletID *uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, deleteDestinationsForWallet, walletID)
 	if err != nil {
 		return nil, err

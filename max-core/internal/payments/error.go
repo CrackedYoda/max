@@ -26,5 +26,6 @@ var (
 	ErrRoutingProvider     = shared.NewAppError("ROUTING_PROVIDER_ERROR", http.StatusBadGateway, "the routing provider is unavailable; try again shortly")
 	ErrRouteLimit          = shared.NewAppError("ROUTE_LIMIT_EXCEEDED", http.StatusUnprocessableEntity, "amount exceeds the cross-chain limit")
 	ErrInvalidSlippage     = shared.NewAppError("INVALID_SLIPPAGE", http.StatusBadRequest, "slippage tolerance is out of range")
+	ErrReceiveOnlyChain    = shared.NewAppError("RECEIVE_ONLY_CHAIN", http.StatusUnprocessableEntity, "MAX can't send on this chain yet")
 	ErrStaleTransition     = shared.NewAppError("STALE_TRANSITION", http.StatusConflict, "payment state changed concurrently")
 )

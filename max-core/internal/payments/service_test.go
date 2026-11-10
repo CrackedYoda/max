@@ -14,6 +14,8 @@ import (
 
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/resolver"
+	"github.com/max/max-core/internal/routing"
+	"github.com/max/max-core/internal/shared"
 )
 
 type memRepo struct {
@@ -554,4 +556,67 @@ func TestProcess_ConcurrentWorkersApplyOnce(t *testing.T) {
 	if completed != 1 {
 		t.Fatalf("completed recorded %d times, want 1", completed)
 	}
+}
+
+func TestPrepare_ReceiveOnlyChain(t *testing.T) {
+	ctx := context.Background()
+	const btcRecipient = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+	const tronRecipient = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	withReceiveOnly := func() *harness {
+		h := newHarness()
+		h.res.addrs[chains.NamespaceBitcoin] = btcRecipient
+		h.res.addrs[chains.NamespaceTron] = tronRecipient
+		h.prov.assets["bitcoin|native|"] = routing.ProviderAsset{ID: "nep141:btc.omft.near", Decimals: 8, Symbol: "BTC"}
+		h.prov.assets["tron|native|"] = routing.ProviderAsset{ID: "nep141:tron.omft.near", Decimals: 6, Symbol: "TRX"}
+		return h
+	}
+
+	t.Run("paying on a receive-only chain is refused", func(t *testing.T) {
+		_, err := withReceiveOnly().svc.Prepare(ctx, prepareIn("bitcoin", "", "1", evmSender))
+		var ae *shared.AppError
+		if !errors.Is(err, ErrReceiveOnlyChain) || !errors.As(err, &ae) || ae.Message != "MAX can't send on Bitcoin yet." {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("SOL in, BTC out to the pasted address", func(t *testing.T) {
+		h := withReceiveOnly()
+		res, err := h.svc.Prepare(ctx, crossIn("solana", "native", "1", solSender, "bitcoin", "native"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Payment.Route != RouteCrossChain || res.Payment.RecipientAddress != btcRecipient {
+			t.Fatalf("payment %+v", res.Payment)
+		}
+		if q := h.prov.lastQuote; q.Recipient != btcRecipient || q.Destination.Chain.Key != "bitcoin" || q.Destination.Kind != routing.AssetNative {
+			t.Fatalf("quote request %+v", q)
+		}
+		if !strings.Contains(strings.Join(res.Warnings, " "), "BTC on Bitcoin") {
+			t.Fatalf("missing disclosure: %v", res.Warnings)
+		}
+	})
+
+	t.Run("ETH on Base, TRX out on Tron", func(t *testing.T) {
+		h := withReceiveOnly()
+		if _, err := h.svc.Prepare(ctx, crossIn("base", "native", "1", evmSender, "tron", "native")); err != nil {
+			t.Fatal(err)
+		}
+		if h.prov.lastQuote.Recipient != tronRecipient {
+			t.Fatalf("quote request %+v", h.prov.lastQuote)
+		}
+	})
+
+	t.Run("auto-convert to BTC when the recipient has no wallet on the paying chain", func(t *testing.T) {
+		h := withReceiveOnly()
+		delete(h.res.addrs, chains.NamespaceSolana)
+		btc, _ := chains.Lookup("bitcoin")
+		h.res.settlement = &resolver.Settlement{Chain: btc, Asset: resolver.Asset{Kind: resolver.AssetNative}}
+		res, err := h.svc.Prepare(ctx, prepareIn("solana", "native", "1", solSender))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Payment.Route != RouteCrossChain || h.prov.lastQuote.Recipient != btcRecipient {
+			t.Fatalf("payment %+v quote %+v", res.Payment, h.prov.lastQuote)
+		}
+	})
 }

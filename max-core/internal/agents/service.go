@@ -130,7 +130,7 @@ func buildPolicy(in PolicyInput) (Policy, error) {
 	p := Policy{AllowAnyRecipient: in.AllowAnyRecipient}
 	seen := map[string]bool{}
 	for _, l := range in.Limits {
-		chain, ok := chains.Lookup(l.Chain)
+		chain, ok := chains.LookupSendable(l.Chain)
 		if !ok {
 			return Policy{}, ErrInvalidPolicy.WithMessage("unknown chain " + l.Chain)
 		}
@@ -195,7 +195,7 @@ func buildMarketPolicy(in MarketPolicyInput) (MarketPolicy, error) {
 	m := MarketPolicy{CanSell: in.CanSell}
 	seen := map[string]bool{}
 	for _, sm := range in.MinSalePrices {
-		chain, ok := chains.Lookup(sm.Chain)
+		chain, ok := chains.LookupSendable(sm.Chain)
 		if !ok {
 			return MarketPolicy{}, ErrInvalidPolicy.WithMessage("market.minSalePrices: unknown chain " + sm.Chain)
 		}
@@ -531,7 +531,7 @@ func (s *service) Propose(ctx context.Context, pr shared.Principal, in ProposeIn
 }
 
 func (s *service) requireAgentWallet(ctx context.Context, agentID uuid.UUID, chainKey, sender string) error {
-	chain, ok := chains.Lookup(chainKey)
+	chain, ok := chains.LookupSendable(chainKey)
 	if !ok {
 		return shared.NewAppError("UNSUPPORTED_CHAIN", 400, "chain is not supported")
 	}
