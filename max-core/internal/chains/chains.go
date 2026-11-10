@@ -27,8 +27,8 @@ type Chain struct {
 	// payment completed. Solana payments wait for "finalized" commitment instead.
 	Confirmations int64  `json:"confirmations"`
 	ExplorerTxURL string `json:"explorerTxUrl"`
-	// ReceiveOnly chains resolve names to pasted addresses, but MAX never
-	// sends, tracks, routes or settles on them.
+	// ReceiveOnly chains resolve names to pasted addresses. MAX never sends
+	// or tracks payments on them; cross-chain routes may deliver to them.
 	ReceiveOnly bool `json:"receiveOnly"`
 }
 

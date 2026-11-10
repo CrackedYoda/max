@@ -19,7 +19,11 @@ const tokensJSON = `[
  {"assetId":"nep141:base.omft.near","decimals":18,"blockchain":"base","symbol":"ETH","price":2500,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
  {"assetId":"nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near","decimals":6,"blockchain":"base","symbol":"USDC","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"},
  {"assetId":"nep141:sol.omft.near","decimals":9,"blockchain":"sol","symbol":"SOL","price":150,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
- {"assetId":"nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near","decimals":6,"blockchain":"sol","symbol":"USDC","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}
+ {"assetId":"nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near","decimals":6,"blockchain":"sol","symbol":"USDC","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},
+ {"assetId":"nep141:btc.omft.near","decimals":8,"blockchain":"btc","symbol":"BTC","price":100000,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
+ {"assetId":"nep141:ltc.omft.near","decimals":8,"blockchain":"ltc","symbol":"LTC","price":90,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
+ {"assetId":"nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near","decimals":6,"blockchain":"tron","symbol":"USDT","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
+ {"assetId":"nep141:tron.omft.near","decimals":6,"blockchain":"tron","symbol":"TRX","price":0.3,"priceUpdatedAt":"2026-01-01T00:00:00Z"}
 ]`
 
 const (
@@ -109,6 +113,9 @@ func TestAsset(t *testing.T) {
 		{"USDC on Solana by mint", routing.AssetRef{Chain: chain("solana"), Kind: routing.AssetToken, Address: solUSDC}, "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near", nil},
 		{"Solana mint is case-sensitive", routing.AssetRef{Chain: chain("solana"), Kind: routing.AssetToken, Address: strings.ToLower(solUSDC)}, "", routing.ErrRouteUnavailable},
 		{"unlisted token", routing.AssetRef{Chain: chain("solana"), Kind: routing.AssetToken, Address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}, "", routing.ErrRouteUnavailable},
+		{"native BTC", routing.AssetRef{Chain: chain("bitcoin"), Kind: routing.AssetNative}, "nep141:btc.omft.near", nil},
+		{"native LTC", routing.AssetRef{Chain: chain("litecoin"), Kind: routing.AssetNative}, "nep141:ltc.omft.near", nil},
+		{"native TRX, not Tron USDT", routing.AssetRef{Chain: chain("tron"), Kind: routing.AssetNative}, "nep141:tron.omft.near", nil},
 		{"testnets are not routable", routing.AssetRef{Chain: chain("base-sepolia"), Kind: routing.AssetNative}, "", routing.ErrRouteUnavailable},
 	}
 	for _, tt := range tests {

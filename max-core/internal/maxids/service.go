@@ -204,12 +204,17 @@ func (s *service) RemoveDestination(ctx context.Context, caller, id uuid.UUID, n
 }
 
 func (s *service) SetSettlement(ctx context.Context, caller, id uuid.UUID, chainKey, asset string, enabled bool) (MaxID, error) {
-	chain, ok := chains.LookupSendable(chainKey)
+	// Receive-only chains are valid targets: routes deliver there, MAX never
+	// sends from there. Their tokens can't be resolved yet, so native only.
+	chain, ok := chains.Lookup(chainKey)
 	if !ok || chain.Testnet {
 		return MaxID{}, ErrSettlementChain
 	}
 	canonicalAsset := ""
 	if a := strings.TrimSpace(asset); a != "" && !strings.EqualFold(a, "native") {
+		if chain.ReceiveOnly {
+			return MaxID{}, ErrSettlementAsset
+		}
 		norm, err := chains.NormalizeAddress(chain.Namespace, a)
 		if err != nil {
 			return MaxID{}, ErrSettlementAsset

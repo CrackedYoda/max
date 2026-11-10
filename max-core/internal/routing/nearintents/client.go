@@ -35,6 +35,11 @@ var blockchainCodes = map[string]string{
 	"optimism": "op",
 	"polygon":  "pol",
 	"solana":   "sol",
+	// Receive-only chains: valid as route destinations only, since MAX
+	// never builds or tracks payments that originate there.
+	"bitcoin":  "btc",
+	"litecoin": "ltc",
+	"tron":     "tron",
 }
 
 type Config struct {

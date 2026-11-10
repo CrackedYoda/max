@@ -12,7 +12,7 @@ import { Screen, TitleHeader } from '@/components/ui/Screen';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { USDC } from '@/config/env';
 import { errorMessage } from '@/error/messages';
-import { useBalances, useResolve, useUsableChains } from '@/hooks/queries';
+import { useBalances, useChains, useResolve, useUsableChains } from '@/hooks/queries';
 import { useDebounced } from '@/hooks/useDebounced';
 import { useSendDraft } from '@/store/flows';
 import { useSession } from '@/store/session';
@@ -26,6 +26,9 @@ export default function Send() {
   const [to, setTo] = useState('');
   const [chainKey, setChainKey] = useState<string | null>(null);
   const [asset, setAsset] = useState<string>('native');
+  // null: the recipient gets the same asset; otherwise a receive-only chain key.
+  const [receiveKey, setReceiveKey] = useState<string | null>(null);
+  const allChains = useChains();
   const [amount, setAmount] = useState('0');
   const { chains, isLoading: chainsLoading, error: chainsError } = useUsableChains();
   const accounts = useSession((s) => s.accounts);
@@ -55,9 +58,12 @@ export default function Send() {
   const senderAddress = chain ? (chain.namespace === 'evm' ? sender?.evm : sender?.solana) : undefined;
   const available = balances.data?.find((b) => b.chain.key === chain?.key && b.asset === assetParam && b.address === senderAddress);
 
+  const receiveOptions = (allChains.data ?? []).filter((c) => c.receiveOnly && !c.testnet);
+  const receiveChain = chain && !chain.testnet ? receiveOptions.find((c) => c.key === receiveKey) : undefined;
+
   const debounced = useDebounced(to, 350);
   const handle = normalizeName(debounced);
-  const resolution = useResolve(maxReady ? handle : null, chain?.key ?? '', assetParam);
+  const resolution = useResolve(maxReady ? handle : null, receiveChain?.key ?? chain?.key ?? '', receiveChain ? 'native' : assetParam);
   const settled = to === debounced;
 
   let status: { text: string; tone: 'success' | 'danger' | 'muted' } | null = null;
@@ -68,7 +74,7 @@ export default function Send() {
     status = isMaxApiError(resolution.error, 'MAX_ID_NOT_FOUND')
       ? { text: 'No one has this name', tone: 'danger' }
       : isMaxApiError(resolution.error, 'NO_COMPATIBLE_WALLET')
-        ? { text: `No wallet on ${chain?.name}`, tone: 'danger' }
+        ? { text: `No address on ${(receiveChain ?? chain)?.name}`, tone: 'danger' }
         : { text: errorMessage(resolution.error), tone: 'danger' };
   }
 
@@ -95,7 +101,7 @@ export default function Send() {
           label="Review"
           disabled={!canReview}
           onPress={() => {
-            setTerms({ handle: handle!, chain: chain.key, asset: assetParam, amount, senderAddress: senderAddress! });
+            setTerms({ handle: handle!, chain: chain.key, asset: assetParam, amount, senderAddress: senderAddress!, receiveChain: receiveChain?.key });
             router.push('/review');
           }}
         />
@@ -140,6 +146,16 @@ export default function Send() {
           <Choice pill label={chain.nativeCoin} selected={assetParam === 'native'} onPress={() => (setAsset('native'), setAmount('0'))} />
           <Choice pill label="USDC" selected={assetParam !== 'native'} onPress={() => (setAsset('usdc'), setAmount('0'))} />
         </View>
+      ) : null}
+
+      {receiveOptions.length && !chain.testnet ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="radiogroup" accessibilityLabel="They receive" contentContainerStyle={{ gap: 8, alignItems: 'center' }}>
+          <AppText variant="small">They receive</AppText>
+          <Choice pill label="Same" selected={!receiveChain} onPress={() => setReceiveKey(null)} />
+          {receiveOptions.map((c) => (
+            <Choice key={c.key} pill label={c.nativeCoin} selected={receiveChain?.key === c.key} onPress={() => setReceiveKey(c.key)} />
+          ))}
+        </ScrollView>
       ) : null}
 
       <View accessibilityLiveRegion="polite" style={{ alignItems: 'center', gap: 6, paddingVertical: 4 }}>

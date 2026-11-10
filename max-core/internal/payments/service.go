@@ -116,9 +116,6 @@ func (s *service) Prepare(ctx context.Context, in PrepareInput) (Prepared, error
 		if !ok {
 			return Prepared{}, shared.NewAppError("UNSUPPORTED_CHAIN", 400, "destination chain is not supported")
 		}
-		if destChain.ReceiveOnly {
-			return Prepared{}, receiveOnly(destChain)
-		}
 		if destChain.Key != chain.Key || !sameAssetParam(chain.Namespace, in.Asset, in.DestinationAsset) {
 			return s.prepareCrossChain(ctx, in, chain, sender, destChain, in.DestinationAsset)
 		}

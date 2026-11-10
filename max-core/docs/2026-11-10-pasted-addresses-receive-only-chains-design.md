@@ -14,8 +14,10 @@ receive-only for btc litecoin tron".
    supported namespace (EVM, Solana, and the new ones). The owner confirms the
    address first. The owner sees it labelled "Unverified".
 2. **Receive-only chains.** Bitcoin, Litecoin and Tron (mainnet only). Names
-   resolve on them to pasted addresses. MAX does no sending, payment tracking,
-   cross-chain routing, settlement conversion or market settlement on them.
+   resolve on them to pasted addresses. MAX never sends from them or tracks
+   payments on them, and never settles market sales on them. They can be the
+   destination of a NEAR Intents cross-chain route and an auto-convert
+   (settlement) target, native coin only (amended 2026-11-10).
 
 ## 2. Decisions
 
@@ -28,7 +30,7 @@ receive-only for btc litecoin tron".
 | Assets on new chains | Native only. Tokens (e.g. TRC-20 USDT) return `INVALID_ASSET`. |
 | Who can paste | The owner, on any of their IDs including the default; agents via the same endpoint with `ids:write`. |
 | Sender view | Unchanged. Senders never see addresses in the app, and resolve/profile do not reveal verified vs pasted. In-app sends to a pasted EVM/Solana address work like any other destination. A recipient with no destination for the chain gets the existing "no destination" error. |
-| In-app send on new chains | Refused with `RECEIVE_ONLY_CHAIN`. |
+| In-app send on new chains | Paying on them is refused with `RECEIVE_ONLY_CHAIN`. Paying on EVM/Solana so the recipient receives BTC, LTC or TRX goes through a NEAR Intents route. |
 | Owner view | Each destination carries `source` (`wallet`/`pasted`) and `verified`. Pasted ones show an "Unverified" badge. |
 | Confirmation | Required on every paste: the request carries `confirmed: true`; the UI shows the full address, the namespace, and the EVM multi-chain warning, behind an "I control this address" checkbox. |
 
@@ -79,12 +81,13 @@ Behaviour of existing paths:
     checksum. Stored lowercase, displayed checksummed (existing).
   - **Solana:** existing rule.
 
-Receive-only chains are rejected at every money path:
+Receive-only chains are rejected wherever MAX would send or track money on them:
 
 | Path | Behaviour |
 |---|---|
-| Payment prepare (direct and cross-chain, origin or destination) | `RECEIVE_ONLY_CHAIN` (422), "MAX can't send on <Chain> yet." |
-| Settlement preference | existing `ErrSettlementChain` |
+| Payment prepare with a receive-only paying chain | `RECEIVE_ONLY_CHAIN` (422), "MAX can't send on <Chain> yet." |
+| Payment prepare with a receive-only destination chain | allowed: a NEAR Intents route (1Click codes `btc`, `ltc`, `tron`), native coin only; delivery is tracked through the provider's status |
+| Settlement preference | allowed, native coin only; a token → `ErrSettlementAsset` |
 | Market assets config | config error at startup if `MARKET_ASSETS` names one |
 | Startup RPC wiring / payment workers / gate balance chains | skipped (no RPC client exists for them) |
 | Wallet link challenge | existing `UNSUPPORTED_NAMESPACE` (not linkable) |
@@ -141,8 +144,10 @@ Audit: `maxid.destination_set` metadata gains `source` and, for pastes,
   is replaced by "Receive-only: send from your own wallet". No addresses shown.
 - **App (`max-app`):** `destination.tsx` sheet gets the same paste and confirm
   flow and five namespaces; IDs tab shows the badge; Receive tab shows BTC/LTC/
-  Tron addresses with QR and a "Receive-only" note; Send flow offers no
-  receive-only chains and maps `RECEIVE_ONLY_CHAIN` to its message.
+  Tron addresses with QR and a "Receive-only" note; Send never pays on a
+  receive-only chain, but offers "They receive BTC/LTC/TRX", which routes
+  through NEAR Intents and shows the quote before signing. Web Send does the
+  same with a "Recipient receives" choice.
 - **MCP (`max-mcp`):** resolve works unchanged. If a destination-setting tool
   exists, it gains the paste body; otherwise untouched.
 
