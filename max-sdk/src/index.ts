@@ -14,6 +14,7 @@ export {
 } from "./authorization.js";
 export { PolicySigner, type PolicySignerOptions, type SignFromClaims } from "./signer.js";
 export { formatUnits, parseUnits, displayHandle, normalizeName } from "./units.js";
+export { looksLikeAddress } from "./address-shape.js";
 export { MarketApi } from "./market.js";
 export { assertSaleInstructionsMatch, type SaleExpectations } from "./sale-instructions.js";
 export * from "./market-types.js";
