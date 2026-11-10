@@ -13,9 +13,11 @@ import (
 const defaultCoinGeckoURL = "https://api.coingecko.com/api/v3/simple/price"
 
 var coinGeckoIDs = map[string]string{
-	"SOL": "solana",
-	"ETH": "ethereum",
-	"POL": "polygon-ecosystem-token",
+	"SOL":  "solana",
+	"ETH":  "ethereum",
+	"POL":  "polygon-ecosystem-token",
+	"BNB":  "binancecoin",
+	"AVAX": "avalanche-2",
 }
 
 type coinGecko struct {
