@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultAlchemyURL = "https://api.g.alchemy.com"
-	maxPages          = 5
+	maxPages          = 10
 )
 
 // alchemyNetworks maps MAX's paying mainnet chains to Alchemy network slugs.
@@ -118,6 +118,9 @@ func (a *Alchemy) Tokens(ctx context.Context, chain chains.Chain, owner string) 
 				addr, err := chains.NormalizeAddress(chain.Namespace, *t.TokenAddress)
 				if err != nil || t.TokenMetadata.Decimals == nil {
 					continue // an amount can't be shown without decimals
+				}
+				if chain.Namespace == chains.NamespaceSolana && *t.TokenMetadata.Decimals == 0 {
+					continue // Solana NFTs are zero-decimal mints; NFTs are out of scope
 				}
 				h.Kind, h.Address, h.Decimals = KindToken, addr, *t.TokenMetadata.Decimals
 			}

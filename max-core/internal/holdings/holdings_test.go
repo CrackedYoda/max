@@ -113,7 +113,11 @@ func TestList_EVMFromAlchemy(t *testing.T) {
 func TestList_SolanaNativeAddedWhenMissing(t *testing.T) {
 	page := `{"data":{"tokens":[
  {"address":"` + solOwner + `","network":"solana-mainnet","tokenAddress":"` + bonk + `","tokenBalance":"120450000",
-  "tokenMetadata":{"decimals":5,"logo":null,"name":"Bonk","symbol":"Bonk"},"tokenPrices":[{"currency":"usd","value":"0.0000153"}],"error":null}
+  "tokenMetadata":{"decimals":5,"logo":null,"name":"Bonk","symbol":"Bonk"},"tokenPrices":[{"currency":"usd","value":"0.0000153"}],"error":null},
+ {"address":"` + solOwner + `","network":"solana-mainnet","tokenAddress":"2PGzsg8yeAXRA6i9WYztBs3YWdbr4jRbixM1oTZEArX7","tokenBalance":"0x1",
+  "tokenMetadata":{"decimals":0,"logo":"https://nft/y00t.png","name":"y00t #4718","symbol":"Y00T"},"tokenPrices":[],"error":null},
+ {"address":"` + solOwner + `","network":"solana-mainnet","tokenAddress":"13vudpRiKaMRg1fif48NkAQF3o4B9EsBbWwfRKyc64VE","tokenBalance":"0x186a0",
+  "tokenMetadata":{"decimals":6,"logo":null,"name":null,"symbol":null},"tokenPrices":[],"error":null}
  ],"pageKey":null}}`
 	f := &fakeAlchemy{t: t, pages: []string{page}}
 	svc, done := newService(t, f)
@@ -122,7 +126,8 @@ func TestList_SolanaNativeAddedWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Symbol != "SOL" || got[0].Balance.Sign() != 0 || got[1].Address != bonk || got[1].ValueUSD != "0.02" {
+	// The zero-decimal NFT is dropped; the nameless token is labelled by its mint.
+	if len(got) != 3 || got[0].Symbol != "SOL" || got[0].Balance.Sign() != 0 || got[1].Address != bonk || got[1].ValueUSD != "0.02" || got[2].Symbol != "13vu…64VE" {
 		t.Fatalf("got %+v", got)
 	}
 	if f.reqs[0]["addresses"].([]any)[0].(map[string]any)["networks"].([]any)[0] != "solana-mainnet" {

@@ -141,6 +141,9 @@ func finish(chain chains.Chain, in []Holding) []Holding {
 			continue
 		}
 		_, h.Verified = chains.LookupVerifiedToken(chain.Key, h.Address)
+		if strings.TrimSpace(h.Symbol) == "" {
+			h.Symbol = shortAddress(chains.DisplayAddress(chain.Namespace, h.Address))
+		}
 		h.ValueUSD = valueUSD(h.Balance, h.Decimals, h.PriceUSD)
 		tokens = append(tokens, h)
 	}
@@ -164,6 +167,14 @@ func finish(chain chains.Chain, in []Holding) []Holding {
 		return strings.ToLower(tokens[i].Symbol) < strings.ToLower(tokens[j].Symbol)
 	})
 	return append([]Holding{native}, tokens...)
+}
+
+// shortAddress labels a token that has no symbol, e.g. "DezX…B263".
+func shortAddress(a string) string {
+	if len(a) <= 10 {
+		return a
+	}
+	return a[:4] + "…" + a[len(a)-4:]
 }
 
 // valueUSD returns balance × price to cents, or "" without a price.
