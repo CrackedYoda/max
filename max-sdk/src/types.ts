@@ -79,6 +79,8 @@ export interface Resolution {
 
 export interface Destination {
   namespace: Namespace;
+  /** Chain key when this overrides one EVM chain; null for the namespace default. */
+  chain: string | null;
   address: string;
   /** "wallet": a linked, signature-verified wallet. "pasted": an owner-confirmed address. */
   source: "wallet" | "pasted";

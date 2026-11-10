@@ -183,6 +183,14 @@ class IdsApi {
   setDestination(id: string, namespace: Namespace, target: DestinationTarget): Promise<MaxId> {
     return this.http.put(`/v1/ids/${enc(id)}/destinations/${enc(namespace)}`, { body: target });
   }
+  /** Send one EVM chain (e.g. "bnb") somewhere other than the EVM default. */
+  setChainDestination(id: string, chain: string, target: DestinationTarget): Promise<MaxId> {
+    return this.http.put(`/v1/ids/${enc(id)}/chain-destinations/${enc(chain)}`, { body: target });
+  }
+  /** Return one EVM chain to the EVM default. */
+  removeChainDestination(id: string, chain: string): Promise<MaxId> {
+    return this.http.delete(`/v1/ids/${enc(id)}/chain-destinations/${enc(chain)}`);
+  }
   removeDestination(id: string, namespace: Namespace): Promise<MaxId> {
     return this.http.delete(`/v1/ids/${enc(id)}/destinations/${enc(namespace)}`);
   }
