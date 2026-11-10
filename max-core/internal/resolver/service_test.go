@@ -16,6 +16,7 @@ const (
 	evmAddr  = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"
 	bonkMint = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 	usdcBase = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+	tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 )
 
 type fakeRepo struct {
@@ -34,7 +35,7 @@ func newSvc() Service {
 	return NewService(fakeRepo{profiles: map[string]Profile{
 		"yoda": {
 			MaxID: uuid.New(), CanonicalName: "yoda", Type: "human", ResolutionVersion: 3,
-			Destinations: map[chains.Namespace]string{chains.NamespaceSolana: solAddr, chains.NamespaceEVM: evmAddr},
+			Destinations: map[chains.Namespace]string{chains.NamespaceSolana: solAddr, chains.NamespaceEVM: evmAddr, chains.NamespaceTron: tronAddr},
 		},
 		"solonly": {
 			MaxID: uuid.New(), CanonicalName: "solonly", Type: "agent",
@@ -98,5 +99,21 @@ func TestProfile_ReportsReachableChains(t *testing.T) {
 		if r.Reachable != want {
 			t.Errorf("%s reachable = %v, want %v", r.Chain.Key, r.Reachable, want)
 		}
+	}
+}
+
+func TestResolve_ReceiveOnly(t *testing.T) {
+	res, err := newSvc().Resolve(context.Background(), "yoda", "tron", "native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Address != tronAddr || len(res.Notes) != 1 || res.Notes[0] != "Receive-only on MAX: send from your own wallet." {
+		t.Errorf("got %+v", res)
+	}
+	if _, err := newSvc().Resolve(context.Background(), "yoda", "tron", tronAddr); !errors.Is(err, ErrInvalidAsset) {
+		t.Errorf("token on receive-only chain: err = %v", err)
+	}
+	if _, err := newSvc().Resolve(context.Background(), "yoda", "bitcoin", ""); !errors.Is(err, ErrNoDestination) {
+		t.Errorf("bitcoin without destination: err = %v", err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/resolver"
+	"github.com/max/max-core/internal/shared"
 )
 
 type memRepo struct {
@@ -553,5 +554,21 @@ func TestProcess_ConcurrentWorkersApplyOnce(t *testing.T) {
 	}
 	if completed != 1 {
 		t.Fatalf("completed recorded %d times, want 1", completed)
+	}
+}
+
+func TestPrepare_ReceiveOnlyChain(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness()
+	in := prepareIn("bitcoin", "", "1", evmSender)
+	_, err := h.svc.Prepare(ctx, in)
+	var ae *shared.AppError
+	if !errors.Is(err, ErrReceiveOnlyChain) || !errors.As(err, &ae) || ae.Message != "MAX can't send on Bitcoin yet." {
+		t.Fatalf("origin: err = %v", err)
+	}
+	in = prepareIn("base", "", "1", evmSender)
+	in.DestinationChain = "tron"
+	if _, err := h.svc.Prepare(ctx, in); !errors.Is(err, ErrReceiveOnlyChain) {
+		t.Fatalf("destination: err = %v", err)
 	}
 }

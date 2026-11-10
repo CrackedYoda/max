@@ -301,6 +301,9 @@ func Load() (Config, error) {
 	}
 
 	for _, c := range chains.Supported {
+		if c.ReceiveOnly {
+			continue // MAX never sends or tracks payments there
+		}
 		key := "RPC_URL_" + strings.ToUpper(strings.ReplaceAll(c.Key, "-", "_"))
 		if v := get(key, ""); v != "" {
 			if !strings.HasPrefix(v, "https://") && !(cfg.App.Env == "development" && strings.HasPrefix(v, "http://")) {
