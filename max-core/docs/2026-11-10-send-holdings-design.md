@@ -19,7 +19,7 @@ a balance bar above the amount with the wallet balance and its USD value.
 | Fallback | Testnets, chains without a slug, or no key: native coin only, read through the chain's RPC URL. No RPC either: `HOLDINGS_UNAVAILABLE` (503). |
 | Paying chains only | Receive-only chains (BTC, LTC, Tron) → `UNSUPPORTED_CHAIN`. |
 | Included | Native coin always (even at zero); every token with a non-zero balance, spam included. |
-| Order | Native first, then priced tokens by USD value (descending), then unpriced by symbol. |
+| Order | Native first, then verified tokens, then unverified; within each group priced by USD value (descending), then unpriced by symbol. |
 | Labels | `verified` = native, or on MAX's verified token list. The UI labels the rest "Unverified". Unpriced → "No price". |
 | Cache | 20 s per (chain, address); pages followed up to 10. Solana zero-decimal mints (NFTs) are dropped. |
 | Endpoint | `GET /v1/holdings?chain=<key>&address=<addr>`, public, `lookupLimit`. |

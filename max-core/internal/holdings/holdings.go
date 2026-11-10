@@ -125,7 +125,8 @@ func (s *Service) fetch(ctx context.Context, chain chains.Chain, owner string) (
 }
 
 // finish fills native metadata, marks verified tokens, drops empty tokens and
-// sorts: native first, then priced by USD value, then unpriced by symbol.
+// sorts: native first, then verified tokens, then the rest; within each group
+// priced by USD value, then unpriced by symbol.
 func finish(chain chains.Chain, in []Holding) []Holding {
 	native := Holding{Kind: KindNative, Balance: new(big.Int)}
 	tokens := make([]Holding, 0, len(in))
@@ -160,6 +161,10 @@ func finish(chain chains.Chain, in []Holding) []Holding {
 		return v
 	}
 	sort.SliceStable(tokens, func(i, j int) bool {
+		// Verified tokens lead so a scam airdrop with a made-up price can't top the list.
+		if tokens[i].Verified != tokens[j].Verified {
+			return tokens[i].Verified
+		}
 		vi, vj := val(tokens[i]), val(tokens[j])
 		if vi != vj {
 			return vi > vj

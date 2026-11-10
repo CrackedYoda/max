@@ -65,7 +65,9 @@ const basePage = `{"data":{"tokens":[
 
 const basePage2 = `{"data":{"tokens":[
  {"address":"0x52908400098527886e0f7030069857d2e4169ee7","network":"base-mainnet","tokenAddress":"0x4444444444444444444444444444444444444444","tokenBalance":"0x4563918244f40000",
-  "tokenMetadata":{"decimals":18,"logo":null,"name":"Degen","symbol":"DEGEN"},"tokenPrices":[{"currency":"usd","value":"0.5"}],"error":null}
+  "tokenMetadata":{"decimals":18,"logo":null,"name":"Degen","symbol":"DEGEN"},"tokenPrices":[{"currency":"usd","value":"0.5"}],"error":null},
+ {"address":"0x52908400098527886e0f7030069857d2e4169ee7","network":"base-mainnet","tokenAddress":"0x5555555555555555555555555555555555555555","tokenBalance":"0xde0b6b3a7640000",
+  "tokenMetadata":{"decimals":18,"logo":null,"name":"Scam","symbol":"SCAM"},"tokenPrices":[{"currency":"usd","value":"1000000"}],"error":null}
  ],"pageKey":null}}`
 
 func newService(t *testing.T, f *fakeAlchemy) (*Service, func()) {
@@ -87,11 +89,11 @@ func TestList_EVMFromAlchemy(t *testing.T) {
 	for _, h := range got {
 		syms = append(syms, h.Symbol)
 	}
-	// Native first, then priced by value (USDC $20 > DEGEN $2.50), then unpriced; zero and errored dropped.
-	if strings.Join(syms, ",") != "ETH,USDC,DEGEN,FREE" {
+	// Native first, verified USDC, then unverified by value (SCAM's made-up $1M > DEGEN $2.50), then unpriced; zero and errored dropped.
+	if strings.Join(syms, ",") != "ETH,USDC,SCAM,DEGEN,FREE" {
 		t.Fatalf("order = %v", syms)
 	}
-	eth, usdc, free := got[0], got[1], got[3]
+	eth, usdc, free := got[0], got[1], got[4]
 	if eth.Kind != KindNative || eth.Address != "" || eth.Decimals != 18 || eth.Name != "Base" || eth.Balance.String() != "1000000000000000000" || eth.ValueUSD != "2500.50" || !eth.Verified {
 		t.Errorf("native = %+v", eth)
 	}
