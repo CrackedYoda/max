@@ -161,7 +161,7 @@ function ApprovalCard({ agent, t }: { agent: AgentDetail; t: AgentTransfer }) {
       </dl>
       {t.authorization.instruction ? (
         <div className="rounded-xl border border-dashed border-line-strong bg-ivory p-3.5">
-          <p className="m-0 mb-1 text-xs font-semibold uppercase tracking-[0.06em] text-muted">Agent’s note — written by the agent, not verified</p>
+          <p className="m-0 mb-1 text-xs font-semibold uppercase tracking-[0.06em] text-muted">Agent’s note: written by the agent, not verified</p>
           <p className="m-0 whitespace-pre-wrap text-sm">{t.authorization.instruction}</p>
         </div>
       ) : null}

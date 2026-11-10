@@ -54,7 +54,7 @@ export function ClaimForm() {
     if (a.reason === "reserved") {
       return a.claimPolicy === "blocked" || !a.xHandle
         ? { kind: "bad", msg: `${a.handle} is reserved and can’t be claimed.` }
-        : { kind: "soft", msg: `Reserved for @${a.xHandle} on X — verify that account to claim it.`, verifyName: canonical };
+        : { kind: "soft", msg: `Reserved for @${a.xHandle} on X. Verify that account to claim it.`, verifyName: canonical };
     }
     if (a.reason === "quarantined") return { kind: "bad", msg: `${a.handle} was released recently and is temporarily unavailable.` };
     if (a.reason === "invalid") return { kind: "bad", msg: `${a.handle} uses a reserved format. Try another name.` };
@@ -129,7 +129,7 @@ export function ClaimForm() {
           <Button type="submit" disabled={!ready} loading={claim.isPending}>
             {ready && canonical ? `Claim max.${canonical}` : "Claim"}
           </Button>
-          <span className="text-[13px] text-muted">Free. You can add destinations after.</span>
+          <span className="text-[13px] text-muted">You can choose where payments go after claiming.</span>
         </div>
       </form>
     </main>

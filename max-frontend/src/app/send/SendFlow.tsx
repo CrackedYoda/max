@@ -175,7 +175,7 @@ export function SendFlow() {
               aria-invalid={assetMode === "token" && !!token && !!tokenErr}
               className="min-h-12 rounded-xl border border-line bg-surface px-4 font-mono text-sm outline-none focus:border-ink disabled:bg-ivory disabled:text-muted" />
             {assetMode === "token" && token && tokenErr ? <p role="alert" className="m-0 text-[13px] text-danger">{tokenErr}</p> : null}
-            <p className="m-0 text-[13px] text-muted">Tokens are never picked by symbol — only by exact address.</p>
+            <p className="m-0 text-[13px] text-muted">Paste the token’s contract address.</p>
           </fieldset>
 
           <div className="flex flex-col gap-2.5">
@@ -270,7 +270,7 @@ function ReviewPanel(props: {
       <div className="flex flex-col gap-1.5">
         <h2 id="confirm" className="m-0 text-sm font-semibold text-muted">Confirm payment</h2>
         <p className="m-0 flex flex-wrap items-center gap-2.5"><Handle name={r.handle} className="text-[26px]" /><KindBadge type={r.type} /></p>
-        {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}” — check it’s who you mean to pay.</span> : null}
+        {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}”. Check it’s who you mean to pay.</span> : null}
       </div>
       <div className="flex flex-col gap-2">
         <span className="text-[13px] font-semibold text-muted">Resolved address</span>

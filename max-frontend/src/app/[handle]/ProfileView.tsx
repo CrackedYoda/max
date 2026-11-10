@@ -85,7 +85,7 @@ export function ProfileView() {
             <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
               {unreachable.map(({ chain }) => (
                 <li key={chain.key} className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1.5 text-[13px] font-medium text-muted">
-                  <span aria-hidden="true">—</span>{chain.name}
+                  {chain.name}
                 </li>
               ))}
             </ul>

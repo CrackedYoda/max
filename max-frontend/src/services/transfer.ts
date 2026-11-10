@@ -94,7 +94,7 @@ async function sendSolana(s: NonNullable<Instructions["solana"]>, chainKey: stri
     return signature;
   } catch (err) {
     throw new WalletError(
-      isRejection(err) ? "Rejected in Phantom. Nothing was sent." : `Phantom couldn’t send it${chainKey.includes("devnet") ? " — is Phantom set to Devnet?" : "."}`,
+      isRejection(err) ? "Rejected in Phantom. Nothing was sent." : `Phantom couldn’t send it${chainKey.includes("devnet") ? ". Is Phantom set to Devnet?" : "."}`,
       isRejection(err),
     );
   }

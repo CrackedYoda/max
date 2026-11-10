@@ -33,7 +33,7 @@ const LISTING: Record<ListingStatus, { label: string; tone: "neutral" | "clay" |
 const OFFER: Record<OfferStatus, { label: string; tone: "neutral" | "clay" | "success" | "danger" }> = {
   live: { label: "Open", tone: "success" },
   unfunded: { label: "Unfunded", tone: "danger" },
-  accepted: { label: "Accepted — pay now", tone: "clay" },
+  accepted: { label: "Accepted: pay now", tone: "clay" },
   declined: { label: "Declined", tone: "neutral" },
   superseded: { label: "Closed", tone: "neutral" },
   expired: { label: "Expired", tone: "neutral" },

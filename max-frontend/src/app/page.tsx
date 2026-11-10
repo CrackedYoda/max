@@ -20,7 +20,7 @@ export default function Landing() {
   const name = normalizeName(debounced);
   const avail = useAvailability(debounced);
 
-  let badge: React.ReactNode = <Pill>Type a name</Pill>;
+  let badge: React.ReactNode = null;
   let detail: React.ReactNode = "Handles are 3–32 characters: lowercase letters, numbers and hyphens.";
   if (q !== debounced) {
     // Never show a verdict about a different name than the one in the field.
@@ -92,10 +92,10 @@ export default function Landing() {
         <section aria-label="How a handle resolves" className="mx-auto max-w-[880px] px-6 pb-24">
           <div className="grid items-center gap-8 rounded-2xl border border-line bg-surface p-8 [grid-template-columns:repeat(auto-fit,minmax(260px,1fr))]">
             <div className="flex flex-col gap-2">
-              <span className="text-[13px] font-semibold uppercase tracking-[0.06em] text-muted">Pay</span>
+              <span className="text-[13px] font-semibold uppercase tracking-[0.06em] text-muted">Example</span>
               <Handle name="yoda" className="text-[32px]" />
               <span className="text-[15px] leading-normal text-muted">
-                The sender picks a chain. MAX returns the one wallet linked for it — or tells them there isn’t one.
+                The sender picks a chain. MAX returns the one wallet linked for it, or tells them there isn’t one.
               </span>
             </div>
             <div className="flex flex-col gap-3">
@@ -121,7 +121,7 @@ export default function Landing() {
             <h2 id="how" className="m-0 font-display text-[40px] font-medium tracking-[-0.01em]">Three steps. No custody.</h2>
             <ol className="m-0 grid list-none gap-6 p-0 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
               {[
-                ["01", "Connect", "Sign in with Phantom or MetaMask. You sign a message to prove ownership — never a payment."],
+                ["01", "Connect", "Sign in with Phantom or MetaMask. You sign a message to prove ownership, never a payment."],
                 ["02", "Claim", "Pick a handle for yourself or your agent, then choose which wallet receives on each chain."],
                 ["03", "Get paid", "Share your handle. Senders sign the transfer; funds land straight in your wallet. You do nothing."],
               ].map(([n, title, body]) => (

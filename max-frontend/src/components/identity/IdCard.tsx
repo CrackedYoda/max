@@ -32,7 +32,7 @@ export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
             {id.isDefault ? <span className="rounded-full bg-clay-soft px-2.5 py-[3px] text-xs font-semibold text-clay-text">Default ID</span> : null}
             {id.status !== "active" ? <span className="rounded-full bg-danger-soft px-2.5 py-[3px] text-xs font-semibold text-[#9C2F2F]">Paused</span> : null}
           </div>
-          <span className="text-sm text-muted">{id.displayName && id.displayName !== id.name ? id.displayName : "No display name"}</span>
+          {id.displayName && id.displayName !== id.name ? <span className="text-sm text-muted">{id.displayName}</span> : null}
         </div>
         <Button variant="secondary" size="sm" className="!text-sm !font-medium" onClick={() => setEditing(true)}>Edit profile</Button>
       </div>
@@ -91,7 +91,7 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
             <CopyButton value={current.address} label={`Copy ${label} address`} />
           </>
         ) : (
-          <span className="flex-1 text-sm text-muted">Not set — can’t receive on {namespace === "evm" ? "EVM chains" : label}</span>
+          <span className="flex-1 text-sm text-muted">Not set</span>
         )}
         <button type="button" aria-expanded={open} aria-haspopup="true" onClick={() => (open ? close() : setOpen(true))}
           className="inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border border-line bg-surface px-3 text-sm text-ink hover:bg-sunken">

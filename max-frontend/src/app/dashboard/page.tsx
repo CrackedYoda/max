@@ -43,12 +43,12 @@ function Dashboard() {
           </div>
           <div className="flex flex-wrap items-center gap-4">
             <Link href="/verify" className="text-sm font-medium">Own a reserved name?</Link>
-            <ButtonLink href="/claim" size="sm" className="!rounded-xl">Claim another</ButtonLink>
+            <ButtonLink href="/claim" size="sm" className="!rounded-xl">{ids.data?.some((i) => !i.isDefault) ? "Claim another" : "Claim a name"}</ButtonLink>
           </div>
         </div>
 
         {ids.error ? <Banner tone="danger">{errorMessage(ids.error)}</Banner> : null}
-        <div className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(340px,1fr))]">
+        <div className="grid items-start gap-5 [grid-template-columns:repeat(auto-fit,minmax(340px,1fr))]">
           {ids.isLoading || wallets.isLoading ? (
             <>
               <IdCardSkeleton />
