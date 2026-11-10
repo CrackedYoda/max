@@ -34,6 +34,8 @@ export type SendTerms = {
   asset: string; // "native" or contract/mint
   amount: string;
   senderAddress: string;
+  /** Receive-only chain the recipient gets the native coin on, converted via NEAR Intents. */
+  receiveChain?: string;
 };
 
 /**
