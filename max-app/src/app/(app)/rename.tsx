@@ -12,6 +12,7 @@ import { Button, LinkButton } from '@/components/ui/Button';
 import { HandleField } from '@/components/ui/Fields';
 import { Icon } from '@/components/ui/Icon';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { max } from '@/api/client';
 import { keys } from '@/api/keys';
 import { errorMessage } from '@/error/messages';
@@ -311,9 +312,12 @@ function RenameFlow({ maxId, eligibility: e, onClose }: { maxId: MaxId; eligibil
                 </AppText>
               </ReviewRow>
               <ReviewRow label="Network">
-                <AppText weight="semibold" size={14}>
-                  {fee.chain.name}
-                </AppText>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <ChainLogo chain={fee.chain.key} size={16} />
+                  <AppText weight="semibold" size={14}>
+                    {fee.chain.name}
+                  </AppText>
+                </View>
               </ReviewRow>
               <ReviewRow label="Paid from" last>
                 <AppText size={14}>

@@ -163,6 +163,22 @@ export function useClaimId() {
   });
 }
 
+export function useSetChainDestination() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (v: { id: string; chain: string; target: DestinationTarget }) => max().ids.setChainDestination(v.id, v.chain, v.target),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRemoveChainDestination() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (v: { id: string; chain: string }) => max().ids.removeChainDestination(v.id, v.chain),
+    onSuccess: invalidate,
+  });
+}
+
 export function useSetDestination() {
   const invalidate = useInvalidateAccount();
   return useMutation({

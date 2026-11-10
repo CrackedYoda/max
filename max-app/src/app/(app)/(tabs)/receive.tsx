@@ -7,11 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, List, ListRow, Loading, SectionTitle } from '@/components/ui/Blocks';
 import { Button, LinkButton } from '@/components/ui/Button';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { CopyButton } from '@/components/ui/Fields';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { getEnv } from '@/config/env';
 import { errorMessage } from '@/error/messages';
-import { useMe, useMyIds } from '@/hooks/queries';
+import { useChains, useMe, useMyIds } from '@/hooks/queries';
 import { toast } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors, spacing } from '@/theme';
@@ -22,6 +23,7 @@ const RECEIVE_ONLY: string[] = ['bitcoin', 'litecoin', 'tron'];
 export default function Receive() {
   const insets = useSafeAreaInsets();
   const ids = useMyIds();
+  const chains = useChains();
   const accounts = useSession((s) => s.accounts);
   const maxReady = useSession((s) => s.max === 'ready');
   const me = useMe();
@@ -30,10 +32,11 @@ export default function Receive() {
   const link = id ? `${getEnv().webUrl}/${id.handle}` : null;
 
   // With a handle: where payments by name land. Without: this phone's own addresses.
+  const chainName = (key: string) => chains.data?.find((c) => c.key === key)?.name ?? key;
   const rows = id
     ? id.destinations.map((d) => ({
-        key: d.namespace,
-        label: d.namespace === 'evm' ? 'EVM chains' : namespaceLabel(d.namespace),
+        key: d.chain ?? d.namespace,
+        label: d.chain ? chainName(d.chain) : d.namespace === 'evm' ? 'EVM chains' : namespaceLabel(d.namespace),
         address: d.address,
         pasted: d.source === 'pasted',
         receiveOnly: RECEIVE_ONLY.includes(d.namespace),
@@ -94,7 +97,14 @@ export default function Receive() {
           {rows.map((r, i) => (
             <ListRow
               key={r.key}
-              title={[r.label, r.pasted ? 'Unverified' : null, r.receiveOnly ? 'Receive-only' : null].filter(Boolean).join(' · ')}
+              title={
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ChainLogo chain={r.key} />
+                  <AppText weight="semibold" size={14}>
+                    {[r.label, r.pasted ? 'Unverified' : null, r.receiveOnly ? 'Receive-only' : null].filter(Boolean).join(' · ')}
+                  </AppText>
+                </View>
+              }
               subtitle={<Mono size={13} color={colors.muted}>{shortAddress(r.address)}</Mono>}
               right={<CopyButton value={r.address} label={`Copy ${r.label} address`} what="Address copied" />}
               last={!id && i === rows.length - 1}
@@ -118,7 +128,10 @@ export default function Receive() {
             .map((r) => (
               <View key={r.key} accessible accessibilityRole="image" accessibilityLabel={`QR code for your ${r.label} address`} style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, alignItems: 'center', gap: 10 }}>
                 <QRCode value={r.address} size={148} color={colors.ink} backgroundColor={colors.surface} ecl="M" />
-                <AppText weight="semibold">{r.label}</AppText>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ChainLogo chain={r.key} />
+                  <AppText weight="semibold">{r.label}</AppText>
+                </View>
                 <Mono size={12} color={colors.muted} selectable>{r.address}</Mono>
               </View>
             ))}

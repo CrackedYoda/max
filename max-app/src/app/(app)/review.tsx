@@ -14,6 +14,7 @@ import { Banner, ReviewRow } from '@/components/ui/Blocks';
 import { Button, IconButton, LinkButton } from '@/components/ui/Button';
 import { CopyButton } from '@/components/ui/Fields';
 import { Icon } from '@/components/ui/Icon';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { max } from '@/api/client';
 import { keys } from '@/api/keys';
 import { errorCode, errorMessage } from '@/error/messages';
@@ -242,9 +243,12 @@ function Review() {
               </View>
               <View>
                 <ReviewRow label="Network">
-                  <AppText weight="semibold" size={14}>
-                    {payment.chain.name}
-                  </AppText>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <ChainLogo chain={payment.chain.key} size={16} />
+                    <AppText weight="semibold" size={14}>
+                      {payment.chain.name}
+                    </AppText>
+                  </View>
                 </ReviewRow>
                 <ReviewRow label="Asset">
                   <AppText weight="semibold" size={14}>

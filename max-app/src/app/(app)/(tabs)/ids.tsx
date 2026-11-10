@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, List, ListRow, Loading, Pill, SectionTitle } from '@/components/ui/Blocks';
 import { Button, LinkButton } from '@/components/ui/Button';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { Icon } from '@/components/ui/Icon';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { errorMessage } from '@/error/messages';
@@ -147,7 +148,8 @@ export default function Ids() {
 }
 
 function IdCard({ id }: { id: MaxId }) {
-  const dest = (ns: string) => id.destinations.find((d) => d.namespace === ns);
+  const dest = (ns: string) => id.destinations.find((d) => d.namespace === ns && !d.chain);
+  const overrides = id.destinations.filter((d) => d.chain).length;
   return (
     <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 14 }}>
       <View style={{ gap: 10 }}>
@@ -170,15 +172,19 @@ function IdCard({ id }: { id: MaxId }) {
         {DESTINATION_NAMESPACES.map((ns, i) => {
           const d = dest(ns);
           return (
+            <View key={ns} style={{ borderBottomWidth: i < DESTINATION_NAMESPACES.length - 1 ? 1 : 0, borderBottomColor: colors.sunken }}>
             <Pressable
               key={ns}
               accessibilityRole="button"
               accessibilityLabel={`${namespaceLabel(ns)} destination: ${d ? d.address : 'not set'}${d?.source === 'pasted' ? ', unverified' : ''}. Change`}
               onPress={() => router.push({ pathname: '/destination', params: { id: id.id, ns } })}
-              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, borderBottomWidth: i < DESTINATION_NAMESPACES.length - 1 ? 1 : 0, borderBottomColor: colors.sunken, opacity: pressed ? 0.6 : 1 })}>
-              <AppText weight="semibold" size={12} color={colors.muted} style={{ width: 64 }}>
-                {namespaceLabel(ns)}
-              </AppText>
+              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, opacity: pressed ? 0.6 : 1 })}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, width: 92 }}>
+                <ChainLogo chain={ns} />
+                <AppText weight="semibold" size={12} color={colors.muted}>
+                  {namespaceLabel(ns)}
+                </AppText>
+              </View>
               <View style={{ flex: 1 }}>
                 {d ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -193,6 +199,17 @@ function IdCard({ id }: { id: MaxId }) {
               </View>
               <Icon name="chevronDown" size={18} color={colors.muted} />
             </Pressable>
+            {ns === 'evm' ? (
+              <LinkButton
+                label={overrides ? `${overrides} ${overrides === 1 ? 'chain' : 'chains'} customized` : 'Customize per chain'}
+                weight="medium"
+                size={13}
+                color={colors.clayText}
+                center={false}
+                onPress={() => router.push({ pathname: '/evm-chains', params: { id: id.id } })}
+              />
+            ) : null}
+            </View>
           );
         })}
       </View>
