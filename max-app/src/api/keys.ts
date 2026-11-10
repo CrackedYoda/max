@@ -7,6 +7,7 @@ export const keys = {
   availability: (name: string) => ['availability', name] as const,
   resolve: (handle: string, chain: string, asset: string) => ['resolve', handle, chain, asset] as const,
   balances: (addresses: string) => ['balances', addresses] as const,
+  holdings: (chain: string, address: string) => ['holdings', chain, address] as const,
   market: ['market'] as const,
   marketSearch: (q: string, sort: string) => ['market', 'search', q, sort] as const,
   marketName: (name: string) => ['market', 'name', name] as const,
