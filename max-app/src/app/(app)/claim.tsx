@@ -62,7 +62,9 @@ export default function Claim() {
             : `${a.handle} is reserved.`
           : a.reason === 'quarantined'
             ? `${a.handle} was released recently. Try again later.`
-            : `${a.handle} is taken. Try another.`;
+            : a.reason === 'invalid'
+              ? `${a.handle} uses a reserved format. Try another.`
+              : `${a.handle} is taken. Try another.`;
     }
   }
   // Reserved for an X account: claimed through verification, not here.

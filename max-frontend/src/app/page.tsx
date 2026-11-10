@@ -49,7 +49,9 @@ export default function Landing() {
       badge = <Pill tone="danger">{a.reason === "invalid" ? "Invalid" : "Taken"}</Pill>;
       detail = a.reason === "quarantined"
         ? `${a.handle} was released recently and is temporarily unavailable.`
-        : a.reason === "pending_rename" ? `${a.handle} is being claimed right now.` : `${a.handle} is already claimed. Try another name.`;
+        : a.reason === "pending_rename" ? `${a.handle} is being claimed right now.`
+        : a.reason === "invalid" ? `${a.handle} uses a reserved format. Try another name.`
+        : `${a.handle} is already claimed. Try another name.`;
     }
   }
 

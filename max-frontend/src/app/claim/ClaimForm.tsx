@@ -57,6 +57,7 @@ export function ClaimForm() {
         : { kind: "soft", msg: `Reserved for @${a.xHandle} on X — verify that account to claim it.`, verifyName: canonical };
     }
     if (a.reason === "quarantined") return { kind: "bad", msg: `${a.handle} was released recently and is temporarily unavailable.` };
+    if (a.reason === "invalid") return { kind: "bad", msg: `${a.handle} uses a reserved format. Try another name.` };
     return { kind: "bad", msg: `Someone already claimed ${a.handle}. Try another name.` };
   })();
 
