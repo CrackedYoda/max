@@ -369,7 +369,10 @@ func TestSetSettlement(t *testing.T) {
 		{"native ETH on Base", "base", "native", []chains.Namespace{chains.NamespaceEVM}, nil},
 		{"no wallet on that chain", "solana", "", []chains.Namespace{chains.NamespaceEVM}, ErrSettlementNoWallet},
 		{"testnet refused", "solana-devnet", "", []chains.Namespace{chains.NamespaceSolana}, ErrSettlementChain},
-		{"unknown chain", "tron", "", nil, ErrSettlementChain},
+		{"unknown chain", "dogecoin", "", nil, ErrSettlementChain},
+		{"native BTC on a receive-only chain", "bitcoin", "native", []chains.Namespace{chains.NamespaceBitcoin}, nil},
+		{"native TRX with no Tron address", "tron", "", nil, ErrSettlementNoWallet},
+		{"token on a receive-only chain refused", "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", []chains.Namespace{chains.NamespaceTron}, ErrSettlementAsset},
 		{"bad asset for chain", "solana", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", []chains.Namespace{chains.NamespaceSolana}, ErrSettlementAsset},
 	}
 	for _, tt := range tests {
@@ -378,6 +381,14 @@ func TestSetSettlement(t *testing.T) {
 			svc := NewService(repo, nil)
 			m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
 			for _, ns := range tt.wallets {
+				if !chains.IsLinkable(ns) {
+					pasted := map[chains.Namespace]string{
+						chains.NamespaceBitcoin: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+						chains.NamespaceTron:    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+					}[ns]
+					m, _ = svc.PasteDestination(ctx, owner, m.ID, string(ns), pasted, true)
+					continue
+				}
 				w := repo.addWallet(owner, ns)
 				m, _ = svc.SetDestination(ctx, owner, m.ID, string(ns), w)
 				m.Destinations = append(m.Destinations, Destination{Namespace: ns, WalletID: &w})

@@ -25,9 +25,6 @@ func (s *service) prepareCrossChain(ctx context.Context, in PrepareInput, chain 
 	if s.provider == nil || !s.cfg.RoutingEnabled {
 		return Prepared{}, ErrRoutingDisabled
 	}
-	if dest.ReceiveOnly {
-		return Prepared{}, receiveOnly(dest)
-	}
 	if chain.Testnet || dest.Testnet {
 		return Prepared{}, ErrRouteUnavailable.WithMessage("cross-chain routes are available on mainnet chains only")
 	}
