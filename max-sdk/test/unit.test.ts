@@ -396,3 +396,17 @@ describe("per-chain destinations", () => {
     ]);
   });
 });
+
+describe("holdings", () => {
+  test("holdings lists a wallet's tokens on a chain", async () => {
+    const { fetchFn, calls } = mockFetch({
+      "GET /v1/holdings": ok([
+        { kind: "native", address: "", symbol: "ETH", name: "Base", logo: "", decimals: 18, balance: { raw: "1", display: "0.000000000000000001" }, priceUsd: "2500", valueUsd: "0.00", verified: true },
+        { kind: "token", address: "0x1111111111111111111111111111111111111111", symbol: "FREE", name: "Free", logo: "", decimals: 18, balance: { raw: "5", display: "0.000000000000000005" }, priceUsd: null, valueUsd: null, verified: false },
+      ]),
+    });
+    const hs = await client(fetchFn).holdings("base", "0xAbC");
+    assert.equal(calls[0]!.path, "/v1/holdings?chain=base&address=0xAbC");
+    assert.deepEqual(hs.map((h) => [h.symbol, h.verified, h.valueUsd]), [["ETH", true, "0.00"], ["FREE", false, null]]);
+  });
+});
