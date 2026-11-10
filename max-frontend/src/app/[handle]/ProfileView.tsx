@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/Icon";
 import { errorMessage } from "@/error/messages";
 import { useProfile } from "@/hooks/queries";
 import { formatDate } from "@/utils/format";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 export function ProfileView() {
   const { handle: raw } = useParams<{ handle: string }>();
@@ -67,7 +68,7 @@ export function ProfileView() {
             <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
               {reachable.map(({ chain }) => (
                 <li key={chain.key} className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-3 py-1.5 text-[13px] font-semibold text-success">
-                  <Icon name="check" size={14} strokeWidth={2.5} />{chain.name}
+                  <ChainLogo chain={chain.key} size={16} />{chain.name}
                   {chain.testnet ? <span className="rounded-full bg-surface px-1.5 text-[11px] text-muted">Testnet</span> : null}
                   {chain.receiveOnly ? <span className="rounded-full bg-surface px-1.5 text-[11px] text-muted">Receive-only</span> : null}
                 </li>
@@ -85,7 +86,7 @@ export function ProfileView() {
             <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
               {unreachable.map(({ chain }) => (
                 <li key={chain.key} className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1.5 text-[13px] font-medium text-muted">
-                  {chain.name}
+                  <ChainLogo chain={chain.key} size={16} className="opacity-60 grayscale" />{chain.name}
                 </li>
               ))}
             </ul>

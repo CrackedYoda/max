@@ -24,6 +24,7 @@ import { connectFor } from "@/services/wallets";
 import { useWallet } from "@/store/wallet";
 import { formatDate, shortAddress } from "@/utils/format";
 import { stripPrefix } from "@/validation/identity";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 type Phase =
   | { kind: "form" }
@@ -195,7 +196,7 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
                         <input type="radio" name="fee" checked={on} disabled={busy} onChange={() => setFee(f)} className="size-4 accent-clay" />
                         <span className="flex flex-col">
                           <span className="font-semibold">{f.amount} {f.symbol}</span>
-                          <span className="text-[13px] text-muted">{f.chain.name}</span>
+                          <span className="inline-flex items-center gap-1.5 text-[13px] text-muted"><ChainLogo chain={f.chain.key} size={14} />{f.chain.name}</span>
                         </span>
                       </span>
                       <span className="text-xs text-muted">{f.chain.namespace === "solana" ? "Phantom" : "EVM wallet"}</span>

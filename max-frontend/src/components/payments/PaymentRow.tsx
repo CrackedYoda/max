@@ -1,6 +1,7 @@
 import type { Payment, PaymentStatus } from "@max/sdk";
 
 import { relativeTime, shortAddress } from "@/utils/format";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 import { Pill } from "../ui/Blocks";
 import { Icon } from "../ui/Icon";
@@ -39,7 +40,7 @@ export function PaymentRow({ payment, direction }: { payment: Payment; direction
       </span>
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm font-medium">{out ? "To" : "From"} <span className="font-mono">{who}</span></span>
-        <span className="text-xs text-muted">{payment.chain.name} · {relativeTime(payment.createdAt)}</span>
+        <span className="inline-flex items-center gap-1.5 text-xs text-muted"><ChainLogo chain={payment.chain.key} size={14} />{payment.chain.name} · {relativeTime(payment.createdAt)}</span>
       </div>
       <StatusPill status={payment.status} />
       <span className={`tabular w-[150px] text-right text-sm font-semibold ${out ? "text-ink" : "text-success"}`}>
