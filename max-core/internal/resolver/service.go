@@ -44,7 +44,7 @@ func (s *service) Profile(ctx context.Context, name string) (Profile, []ChainRea
 	p.OwnerChangedAt = recentOwnerChange(p.OwnerChangedAt, s.now())
 	reach := make([]ChainReach, 0, len(chains.Supported))
 	for _, c := range chains.Supported {
-		_, ok := p.Destinations[c.Namespace]
+		_, ok := p.AddressFor(c)
 		reach = append(reach, ChainReach{Chain: c, Reachable: ok})
 	}
 	return p, reach, nil
@@ -70,7 +70,7 @@ func (s *service) Resolve(ctx context.Context, name, chainKey, assetParam string
 
 	// Never fall back to another namespace or guess an address: a payment to
 	// the wrong chain is unrecoverable.
-	addr, ok := p.Destinations[chain.Namespace]
+	addr, ok := p.AddressFor(chain)
 	if !ok {
 		return Resolution{}, ErrNoDestination
 	}

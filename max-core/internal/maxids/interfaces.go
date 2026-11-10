@@ -29,6 +29,9 @@ type Repository interface {
 	GetOwnedWalletNamespace(ctx context.Context, walletID, owner uuid.UUID) (chains.Namespace, error)
 	SetDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace, walletID uuid.UUID) (MaxID, error)
 	SetPastedDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace, address string) (MaxID, error)
+	// SetChainDestination sets a per-chain override: walletID, or else a pasted address.
+	SetChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string, walletID *uuid.UUID, address string) (MaxID, error)
+	RemoveChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string) (MaxID, error)
 	RemoveDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace) (MaxID, error)
 	SetSettlement(ctx context.Context, id, owner uuid.UUID, s Settlement) (MaxID, error)
 	RemoveSettlement(ctx context.Context, id, owner uuid.UUID) (MaxID, error)
@@ -43,6 +46,11 @@ type Service interface {
 	SetDestination(ctx context.Context, caller, id uuid.UUID, namespace string, walletID uuid.UUID) (MaxID, error)
 	// PasteDestination sets an owner-confirmed address without a wallet proof.
 	PasteDestination(ctx context.Context, caller, id uuid.UUID, namespace, address string, confirmed bool) (MaxID, error)
+	// SetChainDestination and PasteChainDestination override one EVM chain;
+	// RemoveChainDestination returns it to the namespace default.
+	SetChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey string, walletID uuid.UUID) (MaxID, error)
+	PasteChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey, address string, confirmed bool) (MaxID, error)
+	RemoveChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey string) (MaxID, error)
 	RemoveDestination(ctx context.Context, caller, id uuid.UUID, namespace string) (MaxID, error)
 	SetSettlement(ctx context.Context, caller, id uuid.UUID, chain, asset string, enabled bool) (MaxID, error)
 	RemoveSettlement(ctx context.Context, caller, id uuid.UUID) (MaxID, error)

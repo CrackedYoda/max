@@ -118,6 +118,8 @@ func NewRouter(d Deps) *gin.Engine {
 	ids.PATCH("/:id", d.MaxIDs.UpdateProfile)
 	ids.PUT("/:id/destinations/:namespace", d.MaxIDs.SetDestination)
 	ids.DELETE("/:id/destinations/:namespace", d.MaxIDs.RemoveDestination)
+	ids.PUT("/:id/chain-destinations/:chain", d.MaxIDs.SetChainDestination)
+	ids.DELETE("/:id/chain-destinations/:chain", d.MaxIDs.RemoveChainDestination)
 	ids.PUT("/:id/settlement", d.MaxIDs.SetSettlement)
 	ids.DELETE("/:id/settlement", d.MaxIDs.RemoveSettlement)
 	ids.GET("/:id/history", d.Renames.History)

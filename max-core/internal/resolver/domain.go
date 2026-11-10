@@ -19,7 +19,11 @@ type Profile struct {
 	ResolutionVersion int64
 	// OwnerChangedAt is the raw timestamp; the service drops it once stale.
 	OwnerChangedAt *time.Time
-	Destinations   map[chains.Namespace]string
+	// Destinations are the namespace defaults.
+	Destinations map[chains.Namespace]string
+	// Overrides send one chain (by key) to a different address than its
+	// namespace default.
+	Overrides map[string]string
 	// Settlement is set only when the owner has an enabled conversion preference.
 	Settlement *Settlement
 }
@@ -63,4 +67,14 @@ type Resolution struct {
 type ChainReach struct {
 	Chain     chains.Chain
 	Reachable bool
+}
+
+// AddressFor returns where payments on c go: the chain's override, else its
+// namespace default.
+func (p Profile) AddressFor(c chains.Chain) (string, bool) {
+	if a, ok := p.Overrides[c.Key]; ok {
+		return a, true
+	}
+	a, ok := p.Destinations[c.Namespace]
+	return a, ok
 }

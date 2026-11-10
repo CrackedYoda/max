@@ -39,6 +39,13 @@ func (r *repository) GetProfile(ctx context.Context, canonical string) (Profile,
 		ResolutionVersion: row.ResolutionVersion, OwnerChangedAt: row.OwnerChangedAt, Destinations: make(map[chains.Namespace]string, len(dests)),
 	}
 	for _, d := range dests {
+		if d.ChainKey != nil {
+			if p.Overrides == nil {
+				p.Overrides = map[string]string{}
+			}
+			p.Overrides[*d.ChainKey] = d.Address
+			continue
+		}
 		p.Destinations[chains.Namespace(d.ChainNamespace)] = d.Address
 	}
 

@@ -24,8 +24,8 @@ func TestDestinationResponse_Source(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		`{"namespace":"solana","address":"So1","source":"wallet","verified":true,"walletId":"` + w.String() + `"`,
-		`{"namespace":"bitcoin","address":"bc1q","source":"pasted","verified":false,"walletId":null`,
+		`{"namespace":"solana","chain":null,"address":"So1","source":"wallet","verified":true,"walletId":"` + w.String() + `"`,
+		`{"namespace":"bitcoin","chain":null,"address":"bc1q","source":"pasted","verified":false,"walletId":null`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in %s", want, s)
@@ -52,5 +52,17 @@ func TestDestinationRequest_ExactlyOneTarget(t *testing.T) {
 		if err != nil && !errors.Is(err, shared.ErrValidation) {
 			t.Errorf("%s: err = %v, want validation error", c.name, err)
 		}
+	}
+}
+
+func TestDestinationResponse_Chain(t *testing.T) {
+	m := MaxID{CanonicalName: "yoda", Destinations: []Destination{
+		{Namespace: chains.NamespaceEVM, Address: "0x52908400098527886e0f7030069857d2e4169ee7", Pasted: true},
+		{Namespace: chains.NamespaceEVM, ChainKey: "bnb", Address: "0x52908400098527886e0f7030069857d2e4169ee7", Pasted: true},
+	}}
+	b, _ := json.Marshal(toMaxIDResponse(m))
+	s := string(b)
+	if !strings.Contains(s, `"chain":null`) || !strings.Contains(s, `"chain":"bnb"`) {
+		t.Errorf("chain field missing: %s", s)
 	}
 }
