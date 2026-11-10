@@ -149,7 +149,7 @@ func (s *service) replay(ctx context.Context, maxID uuid.UUID, p payments.Paymen
 }
 
 func (s *service) feeOption(chainKey, asset string) (FeeOption, error) {
-	chain, ok := chains.Lookup(chainKey)
+	chain, ok := chains.LookupSendable(chainKey)
 	if !ok {
 		return FeeOption{}, ErrFeeOption
 	}

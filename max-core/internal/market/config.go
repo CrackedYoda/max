@@ -132,7 +132,7 @@ func ParseAssets(s string) ([]Asset, error) {
 		if !ok {
 			return nil, fmt.Errorf("MARKET_ASSETS entry %q must be chain:asset", raw)
 		}
-		chain, ok := chains.Lookup(key)
+		chain, ok := chains.LookupSendable(key)
 		if !ok {
 			return nil, fmt.Errorf("MARKET_ASSETS entry %q: unknown chain", raw)
 		}
@@ -158,7 +158,7 @@ func ParseAssets(s string) ([]Asset, error) {
 
 // asset returns the accepted asset for a chain key and address, if any.
 func (c Config) asset(chainKey, addr string) (Asset, bool) {
-	chain, ok := chains.Lookup(chainKey)
+	chain, ok := chains.LookupSendable(chainKey)
 	if !ok {
 		return Asset{}, false
 	}

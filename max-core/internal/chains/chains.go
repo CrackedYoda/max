@@ -7,9 +7,11 @@ import "strings"
 type Namespace string
 
 const (
-	NamespaceEVM     Namespace = "evm"
-	NamespaceSolana  Namespace = "solana"
-	NamespaceBitcoin Namespace = "bitcoin"
+	NamespaceEVM      Namespace = "evm"
+	NamespaceSolana   Namespace = "solana"
+	NamespaceBitcoin  Namespace = "bitcoin"
+	NamespaceLitecoin Namespace = "litecoin"
+	NamespaceTron     Namespace = "tron"
 )
 
 type Chain struct {
@@ -25,6 +27,9 @@ type Chain struct {
 	// payment completed. Solana payments wait for "finalized" commitment instead.
 	Confirmations int64  `json:"confirmations"`
 	ExplorerTxURL string `json:"explorerTxUrl"`
+	// ReceiveOnly chains resolve names to pasted addresses, but MAX never
+	// sends, tracks, routes or settles on them.
+	ReceiveOnly bool `json:"receiveOnly"`
 }
 
 // Supported is the explicit list of chains MAX resolves for. Anything not
@@ -35,6 +40,9 @@ var Supported = []Chain{
 	{Key: "arbitrum", Name: "Arbitrum One", Namespace: NamespaceEVM, EVMChainID: 42161, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 2, ExplorerTxURL: "https://arbiscan.io/tx/"},
 	{Key: "optimism", Name: "OP Mainnet", Namespace: NamespaceEVM, EVMChainID: 10, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 2, ExplorerTxURL: "https://optimistic.etherscan.io/tx/"},
 	{Key: "polygon", Name: "Polygon PoS", Namespace: NamespaceEVM, EVMChainID: 137, NativeCoin: "POL", NativeDecimals: 18, Confirmations: 20, ExplorerTxURL: "https://polygonscan.com/tx/"},
+	{Key: "bitcoin", Name: "Bitcoin", Namespace: NamespaceBitcoin, NativeCoin: "BTC", NativeDecimals: 8, ExplorerTxURL: "https://mempool.space/tx/", ReceiveOnly: true},
+	{Key: "litecoin", Name: "Litecoin", Namespace: NamespaceLitecoin, NativeCoin: "LTC", NativeDecimals: 8, ExplorerTxURL: "https://litecoinspace.org/tx/", ReceiveOnly: true},
+	{Key: "tron", Name: "Tron", Namespace: NamespaceTron, NativeCoin: "TRX", NativeDecimals: 6, ExplorerTxURL: "https://tronscan.org/#/transaction/", ReceiveOnly: true},
 	{Key: "solana", Name: "Solana", Namespace: NamespaceSolana, NativeCoin: "SOL", NativeDecimals: 9, ExplorerTxURL: "https://solscan.io/tx/"},
 	{Key: "sepolia", Name: "Ethereum Sepolia", Namespace: NamespaceEVM, EVMChainID: 11155111, Testnet: true, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 1, ExplorerTxURL: "https://sepolia.etherscan.io/tx/"},
 	{Key: "base-sepolia", Name: "Base Sepolia", Namespace: NamespaceEVM, EVMChainID: 84532, Testnet: true, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 1, ExplorerTxURL: "https://sepolia.basescan.org/tx/"},
@@ -60,6 +68,16 @@ func IsLinkable(ns Namespace) bool {
 	return ns == NamespaceEVM || ns == NamespaceSolana
 }
 
+// IsPasteable reports whether owners may set a destination in this namespace
+// by pasting an address, without a wallet ownership proof.
+func IsPasteable(ns Namespace) bool {
+	switch ns {
+	case NamespaceEVM, NamespaceSolana, NamespaceBitcoin, NamespaceLitecoin, NamespaceTron:
+		return true
+	}
+	return false
+}
+
 func ParseNamespace(s string) (Namespace, bool) {
 	switch Namespace(strings.ToLower(strings.TrimSpace(s))) {
 	case NamespaceEVM:
@@ -68,6 +86,20 @@ func ParseNamespace(s string) (Namespace, bool) {
 		return NamespaceSolana, true
 	case NamespaceBitcoin:
 		return NamespaceBitcoin, true
+	case NamespaceLitecoin:
+		return NamespaceLitecoin, true
+	case NamespaceTron:
+		return NamespaceTron, true
 	}
 	return "", false
+}
+
+// LookupSendable is Lookup for paths that move money: receive-only chains
+// are treated as unknown.
+func LookupSendable(key string) (Chain, bool) {
+	c, ok := Lookup(key)
+	if !ok || c.ReceiveOnly {
+		return Chain{}, false
+	}
+	return c, true
 }

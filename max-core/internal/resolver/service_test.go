@@ -60,7 +60,7 @@ func TestResolve(t *testing.T) {
 		{"USDC on base", "MAX.YODA", "base", usdcBase, chains.ChecksumEVMAddress(evmAddr), AssetToken, 0, nil},
 		{"testnet carries a note", "yoda", "solana-devnet", "", solAddr, AssetNative, 1, nil},
 		{"no matching wallet never guesses", "solonly", "ethereum", "", "", "", 0, ErrNoDestination},
-		{"unknown chain", "yoda", "tron", "", "", "", 0, ErrUnsupportedChain},
+		{"unknown chain", "yoda", "dogecoin", "", "", "", 0, ErrUnsupportedChain},
 		{"evm asset on solana", "yoda", "solana", usdcBase, "", "", 0, ErrInvalidAsset},
 		{"symbol is not an asset id", "yoda", "solana", "BONK", "", "", 0, ErrInvalidAsset},
 		{"unknown id", "nobody", "solana", "", "", "", 0, ErrMaxIDNotFound},

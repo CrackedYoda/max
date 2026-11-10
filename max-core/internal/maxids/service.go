@@ -189,7 +189,7 @@ func (s *service) RemoveDestination(ctx context.Context, caller, id uuid.UUID, n
 }
 
 func (s *service) SetSettlement(ctx context.Context, caller, id uuid.UUID, chainKey, asset string, enabled bool) (MaxID, error) {
-	chain, ok := chains.Lookup(chainKey)
+	chain, ok := chains.LookupSendable(chainKey)
 	if !ok || chain.Testnet {
 		return MaxID{}, ErrSettlementChain
 	}
