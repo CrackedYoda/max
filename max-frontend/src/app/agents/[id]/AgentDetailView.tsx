@@ -151,7 +151,6 @@ function ApprovalCard({ agent, t }: { agent: AgentDetail; t: AgentTransfer }) {
         <span className={`text-[13px] ${expires === "expired" ? "text-danger" : "text-muted"}`}>{expires === "expired" ? "Expired" : `Expires ${expires}`}</span>
       </div>
       <dl className="m-0 grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
-        <div className="flex flex-col gap-1"><dt className="text-[13px] text-muted">Resolved address</dt><dd className="m-0 break-all font-mono text-[13px]">{p.recipient.address}</dd></div>
         <div className="flex flex-col gap-1"><dt className="text-[13px] text-muted">From</dt><dd className="m-0 font-mono text-[13px]">{shortAddress(p.senderAddress)}</dd></div>
         <div className="flex flex-col gap-1"><dt className="text-[13px] text-muted">Why it’s held</dt><dd className="m-0">
           {t.authorization.reasons.length ? (

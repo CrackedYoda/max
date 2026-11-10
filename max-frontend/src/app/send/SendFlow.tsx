@@ -313,13 +313,6 @@ function ReviewPanel(props: {
         <p className="m-0 flex flex-wrap items-center gap-2.5"><Handle name={r.handle} className="text-[26px]" /><KindBadge type={r.type} /></p>
         {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}”. Check it’s who you mean to pay.</span> : null}
       </div>
-      <div className="flex flex-col gap-2">
-        <span className="text-[13px] font-semibold text-muted">Resolved address</span>
-        <div className="flex items-center gap-2 rounded-xl border border-line bg-ivory py-1 pl-4 pr-1">
-          <code className="flex-1 break-all py-2.5 font-mono text-sm">{r.address}</code>
-          <CopyButton value={r.address} label="Copy full address" />
-        </div>
-      </div>
       <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
         <ReviewRow label="Network" value={<>{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</>} />
         {receiveChain ? <ReviewRow label="They receive" value={`${receiveChain.nativeCoin} on ${receiveChain.name}`} /> : null}
@@ -333,7 +326,7 @@ function ReviewPanel(props: {
       {props.error ? <Banner tone="danger">{props.error}</Banner> : null}
       <Button className="min-h-14 rounded-[14px] text-[17px]" loading={!!working} disabled={!ready || !!working} onClick={() => props.onConfirm(r)}>{label}</Button>
       {chain.namespace === "solana" && chain.testnet ? <p className="m-0 text-center text-[13px] text-muted">Set Phantom to Devnet before signing.</p> : null}
-      <p className="m-0 text-center text-[13px] text-muted">Check the address. Crypto transfers can’t be reversed.</p>
+      <p className="m-0 text-center text-[13px] text-muted">Crypto transfers can’t be reversed.</p>
     </div>
   );
 }

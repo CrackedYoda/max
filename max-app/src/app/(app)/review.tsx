@@ -233,19 +233,6 @@ function Review() {
             </View>
           ) : payment ? (
             <>
-              <View style={{ gap: 6 }}>
-                <AppText weight="semibold" size={12} color={colors.muted}>
-                  Resolved address
-                </AppText>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, padding: 12, borderRadius: 14, backgroundColor: colors.ivory, borderWidth: 1, borderColor: colors.line }}>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Mono size={14} selectable>
-                      {payment.recipient.address}
-                    </Mono>
-                  </View>
-                  <CopyButton value={payment.recipient.address} label="Copy full address" what="Address copied" />
-                </View>
-              </View>
               <View>
                 <ReviewRow label="Network">
                   <AppText weight="semibold" size={14}>
