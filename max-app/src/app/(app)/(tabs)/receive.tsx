@@ -71,7 +71,7 @@ export default function Receive() {
                   toast(`${id.handle} copied`);
                 }}
               />
-              <Button style={{ flex: 1 }} size="md" icon="share" label="Share" onPress={() => Share.share({ message: `Pay me at ${id.handle} — ${link}` })} />
+              <Button style={{ flex: 1 }} size="md" icon="share" label="Share" onPress={() => Share.share({ message: `Pay me at ${id.handle}: ${link}` })} />
             </View>
             <AppText variant="small" style={{ textAlign: 'center' }}>
               Senders only need your handle. You don’t need to do anything to receive.

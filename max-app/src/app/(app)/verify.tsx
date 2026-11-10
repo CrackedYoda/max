@@ -92,10 +92,10 @@ export default function Verify() {
     if (!settled || (canonical && avail.isFetching && !avail.data)) message = 'Checking…';
     else if (!canonical) [tone, message] = ['danger', 'Use 3–32 lowercase letters, numbers or hyphens.'];
     else if (avail.error) [tone, message] = ['danger', errorMessage(avail.error)];
-    else if (a?.available) [tone, message] = ['danger', `${a.handle} isn’t reserved — anyone can claim it.`];
+    else if (a?.available) [tone, message] = ['danger', `${a.handle} isn’t reserved. Anyone can claim it.`];
     else if (blocked) [tone, message] = ['danger', `${a!.handle} is permanently reserved and can’t be claimed.`];
-    else if (reservedFor && match && fresh) [tone, message] = ['success', `Reserved for @${reservedFor} — you verified that account ${relativeTime(match.verifiedAt)}.`];
-    else if (reservedFor && match) message = `You verified @${reservedFor} ${relativeTime(match.verifiedAt)}. Claims need a verification from the last 15 minutes — verify again.`;
+    else if (reservedFor && match && fresh) [tone, message] = ['success', `Reserved for @${reservedFor}. You verified that account ${relativeTime(match.verifiedAt)}.`];
+    else if (reservedFor && match) message = `You verified @${reservedFor} ${relativeTime(match.verifiedAt)}. Claims need a verification from the last 15 minutes. Verify again.`;
     else if (reservedFor) message = `Reserved for @${reservedFor} on X. Verify that account to claim it.`;
     else if (a) [tone, message] = ['danger', `${a.handle} isn’t available.`];
   }
@@ -124,7 +124,7 @@ export default function Verify() {
       {result?.kind === 'verified' ? (
         <Banner tone="success" title={`Verified @${result.verification.username}`}>
           {result.renewed > 0 ? `Also renewed ${result.renewed} reserved ${result.renewed === 1 ? 'name' : 'names'}. ` : ''}
-          {name ? 'Claim your name now — the verification is fresh for 15 minutes.' : 'You can claim names reserved for this account.'}
+          {name ? 'Claim your name now. The verification is valid for 15 minutes.' : 'You can claim names reserved for this account.'}
         </Banner>
       ) : null}
 

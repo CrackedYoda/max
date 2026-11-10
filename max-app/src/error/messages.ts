@@ -7,7 +7,7 @@ import { isMaxApiError, MaxNetworkError } from '@max/sdk';
 const COPY: Record<string, string> = {
   MAX_ID_TAKEN: 'Someone already claimed that name. Try another.',
   MAX_ID_RESERVED: 'That name is reserved and can’t be claimed.',
-  MAX_ID_VERIFICATION_REQUIRED: 'Reserved — it can only be claimed by verifying the matching X account.',
+  MAX_ID_VERIFICATION_REQUIRED: 'This name is reserved. Verify the matching X account to claim it.',
   MAX_ID_LIMIT_REACHED: 'You’ve reached the limit of MAX IDs for this account.',
   MAX_ID_QUARANTINED: 'That name was released recently and is temporarily unavailable.',
   INVALID_MAX_ID: 'Use 3–32 lowercase letters, numbers or hyphens.',
@@ -42,7 +42,7 @@ const COPY: Record<string, string> = {
   OAUTH_STATE_INVALID: 'That X sign-in expired. Start again.',
   OAUTH_SESSION_MISMATCH: 'Finish X verification on the same phone and session you started it on.',
   X_PROVIDER_ERROR: 'X didn’t respond. Try again in a moment.',
-  NAME_NOT_RESERVED: 'That name isn’t reserved — claim it normally.',
+  NAME_NOT_RESERVED: 'That name isn’t reserved. Claim it normally.',
   RESERVED_CLAIM_EXISTS: 'You’ve already claimed that name.',
   // Marketplace (spec §9) and the name guards it adds.
   MARKET_DISABLED: 'The marketplace isn’t open yet.',

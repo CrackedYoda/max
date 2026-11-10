@@ -256,7 +256,7 @@ function Review() {
                     {sender?.label ?? 'Account'} · <Mono size={14}>{shortAddress(terms.senderAddress)}</Mono>
                   </AppText>
                 </ReviewRow>
-                <ReviewRow label="Network fee">{fee === undefined ? '…' : fee === null ? '—' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
+                <ReviewRow label="Network fee">{fee === undefined ? '…' : fee === null ? 'Unavailable' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
                 <ReviewRow label="Resolution" last>
                   <Mono size={14}>v{payment.recipient.resolutionVersion}</Mono>
                 </ReviewRow>
@@ -327,7 +327,7 @@ function Sent({ payment: initial, ambiguous, onDone }: { payment: Payment; ambig
       </View>
       {ambiguous && !terminal ? (
         <AppText variant="small" style={{ textAlign: 'center' }}>
-          The connection dropped while sending. MAX is checking the network for it — it won’t be sent twice.
+          The connection dropped while sending. MAX is checking the network for it, so it won’t be sent twice.
         </AppText>
       ) : null}
       {p.txHash ? (

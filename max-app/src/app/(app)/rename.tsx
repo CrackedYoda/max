@@ -429,7 +429,7 @@ function RenameProgress({
           <>
             <StatusPill status={p.status} />
             <AppText variant="small" style={{ textAlign: 'center' }}>
-              This updates on its own. You can leave — the rename finishes without you.
+              This updates on its own. You can leave. The rename finishes without you.
             </AppText>
           </>
         ) : null}
