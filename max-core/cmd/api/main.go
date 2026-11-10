@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/max/max-core/internal/config"
 	"github.com/max/max-core/internal/database"
 	"github.com/max/max-core/internal/evmrpc"
+	"github.com/max/max-core/internal/holdings"
 	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/market/settle"
 	"github.com/max/max-core/internal/maxids"
@@ -177,6 +179,7 @@ func run() error {
 		Wallets:        wallets.NewHandler(walletSvc),
 		MaxIDs:         maxids.NewHandler(maxidSvc),
 		Resolver:       resolver.NewHandler(resolverSvc),
+		Holdings:       holdings.NewHandler(newHoldings(cfg)),
 		Payments:       payments.NewHandler(paymentSvc),
 		Market:         market.NewHandler(marketSvc),
 	})
@@ -233,6 +236,34 @@ func newMarket(cfg config.Config, pool *pgxpool.Pool, namer maxids.DefaultNamer,
 // newRegistrationGate builds the MAX ID claim balance gate. It counts wallets
 // on every chain that has an RPC URL, skipping testnets in production. With a
 // zero minimum it never touches wallets, RPC or the price feed.
+// newHoldings lists wallet tokens through Alchemy, falling back to native
+// balances over each chain's RPC URL (testnets, or no Alchemy key).
+func newHoldings(cfg config.Config) *holdings.Service {
+	natives := map[string]holdings.NativeReader{}
+	for _, c := range chains.Supported {
+		url, ok := cfg.Payments.RPCURLs[c.Key]
+		if !ok || c.ReceiveOnly {
+			continue
+		}
+		switch c.Namespace {
+		case chains.NamespaceEVM:
+			cl := evmrpc.New(url)
+			natives[c.Key] = cl.Balance
+		case chains.NamespaceSolana:
+			cl := solanarpc.New(url)
+			natives[c.Key] = func(ctx context.Context, owner string) (*big.Int, error) {
+				lamports, err := cl.Balance(ctx, owner)
+				return new(big.Int).SetUint64(lamports), err
+			}
+		}
+	}
+	var src holdings.Source
+	if cfg.AlchemyAPIKey != "" {
+		src = holdings.NewAlchemy(holdings.AlchemyConfig{APIKey: cfg.AlchemyAPIKey})
+	}
+	return holdings.NewService(src, natives)
+}
+
 func newRegistrationGate(cfg config.Config, wallets maxids.WalletLister) maxids.BalanceGate {
 	feed := pricing.NewCached(
 		pricing.NewCoinGecko(cfg.Pricing.URL, cfg.Pricing.APIKey, &http.Client{Timeout: 10 * time.Second}),

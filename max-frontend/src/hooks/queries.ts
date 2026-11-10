@@ -42,6 +42,17 @@ export function useProfile(handle: string) {
 }
 
 /** Fresh resolution for review. Never cached for long: senders must see the current wallet. */
+/** Every token the wallet holds on the chain, for the Send asset list. */
+export function useHoldings(chain: string | undefined, address: string | undefined) {
+  return useQuery({
+    queryKey: keys.holdings(chain ?? "", address ?? ""),
+    queryFn: () => max().holdings(chain!, address!),
+    enabled: !!chain && !!address,
+    staleTime: 20_000,
+    retry: 1,
+  });
+}
+
 export function useResolve(handle: string | null, chain: string, asset: string) {
   return useQuery({
     queryKey: keys.resolve(handle ?? "", chain, asset),

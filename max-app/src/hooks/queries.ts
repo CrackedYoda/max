@@ -51,6 +51,17 @@ export function useResolve(handle: string | null, chain: string, asset: string) 
 
 // ---- on-chain balances (no MAX involved) ----
 
+/** Every token the wallet holds on the chain, for the Send asset list. */
+export function useHoldings(chain: string | undefined, address: string | undefined) {
+  return useQuery({
+    queryKey: keys.holdings(chain ?? '', address ?? ''),
+    queryFn: () => max().holdings(chain!, address!),
+    enabled: !!chain && !!address,
+    staleTime: 20_000,
+    retry: 1,
+  });
+}
+
 export function useBalances() {
   const accounts = useSession((s) => s.accounts);
   const { chains } = useUsableChains();

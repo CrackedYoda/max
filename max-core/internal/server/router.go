@@ -12,6 +12,7 @@ import (
 
 	"github.com/max/max-core/internal/agents"
 	"github.com/max/max-core/internal/auth"
+	"github.com/max/max-core/internal/holdings"
 	"github.com/max/max-core/internal/market"
 	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/middleware"
@@ -39,6 +40,7 @@ type Deps struct {
 	Wallets        *wallets.Handler
 	MaxIDs         *maxids.Handler
 	Resolver       *resolver.Handler
+	Holdings       *holdings.Handler
 	Payments       *payments.Handler
 	Market         *market.Handler
 }
@@ -88,6 +90,9 @@ func NewRouter(d Deps) *gin.Engine {
 	// Public
 	v1.GET("/chains", d.Resolver.Chains)
 	v1.GET("/resolve/:maxId", lookupLimit, d.Resolver.Resolve)
+	if d.Holdings != nil {
+		v1.GET("/holdings", lookupLimit, d.Holdings.List)
+	}
 	v1.GET("/profiles/:maxId", lookupLimit, d.Resolver.Profile)
 	v1.GET("/ids/availability", lookupLimit, d.MaxIDs.Availability)
 	v1.GET("/agent-authorizations/keys", d.Agents.PublicKeys)

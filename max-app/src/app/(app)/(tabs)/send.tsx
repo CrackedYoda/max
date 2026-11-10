@@ -5,14 +5,14 @@ import { ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { AppText } from '@/components/ui/AppText';
 import { Banner, Choice } from '@/components/ui/Blocks';
-import { Button, IconButton } from '@/components/ui/Button';
+import { Button, IconButton, LinkButton } from '@/components/ui/Button';
 import { HandleField, Keypad } from '@/components/ui/Fields';
 import { Icon } from '@/components/ui/Icon';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { USDC } from '@/config/env';
 import { errorMessage } from '@/error/messages';
-import { useBalances, useChains, useResolve, useUsableChains } from '@/hooks/queries';
+import { useBalances, useChains, useHoldings, useResolve, useUsableChains } from '@/hooks/queries';
 import { useDebounced } from '@/hooks/useDebounced';
 import { useSendDraft } from '@/store/flows';
 import { useSession } from '@/store/session';
@@ -20,6 +20,14 @@ import { colors, fonts } from '@/theme';
 import { applyAmountKey, formatAmount, isPositiveAmount } from '@/utils/amount';
 import { shortAddress } from '@/utils/format';
 import { stripPrefix } from '@/validation/identity';
+
+/** USD with cents, or "<$0.01" for dust. */
+function usd(v: string | number): string | null {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (n > 0 && n < 0.01) return '<$0.01';
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
 export default function Send() {
   const params = useLocalSearchParams<{ to?: string }>();
@@ -50,13 +58,18 @@ export default function Send() {
 
   const chain: Chain | undefined = chains.find((c) => c.key === chainKey) ?? chains[0];
   const usdc = chain ? USDC[chain.key] : undefined;
-  const assetParam = asset !== 'native' && usdc ? usdc : 'native';
-  const symbol = assetParam === 'native' ? (chain?.nativeCoin ?? '') : 'USDC';
-  const decimals = assetParam === 'native' ? (chain?.nativeDecimals ?? 18) : 6;
-
   const sender = chain ? accounts.find((a) => (chain.namespace === 'evm' ? a.evm : a.solana)) : undefined;
   const senderAddress = chain ? (chain.namespace === 'evm' ? sender?.evm : sender?.solana) : undefined;
-  const available = balances.data?.find((b) => b.chain.key === chain?.key && b.asset === assetParam && b.address === senderAddress);
+  // Every token this account holds here; without it, native and USDC as before.
+  const holdings = useHoldings(chain?.key, senderAddress);
+  const held = holdings.data?.find((h) => (asset === 'native' ? h.kind === 'native' : h.address.toLowerCase() === asset.toLowerCase()));
+  const assetParam = held ? (held.kind === 'native' ? 'native' : held.address) : asset !== 'native' && usdc ? usdc : 'native';
+  const symbol = held ? held.symbol : assetParam === 'native' ? (chain?.nativeCoin ?? '') : 'USDC';
+  const decimals = held ? held.decimals : assetParam === 'native' ? (chain?.nativeDecimals ?? 18) : 6;
+  const balanceFallback = balances.data?.find((b) => b.chain.key === chain?.key && b.asset === assetParam && b.address === senderAddress);
+  const available = held ? { amount: held.balance.display } : balanceFallback;
+  const worth = held?.valueUsd != null ? usd(held.valueUsd) : null;
+  const typedUsd = held?.priceUsd && isPositiveAmount(amount) ? usd(Number(amount) * Number(held.priceUsd)) : null;
 
   const receiveOptions = (allChains.data ?? []).filter((c) => c.receiveOnly && !c.testnet);
   const receiveChain = chain && !chain.testnet ? receiveOptions.find((c) => c.key === receiveKey) : undefined;
@@ -141,7 +154,14 @@ export default function Send() {
         </ScrollView>
       </View>
 
-      {usdc ? (
+      {holdings.data ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="radiogroup" accessibilityLabel="Asset" contentContainerStyle={{ gap: 8 }}>
+          {holdings.data.map((h) => {
+            const key = h.kind === 'native' ? 'native' : h.address;
+            return <Choice key={key} pill label={h.verified ? h.symbol || 'Unknown' : `${h.symbol || 'Unknown'} · Unverified`} selected={held ? held === h : key === 'native'} onPress={() => (setAsset(key), setAmount('0'))} />;
+          })}
+        </ScrollView>
+      ) : usdc ? (
         <View accessibilityRole="radiogroup" accessibilityLabel="Asset" style={{ flexDirection: 'row', gap: 8 }}>
           <Choice pill label={chain.nativeCoin} selected={assetParam === 'native'} onPress={() => (setAsset('native'), setAmount('0'))} />
           <Choice pill label="USDC" selected={assetParam !== 'native'} onPress={() => (setAsset('usdc'), setAmount('0'))} />
@@ -162,11 +182,15 @@ export default function Send() {
         <AppText accessibilityLabel={`${amount} ${symbol}`} numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: fonts.display, fontSize: compact ? 40 : 52, letterSpacing: -1 }}>
           {amount} <AppText style={{ fontFamily: fonts.display, fontSize: compact ? 22 : 28, color: colors.muted }}>{symbol}</AppText>
         </AppText>
-        <AppText variant="small" color={over ? colors.danger : colors.muted}>
-          {over
-            ? `More than your ${formatAmount(available!.amount)} ${symbol}`
-            : `Available: ${available ? formatAmount(available.amount) : '…'} ${symbol}${senderAddress ? ` · ${shortAddress(senderAddress)}` : ''}`}
-        </AppText>
+        {typedUsd ? <AppText variant="small">≈ {typedUsd}</AppText> : null}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.sunken, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6 }}>
+          <AppText variant="small" color={over ? colors.danger : colors.body} numberOfLines={1} style={{ flexShrink: 1 }}>
+            {over
+              ? `More than your ${formatAmount(available!.amount)} ${symbol}`
+              : `Balance ${available ? formatAmount(available.amount) : '…'} ${symbol}${held ? ` · ${worth ? `≈ ${worth}` : 'No price'}` : senderAddress ? ` · ${shortAddress(senderAddress)}` : ''}`}
+          </AppText>
+          {available && Number(available.amount) > 0 ? <LinkButton label="Max" weight="semibold" size={13} color={colors.clayText} onPress={() => setAmount(available.amount)} /> : null}
+        </View>
         {ownWallet ? (
           <AppText variant="small" color={colors.danger}>
             That’s your own wallet.

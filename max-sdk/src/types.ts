@@ -77,6 +77,23 @@ export interface Resolution {
   ownerChangedAt?: string;
 }
 
+/** One asset in a wallet, as listed for Send. */
+export interface Holding {
+  kind: "native" | "token";
+  /** Token contract or mint; empty for the native coin. */
+  address: string;
+  symbol: string;
+  name: string;
+  logo: string;
+  decimals: number;
+  balance: { raw: string; display: string };
+  /** Null when the token has no known price. */
+  priceUsd: string | null;
+  valueUsd: string | null;
+  /** Native coin, or on MAX's verified token list. */
+  verified: boolean;
+}
+
 export interface Destination {
   namespace: Namespace;
   /** Chain key when this overrides one EVM chain; null for the namespace default. */

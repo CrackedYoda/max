@@ -12,7 +12,6 @@ import { StatusPill } from '@/components/payments/PaymentRow';
 import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, ReviewRow } from '@/components/ui/Blocks';
 import { Button, IconButton, LinkButton } from '@/components/ui/Button';
-import { CopyButton } from '@/components/ui/Fields';
 import { Icon } from '@/components/ui/Icon';
 import { ChainLogo } from '@/components/ui/ChainLogo';
 import { max } from '@/api/client';

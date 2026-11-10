@@ -22,6 +22,7 @@ import {
   type MaxId,
   type MaxIdType,
   type Namespace,
+  type Holding,
   type DestinationTarget,
   type Payment,
   type PrepareTransferInput,
@@ -93,6 +94,11 @@ export class MaxClient {
   /** Supported chains. Anything not listed is refused rather than guessed. */
   chains(): Promise<Chain[]> {
     return this.http.get("/v1/chains");
+  }
+
+  /** Every token a wallet holds on a chain MAX can send from, with USD prices where known. */
+  holdings(chain: string, address: string): Promise<Holding[]> {
+    return this.http.get("/v1/holdings", { query: { chain, address } });
   }
 
   /**

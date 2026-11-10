@@ -10,12 +10,12 @@ import { Handle } from "@/components/identity/Handle";
 import { StatusPill } from "@/components/payments/PaymentRow";
 import { Button } from "@/components/ui/Button";
 import { Banner, Card, KindBadge, ReviewRow, Skeleton } from "@/components/ui/Blocks";
-import { CopyButton } from "@/components/ui/Copy";
 import { cx } from "@/components/ui/cx";
 import { HandleInput, Segmented } from "@/components/ui/Fields";
 import { Icon } from "@/components/ui/Icon";
 import { errorCode, errorMessage } from "@/error/messages";
-import { useChains, usePayment, useResolve } from "@/hooks/queries";
+import { useChains, useHoldings, usePayment, useResolve } from "@/hooks/queries";
+import { BalanceBar, holdingKey, TokenPicker, usd } from "@/components/payments/TokenPicker";
 import { useDebounced } from "@/hooks/useDebounced";
 import { signAndSend } from "@/services/transfer";
 import { connectEvm, connectPhantom, discoverEvmProviders, WalletError, type ConnectedWallet, type EvmProviderInfo } from "@/services/wallets";
@@ -60,6 +60,13 @@ export function SendFlow() {
   const assetParam = assetMode === "token" && !tokenErr ? token.trim() : "native";
   const resolution = useResolve(handle, receiveChain?.key ?? chainKey, receiveChain ? "native" : assetMode === "token" && tokenErr ? "" : assetParam);
   const amountOk = amountSchema.safeParse(amount).success;
+  // The connected wallet's tokens on this network, once one is connected.
+  const sender = chain && wallet && wallet.namespace === chain.namespace ? wallet.address : undefined;
+  const holdings = useHoldings(chain?.key, sender);
+  const [pasting, setPasting] = useState(false);
+  const selectedKey = assetMode === "native" ? "native" : token.toLowerCase();
+  const selected = holdings.data?.find((h) => holdingKey(h) === selectedKey);
+  const typedUsd = selected?.priceUsd && amountOk ? usd(Number(amount) * Number(selected.priceUsd)) : null;
   const busy = phase.kind === "working";
 
   // Signing and recording must not be interrupted by an accidental tab close.
@@ -88,6 +95,16 @@ export function SendFlow() {
     }
     useWallet.getState().set(w);
     return w;
+  }
+
+  async function connectForTokens(c: Chain) {
+    setError(null);
+    try {
+      await ensureWallet(c);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+    setPhase({ kind: "review" });
   }
 
   async function confirm(r: Resolution) {
@@ -202,28 +219,55 @@ export function SendFlow() {
             </div>
           ) : null}
 
-          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0" disabled={!!receiveChain}>
+          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0" disabled={!!receiveChain || busy}>
             <legend className="mb-2.5 p-0 text-sm font-semibold">Asset</legend>
-            <Segmented label="Asset" value={assetMode} onChange={(v) => { editing(); setAssetMode(v); }}
-              options={[{ value: "native", label: `Native (${chain?.nativeCoin ?? "…"})` }, { value: "token", label: "Token by contract" }]} />
-            <label htmlFor="token" className="text-[13px] text-muted">Token contract / mint address</label>
-            <input id="token" value={token} disabled={assetMode !== "token" || busy}
-              onChange={(e) => { editing(); setToken(e.target.value.trim()); }}
-              placeholder="Paste the full contract or mint address" autoComplete="off" spellCheck={false}
-              aria-invalid={assetMode === "token" && !!token && !!tokenErr}
-              className="min-h-12 rounded-xl border border-line bg-surface px-4 font-mono text-sm outline-none focus:border-ink disabled:bg-ivory disabled:text-muted" />
-            {assetMode === "token" && token && tokenErr ? <p role="alert" className="m-0 text-[13px] text-danger">{tokenErr}</p> : null}
-            <p className="m-0 text-[13px] text-muted">Paste the token’s contract address.</p>
+            {chain && !sender ? (
+              <Button variant="secondary" onClick={() => connectForTokens(chain)}>
+                Connect {chain.namespace === "solana" ? "Phantom" : "wallet"} to see your tokens
+              </Button>
+            ) : holdings.isLoading ? (
+              <Skeleton className="h-36 w-full" />
+            ) : holdings.data && !pasting ? (
+              <TokenPicker holdings={holdings.data} selected={selectedKey}
+                onSelect={(h) => { editing(); if (h.kind === "native") setAssetMode("native"); else { setAssetMode("token"); setToken(h.address); } }} />
+            ) : null}
+            {holdings.error && !pasting ? <p className="m-0 text-[13px] text-muted">Couldn’t load your tokens. Send {chain?.nativeCoin ?? "the native coin"} or paste a token contract.</p> : null}
+            {pasting || holdings.error || (chain && !sender) ? (
+              <>
+                <Segmented label="Asset" value={assetMode} onChange={(v) => { editing(); setAssetMode(v); }}
+                  options={[{ value: "native", label: `Native (${chain?.nativeCoin ?? "…"})` }, { value: "token", label: "Token by contract" }]} />
+                {assetMode === "token" ? (
+                  <>
+                    <label htmlFor="token" className="text-[13px] text-muted">Token contract or mint address</label>
+                    <input id="token" value={token}
+                      onChange={(e) => { editing(); setToken(e.target.value.trim()); }}
+                      placeholder="Paste the full contract or mint address" autoComplete="off" spellCheck={false}
+                      aria-invalid={!!token && !!tokenErr}
+                      className="min-h-12 rounded-xl border border-line bg-surface px-4 font-mono text-sm outline-none focus:border-ink" />
+                    {token && tokenErr ? <p role="alert" className="m-0 text-[13px] text-danger">{tokenErr}</p> : null}
+                  </>
+                ) : null}
+              </>
+            ) : null}
+            {sender && holdings.data ? (
+              <button type="button" onClick={() => { setPasting((v) => !v); if (pasting) setAssetMode("native"); }}
+                className="self-start text-[13px] font-medium text-clay-text">{pasting ? "Back to your tokens" : "Paste a contract instead"}</button>
+            ) : null}
           </fieldset>
 
           <div className="flex flex-col gap-2.5">
             <label htmlFor="amount" className="text-sm font-semibold">Amount</label>
+            {selected && !receiveChain ? (
+              <BalanceBar holding={selected} disabled={busy} onMax={() => { editing(); setAmount(selected.balance.display); }} />
+            ) : null}
             <div className="field flex items-center gap-2 rounded-xl border border-line px-4 focus-within:border-ink">
               <input id="amount" value={amount} disabled={busy} inputMode="decimal" placeholder="0.00"
                 onChange={(e) => { editing(); setAmount(e.target.value.replace(",", ".")); }}
                 className="tabular min-h-12 min-w-0 flex-1 border-0 bg-transparent text-xl font-semibold outline-none" />
-              <span className="text-[15px] font-semibold text-muted">{assetMode === "native" ? chain?.nativeCoin : "tokens"}</span>
+              <span className="text-[15px] font-semibold text-muted">{selected?.symbol ?? (assetMode === "native" ? chain?.nativeCoin : "tokens")}</span>
             </div>
+            {typedUsd ? <p className="m-0 text-[13px] text-muted">≈ {typedUsd}</p> : null}
+            {selected?.kind === "native" && amount === selected.balance.display ? <p className="m-0 text-[13px] text-muted">Keep a little {selected.symbol} for the network fee.</p> : null}
             {amount && !amountOk ? <p role="alert" className="m-0 text-[13px] text-danger">Enter an amount like 0.25</p> : null}
           </div>
         </form>
