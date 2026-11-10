@@ -183,6 +183,39 @@ func (f *fakeRepo) SetPastedDestination(ctx context.Context, id, owner uuid.UUID
 	return m, nil
 }
 
+func (f *fakeRepo) SetChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string, walletID *uuid.UUID, address string) (MaxID, error) {
+	m, err := f.GetForOwner(ctx, id, owner)
+	if err != nil {
+		return MaxID{}, err
+	}
+	m.Destinations = append(m.Destinations, Destination{Namespace: chains.NamespaceEVM, ChainKey: chainKey, WalletID: walletID, Address: address, Pasted: walletID == nil})
+	m.ResolutionVersion++
+	f.ids[id] = m
+	return m, nil
+}
+
+func (f *fakeRepo) RemoveChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string) (MaxID, error) {
+	m, err := f.GetForOwner(ctx, id, owner)
+	if err != nil {
+		return MaxID{}, err
+	}
+	kept := m.Destinations[:0]
+	found := false
+	for _, d := range m.Destinations {
+		if d.ChainKey == chainKey {
+			found = true
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if !found {
+		return MaxID{}, ErrDestinationNotFound
+	}
+	m.Destinations = kept
+	f.ids[id] = m
+	return m, nil
+}
+
 func (f *fakeRepo) RemoveDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace) (MaxID, error) {
 	return f.GetForOwner(ctx, id, owner)
 }
@@ -519,5 +552,97 @@ func TestSetDestination_WalletOnPasteOnlyNamespace(t *testing.T) {
 		if _, err := svc.SetDestination(ctx, owner, m.ID, ns, uuid.New()); !errors.Is(err, ErrUnsupportedNamespace) {
 			t.Errorf("%s: err = %v", ns, err)
 		}
+	}
+}
+
+func TestChainDestination(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	evmAddr := "0x52908400098527886E0F7030069857D2E4169EE7"
+	tests := []struct {
+		name    string
+		chain   string
+		wallet  func(*fakeRepo) uuid.UUID
+		address string
+		wantErr error
+	}{
+		{"wallet override on bnb", "bnb", func(r *fakeRepo) uuid.UUID { return r.addWallet(owner, chains.NamespaceEVM) }, "", nil},
+		{"pasted override on base", "base", nil, evmAddr, nil},
+		{"solana wallet on an evm chain", "bnb", func(r *fakeRepo) uuid.UUID { return r.addWallet(owner, chains.NamespaceSolana) }, "", ErrNamespaceMismatch},
+		{"non-evm chain", "solana", nil, "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", ErrUnsupportedNamespace},
+		{"unknown chain", "dogechain", nil, evmAddr, ErrUnsupportedNamespace},
+		{"bad address", "avalanche", nil, "0x1234", ErrInvalidAddress},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepo()
+			svc := NewService(repo, nil)
+			m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+			var got MaxID
+			var err error
+			if tt.wallet != nil {
+				got, err = svc.SetChainDestination(ctx, owner, m.ID, tt.chain, tt.wallet(repo))
+			} else {
+				got, err = svc.PasteChainDestination(ctx, owner, m.ID, tt.chain, tt.address, true)
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := got.Destinations[len(got.Destinations)-1]
+			if d.ChainKey != tt.chain || d.Namespace != chains.NamespaceEVM {
+				t.Errorf("destination = %+v", d)
+			}
+			if tt.address != "" && d.Address != strings.ToLower(tt.address) {
+				t.Errorf("address = %s, want lowercase canonical", d.Address)
+			}
+		})
+	}
+}
+
+func TestPasteChainDestination_RequiresConfirmation(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	svc := NewService(newFakeRepo(), nil)
+	m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+	if _, err := svc.PasteChainDestination(ctx, owner, m.ID, "bnb", "0x52908400098527886e0f7030069857d2e4169ee7", false); !errors.Is(err, ErrConfirmationRequired) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRemoveChainDestination(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	svc := NewService(newFakeRepo(), nil)
+	m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+	if _, err := svc.RemoveChainDestination(ctx, owner, m.ID, "solana"); !errors.Is(err, ErrUnsupportedNamespace) {
+		t.Errorf("non-evm chain: err = %v", err)
+	}
+	svc.PasteChainDestination(ctx, owner, m.ID, "bnb", "0x52908400098527886e0f7030069857d2e4169ee7", true)
+	got, err := svc.RemoveChainDestination(ctx, owner, m.ID, "bnb")
+	if err != nil || len(got.Destinations) != 0 {
+		t.Fatalf("remove: %v %+v", err, got.Destinations)
+	}
+}
+
+func TestSetSettlement_AcceptsChainOverride(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	repo := newFakeRepo()
+	svc := NewService(repo, nil)
+	m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+	if _, err := svc.SetChainDestination(ctx, owner, m.ID, "base", repo.addWallet(owner, chains.NamespaceEVM)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetSettlement(ctx, owner, m.ID, "base", "native", true); err != nil {
+		t.Errorf("settlement on an overridden chain: %v", err)
+	}
+	if _, err := svc.SetSettlement(ctx, owner, m.ID, "arbitrum", "native", true); !errors.Is(err, ErrSettlementNoWallet) {
+		t.Errorf("settlement on a chain with no destination: %v", err)
 	}
 }

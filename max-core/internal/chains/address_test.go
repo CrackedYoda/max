@@ -133,3 +133,15 @@ func TestLookupSendable(t *testing.T) {
 		t.Error("base should be sendable")
 	}
 }
+
+func TestBNBAndAvalanche(t *testing.T) {
+	for key, want := range map[string]struct {
+		id   int64
+		coin string
+	}{"bnb": {56, "BNB"}, "avalanche": {43114, "AVAX"}} {
+		c, ok := LookupSendable(key)
+		if !ok || c.Namespace != NamespaceEVM || c.EVMChainID != want.id || c.NativeCoin != want.coin || c.NativeDecimals != 18 || c.Testnet {
+			t.Errorf("%s = %+v", key, c)
+		}
+	}
+}

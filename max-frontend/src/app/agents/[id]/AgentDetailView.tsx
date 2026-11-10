@@ -23,6 +23,7 @@ import { connectFor, WalletError } from "@/services/wallets";
 import { toast } from "@/store/flows";
 import { formatDate, humanizeReason, namespaceLabel, relativeTime, shortAddress, timeUntil } from "@/utils/format";
 import { stripPrefix } from "@/validation/identity";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 import { KeysSection } from "./KeysSection";
 import { PolicySection } from "./PolicySection";
@@ -270,7 +271,7 @@ function WalletsSection({ agent }: { agent: AgentDetail }) {
             <tbody>
               {agent.wallets.map((w, i) => (
                 <tr key={w.id}>
-                  <td className={`px-5 py-3.5 font-semibold ${i < agent.wallets.length - 1 ? "border-b border-line" : ""}`}>{namespaceLabel(w.namespace)}</td>
+                  <td className={`px-5 py-3.5 font-semibold ${i < agent.wallets.length - 1 ? "border-b border-line" : ""}`}><span className="inline-flex items-center gap-2"><ChainLogo chain={w.namespace} />{namespaceLabel(w.namespace)}</span></td>
                   <td className={`px-5 py-3.5 font-mono ${i < agent.wallets.length - 1 ? "border-b border-line" : ""}`} title={w.address}>{shortAddress(w.address, 6, 6)}</td>
                   <td className={`px-5 py-3.5 text-muted ${i < agent.wallets.length - 1 ? "border-b border-line" : ""}`}>{formatDate(w.verifiedAt)}</td>
                 </tr>
@@ -327,7 +328,7 @@ function ActivitySection({ agent }: { agent: AgentDetail }) {
                   <span aria-hidden="true" className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-sunken text-body"><Icon name="send" /></span>
                   <div className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm font-medium">To <span className="font-mono">{p.recipient.handle}</span></span>
-                    <span className="text-xs text-muted">{p.chain.name} · {relativeTime(p.createdAt)}</span>
+                    <span className="inline-flex items-center gap-1.5 text-xs text-muted"><ChainLogo chain={p.chain.key} size={14} />{p.chain.name} · {relativeTime(p.createdAt)}</span>
                   </div>
                   <Pill tone={d.tone} className="!px-2.5 !py-1 !text-xs">{d.label}</Pill>
                   <StatusPill status={p.status} />

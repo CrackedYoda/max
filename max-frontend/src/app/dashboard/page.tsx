@@ -16,6 +16,7 @@ import { errorCode, errorMessage } from "@/error/messages";
 import { useIsMarketAdmin, useMyIds, useRemoveWallet, useTransfers, useWallets } from "@/hooks/queries";
 import { toast } from "@/store/flows";
 import { formatDate, namespaceLabel, shortAddress } from "@/utils/format";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 export default function DashboardPage() {
   return (
@@ -107,7 +108,7 @@ function WalletsSection({ wallets, loading }: { wallets: Wallet[]; loading: bool
               <tr><td colSpan={4} className="px-5 py-6 text-muted">Loading…</td></tr>
             ) : wallets.map((w, i) => (
               <tr key={w.id}>
-                <td className={`px-5 py-3.5 font-semibold ${i < wallets.length - 1 ? "border-b border-line" : ""}`}>{namespaceLabel(w.namespace)}</td>
+                <td className={`px-5 py-3.5 font-semibold ${i < wallets.length - 1 ? "border-b border-line" : ""}`}><span className="inline-flex items-center gap-2"><ChainLogo chain={w.namespace} />{namespaceLabel(w.namespace)}</span></td>
                 <td className={`px-5 py-3.5 font-mono ${i < wallets.length - 1 ? "border-b border-line" : ""}`} title={w.address}>{shortAddress(w.address)}</td>
                 <td className={`px-5 py-3.5 text-muted ${i < wallets.length - 1 ? "border-b border-line" : ""}`}>{formatDate(w.verifiedAt)}</td>
                 <td className={`px-5 py-2 text-right ${i < wallets.length - 1 ? "border-b border-line" : ""}`}>

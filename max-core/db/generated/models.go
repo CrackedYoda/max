@@ -240,6 +240,7 @@ type MaxIDDestination struct {
 	UpdatedAt      time.Time
 	Address        *string
 	ConfirmedAt    *time.Time
+	ChainKey       *string
 }
 
 type MaxIDHistory struct {

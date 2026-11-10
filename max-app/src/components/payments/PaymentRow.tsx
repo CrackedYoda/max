@@ -3,6 +3,7 @@ import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Mono } from '@/components/ui/AppText';
 import { Pill } from '@/components/ui/Blocks';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { colors } from '@/theme';
 import { relativeTime, shortAddress } from '@/utils/format';
 
@@ -49,9 +50,12 @@ export function PaymentRow({ payment, direction }: { payment: Payment; direction
           {out ? 'To ' : 'From '}
           <Mono size={14}>{who}</Mono>
         </AppText>
-        <AppText variant="caption" numberOfLines={1}>
-          {payment.chain.name} · {relativeTime(payment.createdAt)}
-        </AppText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <ChainLogo chain={payment.chain.key} size={14} />
+          <AppText variant="caption" numberOfLines={1}>
+            {payment.chain.name} · {relativeTime(payment.createdAt)}
+          </AppText>
+        </View>
       </View>
       <View style={{ alignItems: 'flex-end', gap: 4 }}>
         <AppText weight="semibold" size={14} color={out ? colors.ink : colors.success}>

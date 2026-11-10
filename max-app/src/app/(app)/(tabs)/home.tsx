@@ -8,6 +8,7 @@ import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, Loading, SectionTitle } from '@/components/ui/Blocks';
 import { IconButton } from '@/components/ui/Button';
 import { Icon, type IconName } from '@/components/ui/Icon';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { errorMessage } from '@/error/messages';
 import { useActivity } from '@/hooks/useActivity';
@@ -186,9 +187,12 @@ function BalanceRow({ b, last }: { b: Balance; last: boolean }) {
         <AppText weight="semibold" size={15}>
           {b.name}
         </AppText>
-        <AppText variant="caption" numberOfLines={1}>
-          {b.chain.name} · <Mono size={12} color={colors.muted}>{shortAddress(b.address)}</Mono>
-        </AppText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <ChainLogo chain={b.chain.key} size={14} />
+          <AppText variant="caption" numberOfLines={1}>
+            {b.chain.name} · <Mono size={12} color={colors.muted}>{shortAddress(b.address)}</Mono>
+          </AppText>
+        </View>
       </View>
       <AppText weight="semibold" size={15}>
         {formatAmount(b.amount)} {b.symbol}

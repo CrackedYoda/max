@@ -17,6 +17,7 @@ const (
 	bonkMint = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 	usdcBase = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 	tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	bnbAddr  = "0x52908400098527886e0f7030069857d2e4169ee7"
 )
 
 type fakeRepo struct {
@@ -36,6 +37,15 @@ func newSvc() Service {
 		"yoda": {
 			MaxID: uuid.New(), CanonicalName: "yoda", Type: "human", ResolutionVersion: 3,
 			Destinations: map[chains.Namespace]string{chains.NamespaceSolana: solAddr, chains.NamespaceEVM: evmAddr, chains.NamespaceTron: tronAddr},
+		},
+		"split": {
+			MaxID: uuid.New(), CanonicalName: "split", Type: "human",
+			Destinations: map[chains.Namespace]string{chains.NamespaceEVM: evmAddr},
+			Overrides:    map[string]string{"bnb": bnbAddr},
+		},
+		"bnbonly": {
+			MaxID: uuid.New(), CanonicalName: "bnbonly", Type: "human",
+			Overrides: map[string]string{"bnb": bnbAddr},
 		},
 		"solonly": {
 			MaxID: uuid.New(), CanonicalName: "solonly", Type: "agent",
@@ -115,5 +125,38 @@ func TestResolve_ReceiveOnly(t *testing.T) {
 	}
 	if _, err := newSvc().Resolve(context.Background(), "yoda", "bitcoin", ""); !errors.Is(err, ErrNoDestination) {
 		t.Errorf("bitcoin without destination: err = %v", err)
+	}
+}
+
+func TestResolve_ChainOverride(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name, chain, want string
+		wantErr           error
+	}{
+		{"split", "bnb", chains.ChecksumEVMAddress(bnbAddr), nil},
+		{"split", "base", chains.ChecksumEVMAddress(evmAddr), nil},
+		{"bnbonly", "bnb", chains.ChecksumEVMAddress(bnbAddr), nil},
+		{"bnbonly", "base", "", ErrNoDestination},
+	} {
+		res, err := newSvc().Resolve(ctx, tt.name, tt.chain, "")
+		if tt.wantErr != nil {
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("%s on %s: err = %v", tt.name, tt.chain, err)
+			}
+			continue
+		}
+		if err != nil || res.Address != tt.want {
+			t.Errorf("%s on %s: got %q, %v", tt.name, tt.chain, res.Address, err)
+		}
+	}
+	_, reach, err := newSvc().Profile(ctx, "bnbonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range reach {
+		if want := r.Chain.Key == "bnb"; r.Reachable != want {
+			t.Errorf("bnbonly reach %s = %v", r.Chain.Key, r.Reachable)
+		}
 	}
 }

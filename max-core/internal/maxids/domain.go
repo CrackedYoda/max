@@ -57,6 +57,9 @@ func (m MaxID) Handle() string { return Handle(m.CanonicalName) }
 
 type Destination struct {
 	Namespace chains.Namespace
+	// ChainKey is set when this destination overrides one EVM chain; empty
+	// for the namespace default.
+	ChainKey string
 	// WalletID is the verified wallet behind the destination; nil when the
 	// owner pasted the address instead.
 	WalletID  *uuid.UUID

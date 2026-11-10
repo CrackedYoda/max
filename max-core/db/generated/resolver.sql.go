@@ -48,7 +48,7 @@ func (q *Queries) GetPublicMaxID(ctx context.Context, canonicalName string) (Get
 }
 
 const listPublicDestinations = `-- name: ListPublicDestinations :many
-SELECT d.chain_namespace, COALESCE(w.address, d.address)::text AS address
+SELECT d.chain_namespace, d.chain_key, COALESCE(w.address, d.address)::text AS address
 FROM max_id_destinations d
 LEFT JOIN wallets w ON w.id = d.wallet_id
 WHERE d.max_id = $1 AND (d.wallet_id IS NULL OR w.status = 'active')
@@ -57,6 +57,7 @@ ORDER BY d.chain_namespace
 
 type ListPublicDestinationsRow struct {
 	ChainNamespace string
+	ChainKey       *string
 	Address        string
 }
 
@@ -69,7 +70,7 @@ func (q *Queries) ListPublicDestinations(ctx context.Context, maxID uuid.UUID) (
 	var items []ListPublicDestinationsRow
 	for rows.Next() {
 		var i ListPublicDestinationsRow
-		if err := rows.Scan(&i.ChainNamespace, &i.Address); err != nil {
+		if err := rows.Scan(&i.ChainNamespace, &i.ChainKey, &i.Address); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

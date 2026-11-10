@@ -379,3 +379,20 @@ describe("pasted destinations", () => {
     for (const [ns, a] of bad) assert.ok(!looksLikeAddress(ns, a), `${ns} ${a}`);
   });
 });
+
+describe("per-chain destinations", () => {
+  test("setChainDestination and removeChainDestination hit the chain routes", async () => {
+    const { fetchFn, calls } = mockFetch({
+      "PUT /v1/ids/id_1/chain-destinations/bnb": ok({ id: "id_1", destinations: [{ namespace: "evm", chain: "bnb", source: "pasted" }] }),
+      "DELETE /v1/ids/id_1/chain-destinations/bnb": ok({ id: "id_1", destinations: [] }),
+    });
+    const c = client(fetchFn);
+    const m = await c.ids.setChainDestination("id_1", "bnb", { address: "0x52908400098527886e0f7030069857d2e4169ee7", confirmed: true });
+    assert.equal(m.destinations[0]!.chain, "bnb");
+    await c.ids.removeChainDestination("id_1", "bnb");
+    assert.deepEqual(calls.map((x) => `${x.method} ${x.path}`), [
+      "PUT /v1/ids/id_1/chain-destinations/bnb",
+      "DELETE /v1/ids/id_1/chain-destinations/bnb",
+    ]);
+  });
+});

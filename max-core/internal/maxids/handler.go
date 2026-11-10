@@ -120,6 +120,50 @@ func (h *Handler) SetDestination(c *gin.Context) {
 	shared.OK(c, toMaxIDResponse(m))
 }
 
+// SetChainDestination overrides one EVM chain with a wallet or a pasted address.
+func (h *Handler) SetChainDestination(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var req destinationRequest
+	if err := shared.BindJSON(c, &req); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	if err := req.validate(); err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	caller := shared.MustPrincipal(c).AccountID
+	var m MaxID
+	var err error
+	if req.Address != "" {
+		m, err = h.svc.PasteChainDestination(c.Request.Context(), caller, id, c.Param("chain"), req.Address, req.Confirmed)
+	} else {
+		m, err = h.svc.SetChainDestination(c.Request.Context(), caller, id, c.Param("chain"), uuid.MustParse(req.WalletID))
+	}
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.OK(c, toMaxIDResponse(m))
+}
+
+// RemoveChainDestination returns one EVM chain to the namespace default.
+func (h *Handler) RemoveChainDestination(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	m, err := h.svc.RemoveChainDestination(c.Request.Context(), shared.MustPrincipal(c).AccountID, id, c.Param("chain"))
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	shared.OK(c, toMaxIDResponse(m))
+}
+
 func (h *Handler) RemoveDestination(c *gin.Context) {
 	id, ok := pathID(c)
 	if !ok {

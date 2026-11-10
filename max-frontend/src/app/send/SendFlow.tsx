@@ -24,6 +24,7 @@ import { useWallet } from "@/store/wallet";
 import { shortAddress } from "@/utils/format";
 import { stripPrefix } from "@/validation/identity";
 import { amountSchema, tokenAddressError } from "@/validation/payment";
+import { ChainLogo } from "@/components/ui/ChainLogo";
 
 type Phase =
   | { kind: "review" }
@@ -177,9 +178,9 @@ export function SendFlow() {
                 return (
                   <button key={c.key} type="button" role="radio" aria-checked={on} disabled={busy}
                     onClick={() => { editing(); setChainKey(c.key); setToken(""); }}
-                    className={cx("inline-flex min-h-11 items-center rounded-[10px] px-3.5 text-sm text-ink",
+                    className={cx("inline-flex min-h-11 items-center gap-2 rounded-[10px] px-3.5 text-sm text-ink",
                       on ? "border-2 border-accent bg-clay-soft font-semibold" : "border border-line bg-surface font-medium hover:bg-sunken")}>
-                    {c.name}
+                    <ChainLogo chain={c.key} />{c.name}
                     {c.testnet ? <span className="ml-1.5 rounded-full bg-sunken px-1.5 text-[11px] font-semibold text-muted">Testnet</span> : null}
                   </button>
                 );
@@ -314,8 +315,8 @@ function ReviewPanel(props: {
         {r.displayName && r.displayName !== handle ? <span className="text-sm text-muted">Shown as “{r.displayName}”. Check it’s who you mean to pay.</span> : null}
       </div>
       <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
-        <ReviewRow label="Network" value={<>{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</>} />
-        {receiveChain ? <ReviewRow label="They receive" value={`${receiveChain.nativeCoin} on ${receiveChain.name}`} /> : null}
+        <ReviewRow label="Network" value={<span className="inline-flex items-center gap-1.5"><ChainLogo chain={chain.key} size={16} />{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</span>} />
+        {receiveChain ? <ReviewRow label="They receive" value={<span className="inline-flex items-center gap-1.5"><ChainLogo chain={receiveChain.key} size={16} />{receiveChain.nativeCoin} on {receiveChain.name}</span>} /> : null}
         <ReviewRow label="Asset" value={assetText} />
         <ReviewRow label="Resolution version" value={r.resolutionVersion} mono />
         <ReviewRow label="Network fee" value={<span className="font-normal">Set in your wallet</span>} />

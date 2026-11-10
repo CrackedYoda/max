@@ -232,8 +232,25 @@ func (q *Queries) DeleteAllDestinations(ctx context.Context, maxID uuid.UUID) er
 	return err
 }
 
+const deleteChainDestination = `-- name: DeleteChainDestination :execrows
+DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_key = $2
+`
+
+type DeleteChainDestinationParams struct {
+	MaxID    uuid.UUID
+	ChainKey *string
+}
+
+func (q *Queries) DeleteChainDestination(ctx context.Context, arg DeleteChainDestinationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteChainDestination, arg.MaxID, arg.ChainKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDestination = `-- name: DeleteDestination :execrows
-DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = $2
+DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = $2 AND chain_key IS NULL
 `
 
 type DeleteDestinationParams struct {
@@ -412,15 +429,16 @@ func (q *Queries) ListAccountIDRefs(ctx context.Context, ownerAccountID uuid.UUI
 }
 
 const listDestinations = `-- name: ListDestinations :many
-SELECT d.chain_namespace, d.wallet_id, d.updated_at, COALESCE(w.address, d.address)::text AS address
+SELECT d.chain_namespace, d.chain_key, d.wallet_id, d.updated_at, COALESCE(w.address, d.address)::text AS address
 FROM max_id_destinations d
 LEFT JOIN wallets w ON w.id = d.wallet_id
 WHERE d.max_id = $1 AND (d.wallet_id IS NULL OR w.status = 'active')
-ORDER BY d.chain_namespace
+ORDER BY d.chain_namespace, d.chain_key NULLS FIRST
 `
 
 type ListDestinationsRow struct {
 	ChainNamespace string
+	ChainKey       *string
 	WalletID       *uuid.UUID
 	UpdatedAt      time.Time
 	Address        string
@@ -437,6 +455,7 @@ func (q *Queries) ListDestinations(ctx context.Context, maxID uuid.UUID) ([]List
 		var i ListDestinationsRow
 		if err := rows.Scan(
 			&i.ChainNamespace,
+			&i.ChainKey,
 			&i.WalletID,
 			&i.UpdatedAt,
 			&i.Address,
@@ -669,6 +688,42 @@ func (q *Queries) UpdateMaxIDProfile(ctx context.Context, arg UpdateMaxIDProfile
 		&i.IsDefault,
 	)
 	return i, err
+}
+
+const upsertChainDestination = `-- name: UpsertChainDestination :exec
+INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, wallet_id)
+VALUES ($1, $3::text, $3::text, $2)
+ON CONFLICT (max_id, chain_namespace)
+DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now()
+`
+
+type UpsertChainDestinationParams struct {
+	MaxID    uuid.UUID
+	WalletID *uuid.UUID
+	ChainKey string
+}
+
+func (q *Queries) UpsertChainDestination(ctx context.Context, arg UpsertChainDestinationParams) error {
+	_, err := q.db.Exec(ctx, upsertChainDestination, arg.MaxID, arg.WalletID, arg.ChainKey)
+	return err
+}
+
+const upsertChainPastedDestination = `-- name: UpsertChainPastedDestination :exec
+INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, address, confirmed_at)
+VALUES ($1, $3::text, $3::text, $2, now())
+ON CONFLICT (max_id, chain_namespace)
+DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now()
+`
+
+type UpsertChainPastedDestinationParams struct {
+	MaxID    uuid.UUID
+	Address  *string
+	ChainKey string
+}
+
+func (q *Queries) UpsertChainPastedDestination(ctx context.Context, arg UpsertChainPastedDestinationParams) error {
+	_, err := q.db.Exec(ctx, upsertChainPastedDestination, arg.MaxID, arg.Address, arg.ChainKey)
+	return err
 }
 
 const upsertDestination = `-- name: UpsertDestination :exec

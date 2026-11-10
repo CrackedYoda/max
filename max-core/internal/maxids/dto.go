@@ -57,7 +57,9 @@ type availabilityResponse struct {
 }
 
 type destinationResponse struct {
-	Namespace string    `json:"namespace"`
+	Namespace string `json:"namespace"`
+	// Chain is the chain key of a per-chain override; null for a namespace default.
+	Chain     *string   `json:"chain"`
 	Address   string    `json:"address"`
 	Source    string    `json:"source"`
 	Verified  bool      `json:"verified"`
@@ -95,6 +97,10 @@ func toMaxIDResponse(m MaxID) maxIDResponse {
 		r := destinationResponse{
 			Namespace: string(d.Namespace), Source: "pasted",
 			Address: chains.DisplayAddress(d.Namespace, d.Address), UpdatedAt: d.UpdatedAt,
+		}
+		if d.ChainKey != "" {
+			k := d.ChainKey
+			r.Chain = &k
 		}
 		if d.WalletID != nil {
 			id := d.WalletID.String()

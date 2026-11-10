@@ -40,6 +40,8 @@ var Supported = []Chain{
 	{Key: "arbitrum", Name: "Arbitrum One", Namespace: NamespaceEVM, EVMChainID: 42161, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 2, ExplorerTxURL: "https://arbiscan.io/tx/"},
 	{Key: "optimism", Name: "OP Mainnet", Namespace: NamespaceEVM, EVMChainID: 10, NativeCoin: "ETH", NativeDecimals: 18, Confirmations: 2, ExplorerTxURL: "https://optimistic.etherscan.io/tx/"},
 	{Key: "polygon", Name: "Polygon PoS", Namespace: NamespaceEVM, EVMChainID: 137, NativeCoin: "POL", NativeDecimals: 18, Confirmations: 20, ExplorerTxURL: "https://polygonscan.com/tx/"},
+	{Key: "bnb", Name: "BNB Chain", Namespace: NamespaceEVM, EVMChainID: 56, NativeCoin: "BNB", NativeDecimals: 18, Confirmations: 15, ExplorerTxURL: "https://bscscan.com/tx/"},
+	{Key: "avalanche", Name: "Avalanche C-Chain", Namespace: NamespaceEVM, EVMChainID: 43114, NativeCoin: "AVAX", NativeDecimals: 18, Confirmations: 1, ExplorerTxURL: "https://snowtrace.io/tx/"},
 	{Key: "bitcoin", Name: "Bitcoin", Namespace: NamespaceBitcoin, NativeCoin: "BTC", NativeDecimals: 8, ExplorerTxURL: "https://mempool.space/tx/", ReceiveOnly: true},
 	{Key: "litecoin", Name: "Litecoin", Namespace: NamespaceLitecoin, NativeCoin: "LTC", NativeDecimals: 8, ExplorerTxURL: "https://litecoinspace.org/tx/", ReceiveOnly: true},
 	{Key: "tron", Name: "Tron", Namespace: NamespaceTron, NativeCoin: "TRX", NativeDecimals: 6, ExplorerTxURL: "https://tronscan.org/#/transaction/", ReceiveOnly: true},

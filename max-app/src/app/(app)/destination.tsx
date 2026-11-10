@@ -1,4 +1,4 @@
-import { looksLikeAddress, type Namespace } from '@max/sdk';
+import { looksLikeAddress, type DestinationTarget, type Namespace } from '@max/sdk';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
@@ -8,27 +8,41 @@ import { AppText, Handle, Mono } from '@/components/ui/AppText';
 import { Banner, Loading } from '@/components/ui/Blocks';
 import { Button, IconButton } from '@/components/ui/Button';
 import { CheckRow, TextField } from '@/components/ui/Fields';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { Icon } from '@/components/ui/Icon';
 import { errorMessage } from '@/error/messages';
-import { useMyIds, useSetDestination, useWallets } from '@/hooks/queries';
+import { useChains, useMyIds, useRemoveChainDestination, useSetChainDestination, useSetDestination, useWallets } from '@/hooks/queries';
 import { toast } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors, spacing } from '@/theme';
 import { formatDate, namespaceLabel } from '@/utils/format';
 
 const LINKABLE: Namespace[] = ['evm', 'solana'];
-const EVM_WARNING = 'This address will receive on every EVM chain MAX supports (Ethereum, Base, Arbitrum, OP, Polygon). Exchange deposit addresses often accept only one chain.';
+const EVM_WARNING = 'This address will receive on every EVM chain you haven’t customized. Exchange deposit addresses often accept only one chain.';
 
-/** Bottom sheet: pick a linked wallet, or paste an address, to receive on a namespace. */
+type Submit = (target: DestinationTarget, onSuccess: () => void) => void;
+
+/**
+ * Bottom sheet: pick a linked wallet, or paste an address, to receive on a
+ * namespace, or (with `chain`) on one EVM chain instead of the EVM default.
+ */
 export default function Destination() {
-  const { id, ns } = useLocalSearchParams<{ id: string; ns: Namespace }>();
+  const { id, ns, chain } = useLocalSearchParams<{ id: string; ns: Namespace; chain?: string }>();
+  const chainInfo = useChains().data?.find((c) => c.key === chain);
+  const setChain = useSetChainDestination();
+  const removeChain = useRemoveChainDestination();
   const insets = useSafeAreaInsets();
   const ids = useMyIds();
   const wallets = useWallets();
   const accounts = useSession((s) => s.accounts);
   const setDest = useSetDestination();
   const maxId = ids.data?.find((x) => x.id === id);
-  const current = maxId?.destinations.find((d) => d.namespace === ns);
+  const current = maxId?.destinations.find((d) => (chain ? d.chain === chain : d.namespace === ns && !d.chain));
+  const label = chain ? (chainInfo?.name ?? chain) : namespaceLabel(ns ?? '');
+  const pending = setDest.isPending || setChain.isPending || removeChain.isPending;
+  const error = setDest.error ?? setChain.error ?? removeChain.error;
+  const submit: Submit = (target, onSuccess) =>
+    chain ? setChain.mutate({ id: id!, chain, target }, { onSuccess }) : setDest.mutate({ id: id!, namespace: ns!, target }, { onSuccess });
   const options = (wallets.data ?? []).filter((w) => w.namespace === ns);
   const linkable = LINKABLE.includes(ns!);
   const [pasting, setPasting] = useState(!linkable);
@@ -41,16 +55,28 @@ export default function Destination() {
         <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 999, backgroundColor: colors.line }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginRight: -10 }}>
           <View style={{ flex: 1, gap: 2 }}>
-            <AppText variant="title" accessibilityRole="header">
-              {namespaceLabel(ns ?? '')} destination
-            </AppText>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <ChainLogo chain={chain ?? ns ?? ''} size={24} />
+              <AppText variant="title" accessibilityRole="header">
+                {label} destination
+              </AppText>
+            </View>
             {maxId ? <Handle name={maxId.handle} size={13} /> : null}
           </View>
           <IconButton icon="close" label="Close" color={colors.muted} onPress={() => router.back()} />
         </View>
-        <AppText variant="small">Payments to this handle on {ns === 'evm' ? 'every EVM chain' : namespaceLabel(ns ?? '')} go to the address you pick. Payments already in flight keep their original address.</AppText>
+        <AppText variant="small">Payments to this handle on {chain ? label : ns === 'evm' ? 'every EVM chain you haven’t customized' : label} go to the address you pick. Payments already in flight keep their original address.</AppText>
+        {chain && current ? (
+          <Button
+            label="Use EVM default"
+            variant="secondary"
+            size="sm"
+            loading={removeChain.isPending}
+            onPress={() => removeChain.mutate({ id: id!, chain }, { onSuccess: () => { toast(`${label} uses your EVM default`); router.back(); } })}
+          />
+        ) : null}
         {pasting ? (
-          <PasteForm id={id!} ns={ns!} onBack={linkable ? () => setPasting(false) : undefined} />
+          <PasteForm ns={ns!} label={label} perChain={!!chain} submit={submit} pending={pending} error={error} onBack={linkable ? () => setPasting(false) : undefined} />
         ) : (
         <>
         {wallets.isLoading ? <Loading /> : null}
@@ -62,20 +88,15 @@ export default function Destination() {
               <Pressable
                 key={w.id}
                 accessibilityRole="radio"
-                accessibilityState={{ checked: on, disabled: setDest.isPending }}
-                disabled={setDest.isPending}
+                accessibilityState={{ checked: on, disabled: pending }}
+                disabled={pending}
                 onPress={() =>
                   on
                     ? router.back()
-                    : setDest.mutate(
-                        { id: id!, namespace: ns!, target: { walletId: w.id } },
-                        {
-                          onSuccess: () => {
-                            toast(`${namespaceLabel(ns!)} destination updated`);
-                            router.back();
-                          },
-                        },
-                      )
+                    : submit({ walletId: w.id }, () => {
+                        toast(`${label} destination updated`);
+                        router.back();
+                      })
                 }
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 14, borderWidth: on ? 2 : 1, borderColor: on ? colors.accent : colors.line, backgroundColor: on ? colors.claySoft : colors.surface }}>
                 <View style={{ flex: 1, gap: 2 }}>
@@ -88,7 +109,7 @@ export default function Destination() {
           })}
         </View>
         <Button label="Paste an address" variant="secondary" size="sm" onPress={() => setPasting(true)} />
-        {setDest.error ? <Banner tone="danger">{errorMessage(setDest.error)}</Banner> : null}
+        {error ? <Banner tone="danger">{errorMessage(error)}</Banner> : null}
         </>
         )}
       </View>
@@ -97,12 +118,18 @@ export default function Destination() {
 }
 
 /** Paste an address, review it in full, and confirm control before saving. */
-function PasteForm({ id, ns, onBack }: { id: string; ns: Namespace; onBack?: () => void }) {
-  const setDest = useSetDestination();
+function PasteForm({ ns, label, perChain, submit, pending, error, onBack }: {
+  ns: Namespace;
+  label: string;
+  perChain: boolean;
+  submit: Submit;
+  pending: boolean;
+  error: unknown;
+  onBack?: () => void;
+}) {
   const [address, setAddress] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const label = namespaceLabel(ns);
   const trimmed = address.trim();
   const shapeOk = looksLikeAddress(ns, trimmed);
 
@@ -129,27 +156,22 @@ function PasteForm({ id, ns, onBack }: { id: string; ns: Namespace; onBack?: () 
       <View style={{ backgroundColor: colors.sunken, borderRadius: 12, padding: 12 }}>
         <Mono size={13} selectable>{trimmed}</Mono>
       </View>
-      {ns === 'evm' ? <AppText variant="small">{EVM_WARNING}</AppText> : null}
+      {ns === 'evm' && !perChain ? <AppText variant="small">{EVM_WARNING}</AppText> : null}
       <CheckRow checked={confirmed} onChange={setConfirmed}>I control this address. Payments sent to it can’t be reversed.</CheckRow>
       <Button
         label="Save"
         size="sm"
         disabled={!confirmed}
-        loading={setDest.isPending}
+        loading={pending}
         onPress={() =>
-          setDest.mutate(
-            { id, namespace: ns, target: { address: trimmed, confirmed: true } },
-            {
-              onSuccess: () => {
-                toast(`${label} destination updated`);
-                router.back();
-              },
-            },
-          )
+          submit({ address: trimmed, confirmed: true }, () => {
+            toast(`${label} destination updated`);
+            router.back();
+          })
         }
       />
       <Button label="Edit" variant="secondary" size="sm" onPress={() => setReviewing(false)} />
-      {setDest.error ? <Banner tone="danger">{errorMessage(setDest.error)}</Banner> : null}
+      {error ? <Banner tone="danger">{errorMessage(error)}</Banner> : null}
     </View>
   );
 }

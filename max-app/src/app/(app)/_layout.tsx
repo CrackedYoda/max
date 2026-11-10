@@ -12,6 +12,7 @@ export default function AppLayout() {
         <Stack.Screen name="review" options={{ presentation: 'transparentModal', animation: 'fade', gestureEnabled: false, contentStyle: { backgroundColor: 'transparent' } }} />
         <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="destination" options={{ presentation: 'transparentModal', animation: 'fade', contentStyle: { backgroundColor: 'transparent' } }} />
+        <Stack.Screen name="evm-chains" options={{ presentation: 'modal' }} />
         <Stack.Screen name="edit-id" options={{ presentation: 'modal' }} />
         <Stack.Screen name="reveal" />
         <Stack.Screen name="export-key" />

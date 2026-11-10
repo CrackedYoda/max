@@ -195,6 +195,53 @@ func (s *service) PasteDestination(ctx context.Context, caller, id uuid.UUID, na
 	return s.repo.SetPastedDestination(ctx, id, caller, ns, canonical)
 }
 
+// overrideChain returns the EVM chain a per-chain override may target.
+func overrideChain(key string) (chains.Chain, error) {
+	c, ok := chains.Lookup(key)
+	if !ok || c.Namespace != chains.NamespaceEVM {
+		return chains.Chain{}, ErrUnsupportedNamespace.WithMessage("per-chain destinations are available on EVM chains only")
+	}
+	return c, nil
+}
+
+func (s *service) SetChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey string, walletID uuid.UUID) (MaxID, error) {
+	c, err := overrideChain(chainKey)
+	if err != nil {
+		return MaxID{}, err
+	}
+	walletNS, err := s.repo.GetOwnedWalletNamespace(ctx, walletID, caller)
+	if err != nil {
+		return MaxID{}, err
+	}
+	if walletNS != chains.NamespaceEVM {
+		return MaxID{}, ErrNamespaceMismatch
+	}
+	return s.repo.SetChainDestination(ctx, id, caller, c.Key, &walletID, "")
+}
+
+func (s *service) PasteChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey, address string, confirmed bool) (MaxID, error) {
+	c, err := overrideChain(chainKey)
+	if err != nil {
+		return MaxID{}, err
+	}
+	if !confirmed {
+		return MaxID{}, ErrConfirmationRequired
+	}
+	canonical, err := chains.NormalizeAddress(chains.NamespaceEVM, address)
+	if err != nil {
+		return MaxID{}, ErrInvalidAddress.WithMessage("address is not a valid evm address")
+	}
+	return s.repo.SetChainDestination(ctx, id, caller, c.Key, nil, canonical)
+}
+
+func (s *service) RemoveChainDestination(ctx context.Context, caller, id uuid.UUID, chainKey string) (MaxID, error) {
+	c, err := overrideChain(chainKey)
+	if err != nil {
+		return MaxID{}, err
+	}
+	return s.repo.RemoveChainDestination(ctx, id, caller, c.Key)
+}
+
 func (s *service) RemoveDestination(ctx context.Context, caller, id uuid.UUID, namespace string) (MaxID, error) {
 	ns, ok := chains.ParseNamespace(namespace)
 	if !ok {
@@ -228,7 +275,7 @@ func (s *service) SetSettlement(ctx context.Context, caller, id uuid.UUID, chain
 	}
 	hasWallet := false
 	for _, d := range m.Destinations {
-		if d.Namespace == chain.Namespace {
+		if d.Namespace == chain.Namespace && (d.ChainKey == "" || d.ChainKey == chain.Key) {
 			hasWallet = true
 		}
 	}

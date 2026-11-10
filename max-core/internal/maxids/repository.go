@@ -328,6 +328,80 @@ func (r *repository) SetPastedDestination(ctx context.Context, id, owner uuid.UU
 	return out, r.mapOwnedErr(err)
 }
 
+func (r *repository) SetChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string, walletID *uuid.UUID, address string) (MaxID, error) {
+	var out MaxID
+	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		locked, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner})
+		if err != nil {
+			return err
+		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
+		if locked.Status != "active" {
+			return ErrMaxIDNotActive
+		}
+		meta := map[string]any{"namespace": "evm", "chain": chainKey}
+		if walletID != nil {
+			meta["source"], meta["wallet_id"] = "wallet", walletID.String()
+			err = q.UpsertChainDestination(ctx, generated.UpsertChainDestinationParams{MaxID: id, ChainKey: chainKey, WalletID: walletID})
+		} else {
+			meta["source"], meta["confirmed"] = "pasted", true
+			err = q.UpsertChainPastedDestination(ctx, generated.UpsertChainPastedDestinationParams{MaxID: id, ChainKey: chainKey, Address: &address})
+		}
+		if err != nil {
+			return err
+		}
+		row, err := q.BumpResolutionVersion(ctx, id)
+		if err != nil {
+			return err
+		}
+		meta["resolution_version"] = row.ResolutionVersion
+		if err := audit.Write(ctx, q, audit.Entry{
+			Actor: &owner, Action: "maxid.destination_set", ResourceType: "max_id", ResourceID: id.String(), Metadata: meta,
+		}); err != nil {
+			return err
+		}
+		out, err = r.hydrate(ctx, q, row)
+		return err
+	})
+	return out, r.mapOwnedErr(err)
+}
+
+func (r *repository) RemoveChainDestination(ctx context.Context, id, owner uuid.UUID, chainKey string) (MaxID, error) {
+	var out MaxID
+	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		if _, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner}); err != nil {
+			return err
+		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
+		n, err := q.DeleteChainDestination(ctx, generated.DeleteChainDestinationParams{MaxID: id, ChainKey: &chainKey})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrDestinationNotFound
+		}
+		row, err := q.BumpResolutionVersion(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := audit.Write(ctx, q, audit.Entry{
+			Actor: &owner, Action: "maxid.destination_removed", ResourceType: "max_id", ResourceID: id.String(),
+			Metadata: map[string]any{"namespace": "evm", "chain": chainKey, "resolution_version": row.ResolutionVersion},
+		}); err != nil {
+			return err
+		}
+		out, err = r.hydrate(ctx, q, row)
+		return err
+	})
+	return out, r.mapOwnedErr(err)
+}
+
 func (r *repository) RemoveDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace) (MaxID, error) {
 	var out MaxID
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
@@ -438,7 +512,7 @@ func (r *repository) hydrate(ctx context.Context, q *generated.Queries, row gene
 	}
 	for _, d := range dests {
 		m.Destinations = append(m.Destinations, Destination{
-			Namespace: chains.Namespace(d.ChainNamespace), WalletID: d.WalletID,
+			Namespace: destNamespace(d.ChainNamespace, d.ChainKey), ChainKey: deref(d.ChainKey), WalletID: d.WalletID,
 			Address: d.Address, Pasted: d.WalletID == nil, UpdatedAt: d.UpdatedAt,
 		})
 	}
@@ -496,4 +570,20 @@ func EnsureNotListed(ctx context.Context, q *generated.Queries, id uuid.UUID) er
 // that edit a name's identity (renames).
 func EnsureNoOpenSale(ctx context.Context, q *generated.Queries, id uuid.UUID) error {
 	return ensureNoOpenSale(ctx, q, id)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// destNamespace maps a stored row to its namespace: override rows keep their
+// chain key in chain_namespace (see migration 000014) and are always EVM.
+func destNamespace(stored string, chainKey *string) chains.Namespace {
+	if chainKey != nil {
+		return chains.NamespaceEVM
+	}
+	return chains.Namespace(stored)
 }

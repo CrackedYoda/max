@@ -1,17 +1,19 @@
 "use client";
 
-import { looksLikeAddress, type MaxId, type Namespace, type Wallet } from "@max/sdk";
+import { looksLikeAddress, type Chain, type MaxId, type Namespace, type Wallet } from "@max/sdk";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { errorMessage } from "@/error/messages";
-import { useSetDestination } from "@/hooks/queries";
+import { useChains, useRemoveChainDestination, useSetChainDestination, useSetDestination } from "@/hooks/queries";
 import { toast } from "@/store/flows";
 import { namespaceLabel, shortAddress } from "@/utils/format";
 
 import { Button } from "../ui/Button";
 import { Card, KindBadge } from "../ui/Blocks";
+import { ChainLogo } from "../ui/ChainLogo";
 import { CopyButton } from "../ui/Copy";
+import { Dialog } from "../ui/Dialog";
 import { Icon } from "../ui/Icon";
 
 import { EditProfileDialog } from "./EditProfileDialog";
@@ -52,7 +54,9 @@ export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
 }
 
 function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Namespace; wallets: Wallet[] }) {
-  const current = id.destinations.find((d) => d.namespace === namespace);
+  const current = id.destinations.find((d) => d.namespace === namespace && !d.chain);
+  const overrides = id.destinations.filter((d) => d.namespace === namespace && d.chain).length;
+  const [customizing, setCustomizing] = useState(false);
   const [open, setOpen] = useState(false);
   const set = useSetDestination();
   const ref = useRef<HTMLLIElement>(null);
@@ -79,7 +83,7 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
   return (
     <li ref={ref} className="flex flex-col border-b border-line">
       <div className="flex flex-wrap items-center gap-3 py-3.5">
-        <span className="w-[72px] text-[13px] font-semibold text-muted">{label}</span>
+        <span className="flex w-[96px] items-center gap-2 text-[13px] font-semibold text-muted"><ChainLogo chain={namespace} />{label}</span>
         {current ? (
           <>
             <span className="flex flex-1 flex-wrap items-center gap-2">
@@ -132,31 +136,126 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
           </button>
         </div>
       ) : null}
+      {namespace === "evm" ? (
+        <button type="button" onClick={() => setCustomizing(true)}
+          className="mb-3 -mt-1.5 self-start pl-[108px] text-[13px] font-medium text-clay-text hover:underline">
+          {overrides ? `${overrides} ${overrides === 1 ? "chain" : "chains"} customized` : "Customize per chain"}
+        </button>
+      ) : null}
+      {customizing ? <ChainOverridesDialog id={id} wallets={wallets} onClose={() => setCustomizing(false)} /> : null}
     </li>
   );
 }
 
-const EVM_WARNING = "This address will receive on every EVM chain MAX supports (Ethereum, Base, Arbitrum, OP, Polygon). Exchange deposit addresses often accept only one chain.";
+/** Per-chain overrides for EVM: each chain uses the EVM default unless set here. */
+function ChainOverridesDialog({ id, wallets, onClose }: { id: MaxId; wallets: Wallet[]; onClose(): void }) {
+  const chains = useChains();
+  const evmChains = (chains.data ?? []).filter((c) => c.namespace === "evm");
+  const fallback = id.destinations.find((d) => d.namespace === "evm" && !d.chain);
+  const [editing, setEditing] = useState<string | null>(null);
+  return (
+    <Dialog title="Customize EVM chains" labelId={`chains-${id.id}`} onClose={onClose} width={560}>
+      <p className="m-0 text-sm text-muted">
+        Chains you don’t customize use your EVM default{fallback ? ` (${shortAddress(fallback.address)})` : ", which isn’t set yet"}.
+      </p>
+      <ul className="m-0 flex list-none flex-col p-0">
+        {evmChains.map((c) => (
+          <ChainOverrideRow key={c.key} id={id} chain={c} wallets={wallets} open={editing === c.key}
+            onToggle={() => setEditing(editing === c.key ? null : c.key)} />
+        ))}
+      </ul>
+    </Dialog>
+  );
+}
+
+function ChainOverrideRow({ id, chain, wallets, open, onToggle }: { id: MaxId; chain: Chain; wallets: Wallet[]; open: boolean; onToggle(): void }) {
+  const override = id.destinations.find((d) => d.chain === chain.key);
+  const set = useSetChainDestination();
+  const remove = useRemoveChainDestination();
+  const [pasting, setPasting] = useState(false);
+  const done = (msg: string) => () => {
+    toast(msg);
+    setPasting(false);
+    onToggle();
+  };
+  const fail = (e: unknown) => toast(errorMessage(e), "danger");
+  return (
+    <li className="flex flex-col border-b border-line last:border-b-0">
+      <div className="flex flex-wrap items-center gap-3 py-3">
+        <span className="flex min-w-[150px] flex-1 items-center gap-2.5 text-sm font-semibold">
+          <ChainLogo chain={chain.key} size={20} />{chain.name}
+          {chain.testnet ? <span className="rounded-full bg-sunken px-1.5 text-[11px] font-medium text-muted">Testnet</span> : null}
+        </span>
+        {override ? (
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-sm" title={override.address}>{shortAddress(override.address)}</span>
+            {override.source === "pasted" ? <span title="Pasted, not proven by a wallet signature." className="rounded-full border border-line-strong bg-sunken px-2 py-[2px] text-xs font-semibold text-body">Unverified</span> : null}
+          </span>
+        ) : <span className="text-sm text-muted">Uses default</span>}
+        <button type="button" aria-expanded={open} onClick={onToggle}
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-[10px] border border-line bg-surface px-3 text-sm text-ink hover:bg-sunken">
+          Change<Icon name="chevronDown" size={14} />
+        </button>
+      </div>
+      {open && pasting ? (
+        <PastePanel id={id} namespace="evm" chain={chain} onDone={() => { setPasting(false); onToggle(); }} onBack={() => setPasting(false)} />
+      ) : open ? (
+        <div role="group" aria-label={`Choose ${chain.name} destination`} className="mb-3 flex flex-col gap-0.5 rounded-xl border border-line bg-surface p-2">
+          {override ? (
+            <button type="button" disabled={remove.isPending}
+              onClick={() => remove.mutate({ id: id.id, chain: chain.key }, { onSuccess: done(`${chain.name} uses your EVM default`), onError: fail })}
+              className="flex min-h-11 items-center rounded-lg px-2.5 text-left text-sm font-medium text-ink hover:bg-clay-soft">
+              Use EVM default
+            </button>
+          ) : null}
+          {wallets.map((w) => {
+            const isCurrent = override?.walletId === w.id;
+            return (
+              <button key={w.id} type="button" disabled={isCurrent || set.isPending}
+                onClick={() => set.mutate({ id: id.id, chain: chain.key, target: { walletId: w.id } }, { onSuccess: done(`${chain.name} destination updated`), onError: fail })}
+                className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-2.5 text-left hover:bg-clay-soft disabled:cursor-default disabled:hover:bg-transparent">
+                <span className="font-mono text-sm text-ink" title={w.address}>{shortAddress(w.address)}</span>
+                <span className="text-[13px] font-semibold text-clay-text">{isCurrent ? "Current" : "Use this wallet"}</span>
+              </button>
+            );
+          })}
+          <button type="button" onClick={() => setPasting(true)}
+            className="flex min-h-11 items-center rounded-lg px-2.5 text-left text-sm font-medium text-clay-text hover:bg-clay-soft">
+            Paste an address
+          </button>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+const EVM_WARNING = "This address will receive on every EVM chain you haven’t customized. Exchange deposit addresses often accept only one chain.";
 
 /** Paste an address, review it in full, and confirm control before saving. */
-function PastePanel({ id, namespace, onDone, onBack }: { id: MaxId; namespace: Namespace; onDone(): void; onBack(): void }) {
+function PastePanel({ id, namespace, chain, onDone, onBack }: { id: MaxId; namespace: Namespace; chain?: Chain; onDone(): void; onBack(): void }) {
+  const setChain = useSetChainDestination();
   const [address, setAddress] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const set = useSetDestination();
-  const label = namespaceLabel(namespace);
+  const label = chain?.name ?? namespaceLabel(namespace);
   const trimmed = address.trim();
   const shapeOk = looksLikeAddress(namespace, trimmed);
-  const fieldId = `paste-${id.id}-${namespace}`;
+  const fieldId = `paste-${id.id}-${chain?.key ?? namespace}`;
+  const pending = set.isPending || setChain.isPending;
 
-  const save = () =>
-    set.mutate({ id: id.id, namespace, target: { address: trimmed, confirmed: true } }, {
+  const save = () => {
+    const target = { address: trimmed, confirmed: true as const };
+    const opts = {
       onSuccess: () => {
         toast(`${label} destination updated`);
         onDone();
       },
-      onError: (e) => toast(errorMessage(e), "danger"),
-    });
+      onError: (e: unknown) => toast(errorMessage(e), "danger"),
+    };
+    if (chain) setChain.mutate({ id: id.id, chain: chain.key, target }, opts);
+    else set.mutate({ id: id.id, namespace, target }, opts);
+  };
 
   return (
     <div role="group" aria-label={`Paste a ${label} address`} className="mb-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-4 shadow-[0_8px_24px_rgba(20,20,19,0.08)]">
@@ -178,13 +277,13 @@ function PastePanel({ id, namespace, onDone, onBack }: { id: MaxId; namespace: N
         <>
           <span className="text-sm font-semibold">Check this {label} address</span>
           <span className="break-all rounded-lg bg-sunken p-3 font-mono text-sm">{trimmed}</span>
-          {namespace === "evm" ? <p className="m-0 text-[13px] text-muted">{EVM_WARNING}</p> : null}
+          {namespace === "evm" && !chain ? <p className="m-0 text-[13px] text-muted">{EVM_WARNING}</p> : null}
           <label className="flex items-start gap-2.5 text-sm">
             <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-0.5 size-4" />
             I control this address. Payments sent to it can’t be reversed.
           </label>
           <div className="flex gap-2">
-            <Button size="sm" disabled={!confirmed} loading={set.isPending} onClick={save}>Save</Button>
+            <Button size="sm" disabled={!confirmed} loading={pending} onClick={save}>Save</Button>
             <Button size="sm" variant="secondary" onClick={() => setReviewing(false)}>Edit</Button>
           </div>
         </>
