@@ -271,7 +271,7 @@ INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
 SELECT m.id, $1, $2
 FROM max_ids m
 WHERE m.owner_account_id = $3 AND m.is_default AND m.status = 'active'
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL DO NOTHING
+ON CONFLICT (max_id, chain_namespace) DO NOTHING
 RETURNING max_id
 `
 
@@ -692,44 +692,44 @@ func (q *Queries) UpdateMaxIDProfile(ctx context.Context, arg UpdateMaxIDProfile
 
 const upsertChainDestination = `-- name: UpsertChainDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, wallet_id)
-VALUES ($1, 'evm', $2, $3)
-ON CONFLICT (max_id, chain_key) WHERE chain_key IS NOT NULL
+VALUES ($1, $3::text, $3::text, $2)
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now()
 `
 
 type UpsertChainDestinationParams struct {
 	MaxID    uuid.UUID
-	ChainKey *string
 	WalletID *uuid.UUID
+	ChainKey string
 }
 
 func (q *Queries) UpsertChainDestination(ctx context.Context, arg UpsertChainDestinationParams) error {
-	_, err := q.db.Exec(ctx, upsertChainDestination, arg.MaxID, arg.ChainKey, arg.WalletID)
+	_, err := q.db.Exec(ctx, upsertChainDestination, arg.MaxID, arg.WalletID, arg.ChainKey)
 	return err
 }
 
 const upsertChainPastedDestination = `-- name: UpsertChainPastedDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, address, confirmed_at)
-VALUES ($1, 'evm', $2, $3, now())
-ON CONFLICT (max_id, chain_key) WHERE chain_key IS NOT NULL
+VALUES ($1, $3::text, $3::text, $2, now())
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now()
 `
 
 type UpsertChainPastedDestinationParams struct {
 	MaxID    uuid.UUID
-	ChainKey *string
 	Address  *string
+	ChainKey string
 }
 
 func (q *Queries) UpsertChainPastedDestination(ctx context.Context, arg UpsertChainPastedDestinationParams) error {
-	_, err := q.db.Exec(ctx, upsertChainPastedDestination, arg.MaxID, arg.ChainKey, arg.Address)
+	_, err := q.db.Exec(ctx, upsertChainPastedDestination, arg.MaxID, arg.Address, arg.ChainKey)
 	return err
 }
 
 const upsertDestination = `-- name: UpsertDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
 VALUES ($1, $2, $3)
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now()
 `
 
@@ -747,7 +747,7 @@ func (q *Queries) UpsertDestination(ctx context.Context, arg UpsertDestinationPa
 const upsertPastedDestination = `-- name: UpsertPastedDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, address, confirmed_at)
 VALUES ($1, $2, $3, now())
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now()
 `
 

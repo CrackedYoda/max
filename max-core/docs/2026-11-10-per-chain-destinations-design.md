@@ -31,12 +31,15 @@ transferring an ID clears its default and every per-chain override.
 ## 3. Data model (migration `000014_chain_destinations`)
 
 - `max_id_destinations.chain_key text NULL`. NULL = namespace default.
-- Drop `UNIQUE (max_id, chain_namespace)`; add
-  `UNIQUE (max_id, chain_namespace) WHERE chain_key IS NULL` and
-  `UNIQUE (max_id, chain_key) WHERE chain_key IS NOT NULL`.
-- CHECK `chain_key IS NULL OR chain_namespace = 'evm'`.
-- Down: delete override rows, drop the two indexes and the CHECK and column,
-  restore the original unique constraint.
+- An override row stores its chain key in both `chain_key` and
+  `chain_namespace` (e.g. `bnb`/`bnb`), so the existing
+  `UNIQUE (max_id, chain_namespace)` keeps one row per default and per
+  override, and every existing `ON CONFLICT (max_id, chain_namespace)` keeps
+  working. A binary that predates overrides (the running `main` server) never
+  reads these rows as anything it acts on.
+- CHECK `chain_key IS NULL OR (chain_namespace = chain_key AND chain_key NOT IN
+  ('evm','solana','bitcoin','litecoin','tron'))`.
+- Down: delete override rows, drop the CHECK and the column.
 
 ## 4. API
 

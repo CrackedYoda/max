@@ -345,10 +345,10 @@ func (r *repository) SetChainDestination(ctx context.Context, id, owner uuid.UUI
 		meta := map[string]any{"namespace": "evm", "chain": chainKey}
 		if walletID != nil {
 			meta["source"], meta["wallet_id"] = "wallet", walletID.String()
-			err = q.UpsertChainDestination(ctx, generated.UpsertChainDestinationParams{MaxID: id, ChainKey: &chainKey, WalletID: walletID})
+			err = q.UpsertChainDestination(ctx, generated.UpsertChainDestinationParams{MaxID: id, ChainKey: chainKey, WalletID: walletID})
 		} else {
 			meta["source"], meta["confirmed"] = "pasted", true
-			err = q.UpsertChainPastedDestination(ctx, generated.UpsertChainPastedDestinationParams{MaxID: id, ChainKey: &chainKey, Address: &address})
+			err = q.UpsertChainPastedDestination(ctx, generated.UpsertChainPastedDestinationParams{MaxID: id, ChainKey: chainKey, Address: &address})
 		}
 		if err != nil {
 			return err
@@ -512,7 +512,7 @@ func (r *repository) hydrate(ctx context.Context, q *generated.Queries, row gene
 	}
 	for _, d := range dests {
 		m.Destinations = append(m.Destinations, Destination{
-			Namespace: chains.Namespace(d.ChainNamespace), ChainKey: deref(d.ChainKey), WalletID: d.WalletID,
+			Namespace: destNamespace(d.ChainNamespace, d.ChainKey), ChainKey: deref(d.ChainKey), WalletID: d.WalletID,
 			Address: d.Address, Pasted: d.WalletID == nil, UpdatedAt: d.UpdatedAt,
 		})
 	}
@@ -577,4 +577,13 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// destNamespace maps a stored row to its namespace: override rows keep their
+// chain key in chain_namespace (see migration 000014) and are always EVM.
+func destNamespace(stored string, chainKey *string) chains.Namespace {
+	if chainKey != nil {
+		return chains.NamespaceEVM
+	}
+	return chains.Namespace(stored)
 }

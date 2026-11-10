@@ -36,13 +36,13 @@ RETURNING *;
 -- name: UpsertDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
 VALUES ($1, $2, $3)
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now();
 
 -- name: UpsertPastedDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, address, confirmed_at)
 VALUES ($1, $2, $3, now())
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now();
 
 -- name: DeleteDestination :execrows
@@ -50,14 +50,14 @@ DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = $2 AND c
 
 -- name: UpsertChainDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, wallet_id)
-VALUES ($1, 'evm', $2, $3)
-ON CONFLICT (max_id, chain_key) WHERE chain_key IS NOT NULL
+VALUES ($1, sqlc.arg(chain_key)::text, sqlc.arg(chain_key)::text, $2)
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now();
 
 -- name: UpsertChainPastedDestination :exec
 INSERT INTO max_id_destinations (max_id, chain_namespace, chain_key, address, confirmed_at)
-VALUES ($1, 'evm', $2, $3, now())
-ON CONFLICT (max_id, chain_key) WHERE chain_key IS NOT NULL
+VALUES ($1, sqlc.arg(chain_key)::text, sqlc.arg(chain_key)::text, $2, now())
+ON CONFLICT (max_id, chain_namespace)
 DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now();
 
 -- name: DeleteChainDestination :execrows
@@ -128,7 +128,7 @@ INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
 SELECT m.id, sqlc.arg(chain_namespace), sqlc.arg(wallet_id)
 FROM max_ids m
 WHERE m.owner_account_id = sqlc.arg(owner) AND m.is_default AND m.status = 'active'
-ON CONFLICT (max_id, chain_namespace) WHERE chain_key IS NULL DO NOTHING
+ON CONFLICT (max_id, chain_namespace) DO NOTHING
 RETURNING max_id;
 
 -- name: GetDefaultMaxID :one

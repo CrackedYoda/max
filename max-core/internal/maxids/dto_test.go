@@ -66,3 +66,13 @@ func TestDestinationResponse_Chain(t *testing.T) {
 		t.Errorf("chain field missing: %s", s)
 	}
 }
+
+func TestDestNamespace_OverrideRowsAreEVM(t *testing.T) {
+	bnb := "bnb"
+	if got := destNamespace("bnb", &bnb); got != chains.NamespaceEVM {
+		t.Errorf("override row namespace = %s", got)
+	}
+	if got := destNamespace("solana", nil); got != chains.NamespaceSolana {
+		t.Errorf("default row namespace = %s", got)
+	}
+}
