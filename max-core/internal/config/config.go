@@ -29,6 +29,9 @@ type Config struct {
 	Market       MarketConfig
 	Registration RegistrationConfig
 	Pricing      PricingConfig
+	// AlchemyAPIKey enables wallet token lists on Send; empty means native
+	// balances only, read through RPC.
+	AlchemyAPIKey string
 	// DefaultIDStyle picks the generator for new default MAX IDs.
 	DefaultIDStyle string
 	// AdminAccountIDs may review reserved-name claims and revoke verifications.
@@ -251,6 +254,7 @@ func Load() (Config, error) {
 	if _, err := maxids.NewDefaultNamer(cfg.DefaultIDStyle); err != nil {
 		errs = append(errs, fmt.Errorf("DEFAULT_ID_STYLE: %w", err))
 	}
+	cfg.AlchemyAPIKey = get("ALCHEMY_API_KEY", "")
 	cfg.Pricing = PricingConfig{
 		URL:    get("PRICE_FEED_URL", "https://api.coingecko.com/api/v3/simple/price"),
 		APIKey: get("PRICE_FEED_API_KEY", ""),

@@ -30,7 +30,7 @@ a balance bar above the amount with the wallet balance and its USD value.
 { "data": [ { "kind": "native" | "token", "address": "…" | "", "symbol": "BONK",
   "name": "Bonk", "logo": "https://…", "decimals": 5,
   "balance": { "raw": "120450000", "display": "1204.5" },
-  "priceUsd": "0.0000153" | null, "valueUsd": "18.43" | null, "verified": false } ] }
+  "priceUsd": "0.0000153" | null, "valueUsd": "0.02" | null, "verified": false } ] }
 ```
 
 ## 4. Interfaces
