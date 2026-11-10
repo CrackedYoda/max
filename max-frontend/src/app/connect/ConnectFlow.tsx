@@ -112,7 +112,7 @@ export function ConnectFlow() {
 
         <Progress step={step} />
 
-        <div className={cx("flex flex-wrap items-start gap-6", !wallet && "justify-center")}>
+        <div className="flex flex-wrap items-start gap-6">
           <section aria-labelledby="choose" className={cx("flex flex-col gap-3", wallet ? "flex-[1_1_300px]" : "w-full max-w-[440px]")}>
             <h2 id="choose" className="mb-1 mt-0 text-[15px] font-semibold text-muted">Choose a wallet</h2>
             <WalletOption

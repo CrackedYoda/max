@@ -43,7 +43,7 @@ export function ProfileView() {
       <div className="flex flex-col items-center gap-2.5">
         {p ? <h1 className="m-0 font-display text-[40px] font-medium">{display ?? `max.${name}`}</h1> : <Skeleton className="h-10 w-48" />}
         <p className="m-0 flex flex-wrap items-center justify-center gap-2.5">
-          <Handle name={name} className="text-[22px]" />
+          {display ? <Handle name={name} className="text-[22px]" /> : null}
           {p ? <KindBadge type={p.type} /> : null}
         </p>
         {/* Owner-written text: rendered as plain text only. */}
