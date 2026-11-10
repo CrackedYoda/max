@@ -180,6 +180,21 @@ func (s *service) SetDestination(ctx context.Context, caller, id uuid.UUID, name
 	return s.repo.SetDestination(ctx, id, caller, ns, walletID)
 }
 
+func (s *service) PasteDestination(ctx context.Context, caller, id uuid.UUID, namespace, address string, confirmed bool) (MaxID, error) {
+	ns, ok := chains.ParseNamespace(namespace)
+	if !ok || !chains.IsPasteable(ns) {
+		return MaxID{}, ErrUnsupportedNamespace
+	}
+	if !confirmed {
+		return MaxID{}, ErrConfirmationRequired
+	}
+	canonical, err := chains.NormalizeAddress(ns, address)
+	if err != nil {
+		return MaxID{}, ErrInvalidAddress.WithMessage("address is not a valid " + string(ns) + " address")
+	}
+	return s.repo.SetPastedDestination(ctx, id, caller, ns, canonical)
+}
+
 func (s *service) RemoveDestination(ctx context.Context, caller, id uuid.UUID, namespace string) (MaxID, error) {
 	ns, ok := chains.ParseNamespace(namespace)
 	if !ok {

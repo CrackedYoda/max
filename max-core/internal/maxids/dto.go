@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/shared"
 )
 
 type claimRequest struct {
@@ -18,8 +19,18 @@ type profileRequest struct {
 	AvatarURL   string `json:"avatarUrl" binding:"max=512"`
 }
 
+// destinationRequest names either a linked wallet or a pasted address.
 type destinationRequest struct {
-	WalletID string `json:"walletId" binding:"required,uuid"`
+	WalletID  string `json:"walletId" binding:"omitempty,uuid"`
+	Address   string `json:"address" binding:"max=128"`
+	Confirmed bool   `json:"confirmed"`
+}
+
+func (r destinationRequest) validate() error {
+	if (r.WalletID == "") == (r.Address == "") {
+		return shared.ErrValidation.WithMessage("send exactly one of walletId or address")
+	}
+	return nil
 }
 
 type settlementRequest struct {
@@ -47,8 +58,10 @@ type availabilityResponse struct {
 
 type destinationResponse struct {
 	Namespace string    `json:"namespace"`
-	WalletID  string    `json:"walletId"`
 	Address   string    `json:"address"`
+	Source    string    `json:"source"`
+	Verified  bool      `json:"verified"`
+	WalletID  *string   `json:"walletId"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -79,10 +92,15 @@ func toAvailabilityResponse(a Availability) availabilityResponse {
 func toMaxIDResponse(m MaxID) maxIDResponse {
 	dests := make([]destinationResponse, 0, len(m.Destinations))
 	for _, d := range m.Destinations {
-		dests = append(dests, destinationResponse{
-			Namespace: string(d.Namespace), WalletID: d.WalletID.String(),
+		r := destinationResponse{
+			Namespace: string(d.Namespace), Source: "pasted",
 			Address: chains.DisplayAddress(d.Namespace, d.Address), UpdatedAt: d.UpdatedAt,
-		})
+		}
+		if d.WalletID != nil {
+			id := d.WalletID.String()
+			r.Source, r.Verified, r.WalletID = "wallet", true, &id
+		}
+		dests = append(dests, r)
 	}
 	var settlement *settlementResponse
 	if st := m.Settlement; st != nil {

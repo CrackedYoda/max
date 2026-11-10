@@ -166,7 +166,18 @@ func (f *fakeRepo) SetDestination(ctx context.Context, id, owner uuid.UUID, ns c
 	if err != nil {
 		return MaxID{}, err
 	}
-	m.Destinations = append(m.Destinations, Destination{Namespace: ns, WalletID: walletID})
+	m.Destinations = append(m.Destinations, Destination{Namespace: ns, WalletID: &walletID})
+	m.ResolutionVersion++
+	f.ids[id] = m
+	return m, nil
+}
+
+func (f *fakeRepo) SetPastedDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace, address string) (MaxID, error) {
+	m, err := f.GetForOwner(ctx, id, owner)
+	if err != nil {
+		return MaxID{}, err
+	}
+	m.Destinations = append(m.Destinations, Destination{Namespace: ns, Address: address, Pasted: true})
 	m.ResolutionVersion++
 	f.ids[id] = m
 	return m, nil
@@ -369,7 +380,7 @@ func TestSetSettlement(t *testing.T) {
 			for _, ns := range tt.wallets {
 				w := repo.addWallet(owner, ns)
 				m, _ = svc.SetDestination(ctx, owner, m.ID, string(ns), w)
-				m.Destinations = append(m.Destinations, Destination{Namespace: ns, WalletID: w})
+				m.Destinations = append(m.Destinations, Destination{Namespace: ns, WalletID: &w})
 				repo.ids[m.ID] = m
 			}
 			got, err := svc.SetSettlement(ctx, owner, m.ID, tt.chain, tt.asset, true)
@@ -442,5 +453,60 @@ func TestClaim_GateRunsAfterCheapChecks(t *testing.T) {
 	_, err := NewService(repo, stubGate{err: ErrPriceUnavailable, enabled: true}).Claim(context.Background(), uuid.New(), ClaimInput{Name: "admin"})
 	if !errors.Is(err, ErrNameReserved) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPasteDestination(t *testing.T) {
+	ctx := context.Background()
+	owner, stranger := uuid.New(), uuid.New()
+	tests := []struct {
+		name      string
+		caller    uuid.UUID
+		namespace string
+		address   string
+		confirmed bool
+		wantErr   error
+		wantAddr  string
+	}{
+		{"bitcoin ok", owner, "bitcoin", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", true, nil, "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"},
+		{"evm normalized lowercase", owner, "evm", "0x52908400098527886E0F7030069857D2E4169EE7", true, nil, "0x52908400098527886e0f7030069857d2e4169ee7"},
+		{"tron ok", owner, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", true, nil, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
+		{"requires confirmation", owner, "bitcoin", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", false, ErrConfirmationRequired, ""},
+		{"wrong namespace for address", owner, "evm", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", true, ErrInvalidAddress, ""},
+		{"unknown namespace", owner, "dogecoin", "D8vFz4p1L37jdg47HXKtSHA5uYLYxbGgPD", true, ErrUnsupportedNamespace, ""},
+		{"not the owner", stranger, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", true, ErrMaxIDNotFound, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewService(newFakeRepo(), nil)
+			m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+			got, err := svc.PasteDestination(ctx, tt.caller, m.ID, tt.namespace, tt.address, tt.confirmed)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := got.Destinations[len(got.Destinations)-1]
+			if !d.Pasted || d.WalletID != nil || d.Address != tt.wantAddr {
+				t.Errorf("destination = %+v", d)
+			}
+		})
+	}
+}
+
+func TestSetDestination_WalletOnPasteOnlyNamespace(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	repo := newFakeRepo()
+	svc := NewService(repo, nil)
+	m, _ := svc.Claim(ctx, owner, ClaimInput{Name: "yoda"})
+	for _, ns := range []string{"bitcoin", "litecoin", "tron"} {
+		if _, err := svc.SetDestination(ctx, owner, m.ID, ns, uuid.New()); !errors.Is(err, ErrUnsupportedNamespace) {
+			t.Errorf("%s: err = %v", ns, err)
+		}
 	}
 }

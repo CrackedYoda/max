@@ -37,7 +37,13 @@ RETURNING *;
 INSERT INTO max_id_destinations (max_id, chain_namespace, wallet_id)
 VALUES ($1, $2, $3)
 ON CONFLICT (max_id, chain_namespace)
-DO UPDATE SET wallet_id = EXCLUDED.wallet_id, updated_at = now();
+DO UPDATE SET wallet_id = EXCLUDED.wallet_id, address = NULL, confirmed_at = NULL, updated_at = now();
+
+-- name: UpsertPastedDestination :exec
+INSERT INTO max_id_destinations (max_id, chain_namespace, address, confirmed_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (max_id, chain_namespace)
+DO UPDATE SET wallet_id = NULL, address = EXCLUDED.address, confirmed_at = EXCLUDED.confirmed_at, updated_at = now();
 
 -- name: DeleteDestination :execrows
 DELETE FROM max_id_destinations WHERE max_id = $1 AND chain_namespace = $2;
@@ -49,10 +55,10 @@ WHERE id = $1
 RETURNING *;
 
 -- name: ListDestinations :many
-SELECT d.chain_namespace, d.wallet_id, d.updated_at, w.address
+SELECT d.chain_namespace, d.wallet_id, d.updated_at, COALESCE(w.address, d.address)::text AS address
 FROM max_id_destinations d
-JOIN wallets w ON w.id = d.wallet_id
-WHERE d.max_id = $1 AND w.status = 'active'
+LEFT JOIN wallets w ON w.id = d.wallet_id
+WHERE d.max_id = $1 AND (d.wallet_id IS NULL OR w.status = 'active')
 ORDER BY d.chain_namespace;
 
 -- name: GetOwnedActiveWallet :one

@@ -236,8 +236,10 @@ type MaxIDDestination struct {
 	ID             uuid.UUID
 	MaxID          uuid.UUID
 	ChainNamespace string
-	WalletID       uuid.UUID
+	WalletID       *uuid.UUID
 	UpdatedAt      time.Time
+	Address        *string
+	ConfirmedAt    *time.Time
 }
 
 type MaxIDHistory struct {

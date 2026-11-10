@@ -85,11 +85,11 @@ func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer
 	}
 	if destWallet != nil {
 		if err := q.UpsertDestination(ctx, generated.UpsertDestinationParams{
-			MaxID: row.ID, ChainNamespace: string(destWallet.Namespace), WalletID: destWallet.ID,
+			MaxID: row.ID, ChainNamespace: string(destWallet.Namespace), WalletID: &destWallet.ID,
 		}); err != nil {
 			return MaxID{}, err
 		}
-		out.Destinations = append(out.Destinations, Destination{Namespace: chains.Namespace(destWallet.Namespace), WalletID: destWallet.ID})
+		out.Destinations = append(out.Destinations, Destination{Namespace: chains.Namespace(destWallet.Namespace), WalletID: &destWallet.ID})
 	}
 	if err := audit.Write(ctx, q, audit.Entry{
 		Actor: &owner, Action: "maxid.default_created", ResourceType: "max_id", ResourceID: row.ID.String(),
@@ -107,7 +107,7 @@ func CreateDefault(ctx context.Context, q *generated.Queries, namer DefaultNamer
 // resolution version and writes an audit entry. It reports whether it set one.
 func FillDefaultDestination(ctx context.Context, q *generated.Queries, owner uuid.UUID, wallet WalletRef) (bool, error) {
 	id, err := q.FillDefaultDestination(ctx, generated.FillDefaultDestinationParams{
-		ChainNamespace: string(wallet.Namespace), WalletID: wallet.ID, Owner: owner,
+		ChainNamespace: string(wallet.Namespace), WalletID: &wallet.ID, Owner: owner,
 	})
 	if database.IsNoRows(err) {
 		return false, nil // no active default, or it already has a destination here

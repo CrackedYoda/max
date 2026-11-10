@@ -84,7 +84,7 @@ func transferRows(ctx context.Context, q *generated.Queries, p TransferParams, n
 	}
 	if p.DestinationWalletID != uuid.Nil {
 		if err := q.UpsertDestination(ctx, generated.UpsertDestinationParams{
-			MaxID: p.MaxID, ChainNamespace: namespace, WalletID: p.DestinationWalletID,
+			MaxID: p.MaxID, ChainNamespace: namespace, WalletID: &p.DestinationWalletID,
 		}); err != nil {
 			return err
 		}

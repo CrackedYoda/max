@@ -170,7 +170,7 @@ func CreateInTx(ctx context.Context, q *generated.Queries, owner uuid.UUID, cano
 		}
 		seen[w.ChainNamespace] = true
 		if err := q.UpsertDestination(ctx, generated.UpsertDestinationParams{
-			MaxID: row.ID, ChainNamespace: w.ChainNamespace, WalletID: w.ID,
+			MaxID: row.ID, ChainNamespace: w.ChainNamespace, WalletID: &w.ID,
 		}); err != nil {
 			return generated.MaxID{}, err
 		}
@@ -273,7 +273,7 @@ func (r *repository) SetDestination(ctx context.Context, id, owner uuid.UUID, ns
 			return ErrMaxIDNotActive
 		}
 		if err := q.UpsertDestination(ctx, generated.UpsertDestinationParams{
-			MaxID: id, ChainNamespace: string(ns), WalletID: walletID,
+			MaxID: id, ChainNamespace: string(ns), WalletID: &walletID,
 		}); err != nil {
 			return err
 		}
@@ -283,7 +283,42 @@ func (r *repository) SetDestination(ctx context.Context, id, owner uuid.UUID, ns
 		}
 		if err := audit.Write(ctx, q, audit.Entry{
 			Actor: &owner, Action: "maxid.destination_set", ResourceType: "max_id", ResourceID: id.String(),
-			Metadata: map[string]any{"namespace": string(ns), "wallet_id": walletID.String(), "resolution_version": row.ResolutionVersion},
+			Metadata: map[string]any{"namespace": string(ns), "source": "wallet", "wallet_id": walletID.String(), "resolution_version": row.ResolutionVersion},
+		}); err != nil {
+			return err
+		}
+		out, err = r.hydrate(ctx, q, row)
+		return err
+	})
+	return out, r.mapOwnedErr(err)
+}
+
+func (r *repository) SetPastedDestination(ctx context.Context, id, owner uuid.UUID, ns chains.Namespace, address string) (MaxID, error) {
+	var out MaxID
+	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		locked, err := q.LockMaxIDForOwner(ctx, generated.LockMaxIDForOwnerParams{ID: id, OwnerAccountID: owner})
+		if err != nil {
+			return err
+		}
+		if err := ensureNoOpenSale(ctx, q, id); err != nil {
+			return err
+		}
+		if locked.Status != "active" {
+			return ErrMaxIDNotActive
+		}
+		if err := q.UpsertPastedDestination(ctx, generated.UpsertPastedDestinationParams{
+			MaxID: id, ChainNamespace: string(ns), Address: &address,
+		}); err != nil {
+			return err
+		}
+		row, err := q.BumpResolutionVersion(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := audit.Write(ctx, q, audit.Entry{
+			Actor: &owner, Action: "maxid.destination_set", ResourceType: "max_id", ResourceID: id.String(),
+			Metadata: map[string]any{"namespace": string(ns), "source": "pasted", "confirmed": true, "resolution_version": row.ResolutionVersion},
 		}); err != nil {
 			return err
 		}
@@ -404,7 +439,7 @@ func (r *repository) hydrate(ctx context.Context, q *generated.Queries, row gene
 	for _, d := range dests {
 		m.Destinations = append(m.Destinations, Destination{
 			Namespace: chains.Namespace(d.ChainNamespace), WalletID: d.WalletID,
-			Address: d.Address, UpdatedAt: d.UpdatedAt,
+			Address: d.Address, Pasted: d.WalletID == nil, UpdatedAt: d.UpdatedAt,
 		})
 	}
 	pref, err := q.GetSettlementPreference(ctx, row.ID)
