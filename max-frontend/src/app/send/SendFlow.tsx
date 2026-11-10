@@ -128,7 +128,8 @@ export function SendFlow() {
   }
 
   const chainList = useMemo(() => {
-    const list = chains.data ?? [];
+    // MAX can't send on receive-only chains (Bitcoin, Litecoin, Tron).
+    const list = (chains.data ?? []).filter((c) => !c.receiveOnly);
     return [...list.filter((c) => !c.testnet), ...list.filter((c) => c.testnet)];
   }, [chains.data]);
 

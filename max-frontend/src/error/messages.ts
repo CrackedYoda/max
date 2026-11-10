@@ -11,6 +11,8 @@ const COPY: Record<string, string> = {
   MAX_ID_LIMIT_REACHED: "You’ve reached the limit of MAX IDs for this account.",
   MAX_ID_QUARANTINED: "That name was released recently and is temporarily unavailable.",
   INVALID_MAX_ID: "Use 3–32 lowercase letters, numbers or hyphens.",
+  INVALID_ADDRESS: "That address isn’t valid for this network. Check it and try again.",
+  CONFIRMATION_REQUIRED: "Confirm you control this address.",
   WALLET_ALREADY_LINKED: "That wallet is already linked to a MAX account.",
   LAST_WALLET: "You can’t remove your only wallet. Link another one first so you can still sign in.",
   CHALLENGE_INVALID: "That sign-in request expired. Try again.",

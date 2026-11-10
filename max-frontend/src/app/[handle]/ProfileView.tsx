@@ -32,6 +32,7 @@ export function ProfileView() {
   const p = profile.data;
   const reachable = p?.chains.filter((c) => c.reachable) ?? [];
   const unreachable = p?.chains.filter((c) => !c.reachable && !c.chain.testnet) ?? [];
+  const sendable = reachable.some(({ chain }) => !chain.receiveOnly);
   const display = p && p.displayName && p.displayName !== p.name ? p.displayName : null;
 
   return (
@@ -62,14 +63,20 @@ export function ProfileView() {
         <h2 id="chains" className="m-0 text-[15px] font-semibold">Can receive on</h2>
         {p ? (
           reachable.length ? (
+            <>
             <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
               {reachable.map(({ chain }) => (
                 <li key={chain.key} className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-3 py-1.5 text-[13px] font-semibold text-success">
                   <Icon name="check" size={14} strokeWidth={2.5} />{chain.name}
                   {chain.testnet ? <span className="rounded-full bg-surface px-1.5 text-[11px] text-muted">Testnet</span> : null}
+                  {chain.receiveOnly ? <span className="rounded-full bg-surface px-1.5 text-[11px] text-muted">Receive-only</span> : null}
                 </li>
               ))}
             </ul>
+            {reachable.some(({ chain }) => chain.receiveOnly) ? (
+              <p className="m-0 text-[13px] text-muted">Receive-only: send from your own wallet</p>
+            ) : null}
+            </>
           ) : <p className="m-0 text-sm text-muted">No wallets linked yet, so this handle can’t receive payments.</p>
         ) : <Skeleton className="h-8 w-full" />}
         {unreachable.length ? (
@@ -93,7 +100,9 @@ export function ProfileView() {
 
       <MarketPanel name={name} />
 
-      <ButtonLink href={`/send?to=${name}`} className="gap-2">Send to max.{name}<Icon name="arrowRight" size={18} /></ButtonLink>
+      {p && !sendable && reachable.length ? null : (
+        <ButtonLink href={`/send?to=${name}`} className="gap-2">Send to max.{name}<Icon name="arrowRight" size={18} /></ButtonLink>
+      )}
       <p className="m-0 text-[13px] text-muted">Addresses are resolved fresh each time you send. MAX never holds funds.</p>
     </main>
   );

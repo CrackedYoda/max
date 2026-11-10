@@ -108,7 +108,7 @@ export function PolicySection({ agent }: { agent: AgentDetail }) {
                         Network
                         <select value={r.chain} onChange={(e) => update(r.key, { chain: e.target.value })} className="field min-h-11 rounded-xl border border-line bg-surface px-3 text-[15px] font-normal">
                           <option value="">Choose…</option>
-                          {(chains.data ?? []).map((ch) => <option key={ch.key} value={ch.key}>{ch.name}</option>)}
+                          {(chains.data ?? []).filter((ch) => !ch.receiveOnly).map((ch) => <option key={ch.key} value={ch.key}>{ch.name}</option>)}
                         </select>
                       </label>
                       <label className="flex flex-col gap-1.5 text-[13px] font-semibold">

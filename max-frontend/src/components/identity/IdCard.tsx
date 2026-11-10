@@ -1,6 +1,6 @@
 "use client";
 
-import type { MaxId, Namespace, Wallet } from "@max/sdk";
+import { looksLikeAddress, type MaxId, type Namespace, type Wallet } from "@max/sdk";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
@@ -17,7 +17,8 @@ import { Icon } from "../ui/Icon";
 import { EditProfileDialog } from "./EditProfileDialog";
 import { Handle } from "./Handle";
 
-const NAMESPACES: Namespace[] = ["evm", "solana"];
+const NAMESPACES: Namespace[] = ["evm", "solana", "bitcoin", "litecoin", "tron"];
+const LINKABLE: Namespace[] = ["evm", "solana"];
 
 export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
   const [editing, setEditing] = useState(false);
@@ -56,11 +57,17 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
   const set = useSetDestination();
   const ref = useRef<HTMLLIElement>(null);
   const label = namespaceLabel(namespace);
+  const linkable = LINKABLE.includes(namespace);
+  const [pasting, setPasting] = useState(false);
+  const close = () => {
+    setOpen(false);
+    setPasting(false);
+  };
 
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onDoc = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && close();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -75,19 +82,27 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
         <span className="w-[72px] text-[13px] font-semibold text-muted">{label}</span>
         {current ? (
           <>
-            <span className="flex-1 font-mono text-sm" title={current.address}>{shortAddress(current.address)}</span>
+            <span className="flex flex-1 flex-wrap items-center gap-2">
+              <span className="font-mono text-sm" title={current.address}>{shortAddress(current.address)}</span>
+              {current.source === "pasted" ? (
+                <span title="Pasted, not proven by a wallet signature." className="rounded-full border border-line-strong bg-sunken px-2 py-[2px] text-xs font-semibold text-body">Unverified</span>
+              ) : null}
+            </span>
             <CopyButton value={current.address} label={`Copy ${label} address`} />
           </>
         ) : (
-          <span className="flex-1 text-sm text-muted">Not set — can’t receive on {namespace === "evm" ? "EVM chains" : "Solana"}</span>
+          <span className="flex-1 text-sm text-muted">Not set — can’t receive on {namespace === "evm" ? "EVM chains" : label}</span>
         )}
-        <button type="button" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen((o) => !o)}
+        <button type="button" aria-expanded={open} aria-haspopup="true" onClick={() => (open ? close() : setOpen(true))}
           className="inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border border-line bg-surface px-3 text-sm text-ink hover:bg-sunken">
           {current ? "Change" : "Set"}<Icon name="chevronDown" size={14} />
         </button>
       </div>
-      {open ? (
+      {open && pasting ? (
+        <PastePanel id={id} namespace={namespace} onDone={close} onBack={() => setPasting(false)} />
+      ) : open ? (
         <div role="group" aria-label={`Choose ${label} destination`} className="mb-3 flex flex-col gap-0.5 rounded-xl border border-line bg-surface p-2 shadow-[0_8px_24px_rgba(20,20,19,0.08)]">
+          {linkable ? <>
           <span className="px-2.5 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted">Your {label} wallets</span>
           {wallets.length === 0 ? <span className="px-2.5 py-2 text-sm text-muted">No {label} wallet linked yet.</span> : null}
           {wallets.map((w) => {
@@ -95,10 +110,10 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
             return (
               <button key={w.id} type="button" disabled={isCurrent || set.isPending}
                 onClick={() =>
-                  set.mutate({ id: id.id, namespace, walletId: w.id }, {
+                  set.mutate({ id: id.id, namespace, target: { walletId: w.id } }, {
                     onSuccess: () => {
                       toast(`${label} destination updated`);
-                      setOpen(false);
+                      close();
                     },
                     onError: (e) => toast(errorMessage(e), "danger"),
                   })
@@ -110,9 +125,71 @@ function DestinationRow({ id, namespace, wallets }: { id: MaxId; namespace: Name
             );
           })}
           <Link href="/connect?mode=link&next=/dashboard" className="p-2.5 text-sm font-medium">Link another wallet</Link>
+          </> : <span className="px-2.5 py-2 text-sm text-muted">MAX can’t link {label} wallets. Paste a receive address instead.</span>}
+          <button type="button" onClick={() => setPasting(true)}
+            className="flex min-h-11 items-center rounded-lg px-2.5 text-left text-sm font-medium text-clay-text hover:bg-clay-soft">
+            Paste an address
+          </button>
         </div>
       ) : null}
     </li>
+  );
+}
+
+const EVM_WARNING = "This address will receive on every EVM chain MAX supports (Ethereum, Base, Arbitrum, OP, Polygon). Exchange deposit addresses often accept only one chain.";
+
+/** Paste an address, review it in full, and confirm control before saving. */
+function PastePanel({ id, namespace, onDone, onBack }: { id: MaxId; namespace: Namespace; onDone(): void; onBack(): void }) {
+  const [address, setAddress] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const set = useSetDestination();
+  const label = namespaceLabel(namespace);
+  const trimmed = address.trim();
+  const shapeOk = looksLikeAddress(namespace, trimmed);
+  const fieldId = `paste-${id.id}-${namespace}`;
+
+  const save = () =>
+    set.mutate({ id: id.id, namespace, target: { address: trimmed, confirmed: true } }, {
+      onSuccess: () => {
+        toast(`${label} destination updated`);
+        onDone();
+      },
+      onError: (e) => toast(errorMessage(e), "danger"),
+    });
+
+  return (
+    <div role="group" aria-label={`Paste a ${label} address`} className="mb-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-4 shadow-[0_8px_24px_rgba(20,20,19,0.08)]">
+      {!reviewing ? (
+        <>
+          <label htmlFor={fieldId} className="text-sm font-semibold">{label} receive address</label>
+          <input id={fieldId} value={address} onChange={(e) => setAddress(e.target.value)} autoComplete="off" spellCheck={false}
+            aria-invalid={trimmed !== "" && !shapeOk} aria-describedby={`${fieldId}-msg`}
+            className="min-h-11 rounded-lg border border-line bg-surface px-3 font-mono text-sm text-ink outline-none focus:border-ink" />
+          <p id={`${fieldId}-msg`} className={trimmed !== "" && !shapeOk ? "m-0 text-sm text-danger" : "m-0 text-[13px] text-muted"}>
+            {trimmed !== "" && !shapeOk ? `That doesn’t look like a ${label} address.` : "Paste the address exactly as your wallet or exchange shows it."}
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={!shapeOk} onClick={() => setReviewing(true)}>Review</Button>
+            <Button size="sm" variant="secondary" onClick={onBack}>Back</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="text-sm font-semibold">Check this {label} address</span>
+          <span className="break-all rounded-lg bg-sunken p-3 font-mono text-sm">{trimmed}</span>
+          {namespace === "evm" ? <p className="m-0 text-[13px] text-muted">{EVM_WARNING}</p> : null}
+          <label className="flex items-start gap-2.5 text-sm">
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-0.5 size-4" />
+            I control this address. Payments sent to it can’t be reversed.
+          </label>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={!confirmed} loading={set.isPending} onClick={save}>Save</Button>
+            <Button size="sm" variant="secondary" onClick={() => setReviewing(false)}>Edit</Button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
