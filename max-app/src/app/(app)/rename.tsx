@@ -157,7 +157,8 @@ function RenameFlow({ maxId, eligibility: e, onClose }: { maxId: MaxId; eligibil
       setPhase({ kind: 'working', step: 'sign' });
       // Older servers put the instructions on the view rather than the payment.
       const payment = { ...view.feePayment, instructions: view.feePayment.instructions ?? view.instructions };
-      draft.setSigned(await signPayment(payment));
+      // A fee already signed for this payment is reused; an earlier unrecorded one blocks a new signature.
+      draft.setSigned((await pending.beforeSigning('rename', payment.id)) ?? (await signPayment(payment)));
     }
     await sendSigned(view);
   }

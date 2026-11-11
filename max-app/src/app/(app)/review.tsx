@@ -180,7 +180,8 @@ function Review() {
     try {
       if (!useSendDraft.getState().signed) {
         setPhase({ kind: 'working', step: 'sign' });
-        useSendDraft.getState().setSigned(await signPayment(p));
+        // A transaction already signed for this payment is reused; an earlier unrecorded one blocks a new signature.
+        useSendDraft.getState().setSigned((await pending.beforeSigning('send', p.id)) ?? (await signPayment(p)));
       }
     } catch (err) {
       setPhase({ kind: 'failed', error: errorMessage(err) });

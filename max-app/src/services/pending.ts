@@ -54,6 +54,33 @@ export async function resume(isCurrent: () => boolean): Promise<number> {
   return settled;
 }
 
+/** An earlier payment of the same kind has a hash MAX hasn't recorded yet. */
+export class UnrecordedPaymentError extends Error {
+  readonly paymentId: string;
+  constructor(p: secure.PendingPayment) {
+    super('An earlier payment from this phone hasn’t been recorded with MAX yet, so nothing new was signed. Check your connection and try again.');
+    this.paymentId = p.paymentId;
+  }
+}
+
+/**
+ * Call before signing a new transaction for `paymentId`. Returns the signed
+ * transaction already saved for it, if any: send that, never a new one. Hands
+ * any other remembered `kind` hash to MAX first, and throws
+ * UnrecordedPaymentError if one can't be recorded, since the person may be
+ * repeating a payment that already went out.
+ */
+export async function beforeSigning(kind: PendingKind, paymentId: string): Promise<SignedTx | null> {
+  const list = await secure.readPending();
+  const same = list.find((p) => p.paymentId === paymentId);
+  if (same) return same.signed;
+  for (const p of list.filter((x) => x.kind === kind)) {
+    if (!(await submitted(p))) throw new UnrecordedPaymentError(p);
+    await forget(p.paymentId);
+  }
+  return null;
+}
+
 /** True once MAX has a hash for the payment or the payment is over. */
 async function submitted(p: secure.PendingPayment): Promise<boolean> {
   try {
