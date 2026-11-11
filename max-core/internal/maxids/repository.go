@@ -76,12 +76,45 @@ func nameStatus(u generated.NameUsageRow) string {
 	return ""
 }
 
-func (r *repository) CountByOwner(ctx context.Context, owner uuid.UUID) (int64, error) {
-	n, err := r.q.CountMaxIDsByOwner(ctx, owner)
+func (r *repository) QuotaUsage(ctx context.Context, owner uuid.UUID) (int64, error) {
+	n, err := quotaUsage(ctx, r.q, owner)
 	if err != nil {
 		return 0, shared.ErrInternal.WithError(err)
 	}
 	return n, nil
+}
+
+// quotaUsage is what counts toward MaxIDsPerAccount: claimed (non-default)
+// IDs plus open market purchases, each of which brings one more name.
+// Reserved-name claims are exempt from the quota but still count once owned.
+func quotaUsage(ctx context.Context, q *generated.Queries, owner uuid.UUID) (int64, error) {
+	owned, err := q.CountMaxIDsByOwner(ctx, owner)
+	if err != nil {
+		return 0, err
+	}
+	open, err := q.CountOpenMarketSalesByBuyer(ctx, owner)
+	if err != nil {
+		return 0, err
+	}
+	return owned + open, nil
+}
+
+// LockQuota takes the account lock and refuses an account with no room for
+// one more ID (ErrIDLimitReached). Claims and market sale openings both call
+// it inside their transaction, so concurrent ones cannot each see room for
+// the same last slot. Account locks come before max_ids row locks.
+func LockQuota(ctx context.Context, q *generated.Queries, owner uuid.UUID) error {
+	if err := q.LockAccount(ctx, owner); err != nil {
+		return err
+	}
+	n, err := quotaUsage(ctx, q, owner)
+	if err != nil {
+		return err
+	}
+	if n >= MaxIDsPerAccount {
+		return ErrIDLimitReached
+	}
+	return nil
 }
 
 func (r *repository) ListActiveWallets(ctx context.Context, owner uuid.UUID) ([]WalletRef, error) {
@@ -110,6 +143,9 @@ func (r *repository) Create(ctx context.Context, owner uuid.UUID, canonical stri
 	var out MaxID
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
+		if err := LockQuota(ctx, q, owner); err != nil {
+			return err
+		}
 		row, err := CreateInTx(ctx, q, owner, canonical, typ, displayName, "maxid.claimed", r.hold)
 		if err != nil {
 			return err
@@ -124,11 +160,16 @@ func (r *repository) Create(ctx context.Context, owner uuid.UUID, canonical stri
 }
 
 // CreateInTx registers a MAX ID inside the caller's transaction: it takes the
-// name lock, re-checks availability, inserts the ID and its ownership event,
+// account lock (so the wallets it reads cannot be removed underneath it) and
+// the name lock, re-checks availability, inserts the ID and its ownership event,
 // starts the market hold (holdPeriod; zero means DefaultHoldPeriod),
 // points it at the owner's first wallet per namespace, and audits. Reserved
-// name claims call this after their own policy checks.
+// name claims call this after their own policy checks. It does not enforce
+// the quota: plain claims call LockQuota first, reserved claims are exempt.
 func CreateInTx(ctx context.Context, q *generated.Queries, owner uuid.UUID, canonical string, typ Type, displayName, auditAction string, holdPeriod time.Duration) (generated.MaxID, error) {
+	if err := q.LockAccount(ctx, owner); err != nil {
+		return generated.MaxID{}, err
+	}
 	// Serialize with rename reservations and finalizations on this name.
 	if err := q.LockName(ctx, canonical); err != nil {
 		return generated.MaxID{}, err

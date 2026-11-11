@@ -434,8 +434,8 @@ func (s *Service) buyCooldown(ctx context.Context, buyer, listingID uuid.UUID) e
 // buyerCapacity refuses a buyer at the open-sale cap or, counting the names
 // their open sales will bring (opening reports a new sale is about to be
 // added), at the MAX ID limit. self is false when the caller is the seller
-// (accept), which changes only the wording. The repository re-checks the
-// sale cap under a per-buyer lock.
+// (accept), which changes only the wording. The repository re-checks both
+// under the buyer's account lock and per-buyer sale lock.
 func (s *Service) buyerCapacity(ctx context.Context, buyer uuid.UUID, opening, self bool) error {
 	open, err := s.repo.OpenSaleCount(ctx, buyer)
 	if err != nil {
@@ -453,12 +453,17 @@ func (s *Service) buyerCapacity(ctx context.Context, buyer uuid.UUID, opening, s
 		pending++
 	}
 	if owned >= maxids.MaxIDsPerAccount || owned+pending > maxids.MaxIDsPerAccount {
-		if self {
-			return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("you can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
-		}
-		return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("the buyer can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
+		return idLimit(self)
 	}
 	return nil
+}
+
+// idLimit is MAX_ID_LIMIT_REACHED for a buyer with no room for another name.
+func idLimit(self bool) error {
+	if self {
+		return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("you can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
+	}
+	return maxids.ErrIDLimitReached.WithMessage(fmt.Sprintf("the buyer can own at most %d MAX IDs, counting purchases in progress", maxids.MaxIDsPerAccount))
 }
 
 // saleLimit is SALE_LIMIT for a buyer at the open-sale cap.

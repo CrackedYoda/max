@@ -135,6 +135,11 @@ func (r *repository) LinkWallet(ctx context.Context, accountID uuid.UUID, proof 
 	var out Wallet
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
+		// Same account lock as wallet removal, so the default-destination
+		// fill below never interleaves with a removal on this account.
+		if err := q.LockAccount(ctx, accountID); err != nil {
+			return err
+		}
 
 		existing, err := q.GetActiveWalletByAddress(ctx, generated.GetActiveWalletByAddressParams{
 			ChainNamespace: string(proof.Namespace), Address: proof.Address,

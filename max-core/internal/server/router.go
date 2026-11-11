@@ -45,6 +45,9 @@ type Deps struct {
 	Market         *market.Handler
 }
 
+// maxBodyBytes caps every request body; the largest real payloads are a few KB.
+const maxBodyBytes = 1 << 20
+
 func NewRouter(d Deps) *gin.Engine {
 	if d.Production {
 		gin.SetMode(gin.ReleaseMode)
@@ -59,6 +62,7 @@ func NewRouter(d Deps) *gin.Engine {
 		middleware.Recovery(),
 		middleware.SecurityHeaders(d.Production),
 		middleware.CORS(d.CORSOrigins),
+		middleware.BodyLimit(maxBodyBytes),
 	)
 
 	r.NoRoute(func(c *gin.Context) { shared.Fail(c, shared.ErrNotFound) })
@@ -84,6 +88,8 @@ func NewRouter(d Deps) *gin.Engine {
 	authLimit := middleware.RateLimit(30, time.Minute)
 	lookupLimit := middleware.RateLimit(300, time.Minute)
 	payLimit := middleware.RateLimit(60, time.Minute)
+	// Claims write rows and count toward a quota; legitimate use is a handful.
+	claimLimit := middleware.RateLimit(20, time.Minute)
 
 	v1 := r.Group("/v1")
 
@@ -117,7 +123,7 @@ func NewRouter(d Deps) *gin.Engine {
 	me.DELETE("/wallets/:id", sessionOnly, d.Wallets.Remove)
 
 	ids := me.Group("/ids", scope(agents.ScopeIDsWrite))
-	ids.POST("", d.MaxIDs.Claim)
+	ids.POST("", claimLimit, d.MaxIDs.Claim)
 	ids.GET("", d.MaxIDs.List)
 	ids.GET("/:id", d.MaxIDs.Get)
 	ids.PATCH("/:id", d.MaxIDs.UpdateProfile)
@@ -146,7 +152,7 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.POST("/agents/:agentId/credentials", d.Agents.IssueCredential)
 	admin.POST("/agents/:agentId/credentials/:credentialId/rotate", d.Agents.RotateCredential)
 	admin.DELETE("/agents/:agentId/credentials/:credentialId", d.Agents.RevokeCredential)
-	admin.POST("/agents/:agentId/ids", d.Agents.ClaimID)
+	admin.POST("/agents/:agentId/ids", claimLimit, d.Agents.ClaimID)
 	admin.POST("/agents/:agentId/wallets/challenge", authLimit, d.Agents.WalletChallenge)
 	admin.POST("/agents/:agentId/wallets/verify", authLimit, d.Agents.WalletVerify)
 	admin.GET("/agents/:agentId/transfers", d.Agents.ListTransfers)

@@ -96,7 +96,9 @@ func (s *service) Claim(ctx context.Context, caller uuid.UUID, in ClaimInput) (M
 		return MaxID{}, ErrNameNeedsVerification
 	}
 
-	count, err := s.repo.CountByOwner(ctx, caller)
+	// Early refusal before the balance gate; Create re-checks under the
+	// account lock, which is what actually enforces the quota.
+	count, err := s.repo.QuotaUsage(ctx, caller)
 	if err != nil {
 		return MaxID{}, err
 	}

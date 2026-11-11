@@ -13,7 +13,9 @@ type Repository interface {
 	GetReserved(ctx context.Context, canonical string) (*Reserved, error)
 	// NameStatus returns "" when free, else taken | pending_rename | quarantined.
 	NameStatus(ctx context.Context, canonical string) (string, error)
-	CountByOwner(ctx context.Context, owner uuid.UUID) (int64, error)
+	// QuotaUsage counts claimed IDs plus open purchases. Claim uses it as an
+	// early refusal; Create re-checks it under the account lock.
+	QuotaUsage(ctx context.Context, owner uuid.UUID) (int64, error)
 	// Create claims the name and points it at the owner's first verified wallet
 	// in each namespace, atomically. Returns ErrNameTaken on a uniqueness race.
 	Create(ctx context.Context, owner uuid.UUID, canonical string, typ Type, displayName string) (MaxID, error)

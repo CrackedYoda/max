@@ -189,7 +189,11 @@ func (r *repository) AcceptOffer(ctx context.Context, offerID, seller uuid.UUID,
 	var out Sale
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		// Lock order everywhere: max_ids row, then offer / listing / sale.
+		// Lock order everywhere: buyer account, max_ids row, then offer /
+		// listing / sale.
+		if err := lockBuyerQuota(ctx, q, in.Buyer, false); err != nil {
+			return err
+		}
 		if err := lockListable(ctx, q, in.MaxID, seller, ErrOfferNotFound); err != nil {
 			return err
 		}
