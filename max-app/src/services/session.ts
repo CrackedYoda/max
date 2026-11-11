@@ -1,13 +1,15 @@
 import { isMaxApiError, MaxNetworkError, type Namespace } from '@max/sdk';
 import type { QueryClient } from '@tanstack/react-query';
+import { AppState } from 'react-native';
 
 import { max } from '@/api/client';
 import { errorMessage } from '@/error/messages';
 import { walletSigner, type KeyNamespace } from '@/services/keys';
 import * as passcode from '@/services/passcode';
+import * as pending from '@/services/pending';
 import * as secure from '@/services/secure';
 import * as vault from '@/services/vault';
-import { useOnboarding, useRenameDraft, useSendDraft, useStepUp } from '@/store/flows';
+import { toast, useOnboarding, useRenameDraft, useSendDraft, useStepUp } from '@/store/flows';
 import { getGeneration, useSession } from '@/store/session';
 
 const S = () => useSession.getState();
@@ -25,31 +27,62 @@ export async function boot(): Promise<void> {
 }
 
 // ---- unlock / lock ----
+//
+// An unlock belongs to the generation it started in, captured before the
+// passcode/Face ID check. lock() bumps the generation even while locked, so a
+// check still running when the app goes to the background can never commit.
 
 export async function unlockWithPasscode(code: string): Promise<passcode.VerifyResult> {
+  const gen = getGeneration();
   const res = await passcode.verifyPasscode(code);
-  if (res.ok) await afterUnlock();
+  if (res.ok) await afterUnlock(gen);
   return res;
 }
 
 export async function unlockWithBiometric(): Promise<'ok' | 'failed' | 'invalidated' | 'disabled'> {
+  const gen = getGeneration();
   const res = await passcode.verifyBiometric();
   if (res === 'invalidated' || res === 'disabled') S().setBiometric(false);
-  if (res === 'ok') await afterUnlock();
+  if (res === 'ok') await afterUnlock(gen);
   return res;
 }
 
-async function afterUnlock(): Promise<void> {
-  const accounts = await vault.load();
+/**
+ * Loads keys and marks the wallet unlocked, unless the app locked or went to
+ * the background since `gen`. Not 'active': the Face ID prompt makes iOS
+ * report 'inactive' while it shows.
+ */
+async function afterUnlock(gen: number): Promise<boolean> {
+  const current = () => gen === getGeneration() && AppState.currentState !== 'background';
+  const accounts = await vault.load(current);
+  if (!accounts) return false;
   S().setAccounts(accounts);
   S().setVault('unlocked');
-  void connectMax();
+  void connectMax().then(() => resumePending(gen));
+  return true;
 }
 
-/** Drops keys from memory. The MAX session token stays, so unlocking is instant. */
+/** Hands MAX the hashes of payments a lock or crash interrupted. */
+async function resumePending(gen: number): Promise<void> {
+  if (S().max !== 'ready' || gen !== getGeneration()) return;
+  try {
+    const n = await pending.resume(() => gen === getGeneration());
+    if (n) toast(n === 1 ? 'A payment that was interrupted is now recorded.' : `${n} payments that were interrupted are now recorded.`);
+  } catch {
+    // Unreadable right now: the records stay for the next unlock.
+  }
+}
+
+/**
+ * Drops keys from memory and cancels any unlock still in progress. The MAX
+ * session token stays, so unlocking is instant. Secret screens watch the
+ * generation and erase what they show.
+ */
 export function lock(): void {
-  if (S().vault !== 'unlocked') return;
+  const v = S().vault;
+  if (v !== 'locked' && v !== 'unlocked') return;
   S().bumpGeneration();
+  if (v !== 'unlocked') return;
   vault.unload();
   useSendDraft.getState().reset();
   useRenameDraft.getState().reset();
@@ -170,21 +203,30 @@ export async function refreshAccounts(): Promise<void> {
 
 // ---- step-up: "is it really you?" before signing or revealing secrets ----
 
+/** A lock while the check is showing makes it fail: approval never outlives a lock. */
 export async function stepUp(reason: string): Promise<boolean> {
+  const gen = getGeneration();
+  const current = () => gen === getGeneration() && S().vault === 'unlocked';
   if (S().biometricEnabled) {
     const res = await passcode.verifyBiometric();
-    if (res === 'ok') return true;
+    if (res === 'ok') return current();
     if (res === 'invalidated' || res === 'disabled') S().setBiometric(false);
   }
+  if (!current()) return false;
   return new Promise<boolean>((resolve) => {
     useStepUp.getState().request?.resolve(false);
-    useStepUp.getState().set({ reason, resolve });
+    useStepUp.getState().set({ reason, resolve: (ok) => resolve(ok && current()) });
   });
 }
 
 // ---- removal ----
 
-/** Deletes the wallet from this phone. Funds stay on-chain, reachable only by the phrase. */
+/**
+ * Deletes the wallet from this phone. Funds stay on-chain, reachable only by
+ * the phrase. Throws a StorageError if anything stayed: when the vault itself
+ * couldn't be deleted the wallet is left as it was; when only other items
+ * stayed, the wallet is gone but the caller must say the cleanup was partial.
+ */
 export async function removeWallet(qc: QueryClient): Promise<void> {
   S().bumpGeneration();
   try {
@@ -192,11 +234,21 @@ export async function removeWallet(qc: QueryClient): Promise<void> {
   } catch {
     max().http.clearSession();
   }
-  await secure.clearAll();
+  try {
+    await secure.deleteVault();
+  } catch (err) {
+    void connectMax(); // signed out above; the wallet is still here
+    throw err;
+  }
+  const rest = secure.clearAll().catch((err: unknown) => err);
   vault.unload();
   qc.clear();
   useSendDraft.getState().reset();
   useRenameDraft.getState().reset();
   useOnboarding.getState().clear();
+  useStepUp.getState().request?.resolve(false);
+  useStepUp.getState().set(null);
   S().reset();
+  const failed = await rest;
+  if (failed) throw failed;
 }

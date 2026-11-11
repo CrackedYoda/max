@@ -118,6 +118,15 @@ export async function enableBiometric(): Promise<boolean> {
 
 export const disableBiometric = () => secure.clearBiometric();
 
+/** The key is unusable either way; a delete that failed is retried on the next attempt. */
+async function clearInvalidated(): Promise<void> {
+  try {
+    await secure.clearBiometric();
+  } catch {
+    // Still 'invalidated': the caller turns biometrics off for this session.
+  }
+}
+
 export async function isBiometricEnabled(): Promise<boolean> {
   return (await secure.readBiometricDigest()) !== null;
 }
@@ -132,13 +141,13 @@ export async function verifyBiometric(): Promise<'ok' | 'failed' | 'invalidated'
   const secret = await secure.readBiometricSecret();
   if (secret === null) {
     if (!(await biometricAvailable())) {
-      await secure.clearBiometric();
+      await clearInvalidated();
       return 'invalidated';
     }
     return 'failed';
   }
   if (!constantTimeEqual(await sha256(secret), digest)) {
-    await secure.clearBiometric();
+    await clearInvalidated();
     return 'invalidated';
   }
   await secure.saveLockout({ failures: 0, lockedUntil: 0 });

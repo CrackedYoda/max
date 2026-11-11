@@ -18,12 +18,21 @@ export default function Reveal() {
 
   useEffect(() => {
     if (!allowed) return;
+    let live = true;
     vault
       .revealPhrase()
-      .then((p) => (p ? setPhrase(p) : setMissing(true)))
-      .catch(() => setMissing(true));
-    // Drop the phrase from memory when leaving.
-    return () => setPhrase(null);
+      .then((p) => {
+        if (!live) return; // revoked while reading: never show it
+        if (p) setPhrase(p);
+        else setMissing(true);
+      })
+      .catch(() => live && setMissing(true));
+    // Drop the phrase from memory when leaving or when the gate is revoked (lock, blur).
+    return () => {
+      live = false;
+      setPhrase(null);
+      setShown(false);
+    };
   }, [allowed]);
 
   return (
