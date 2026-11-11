@@ -17,7 +17,9 @@ import { errorCode, errorMessage } from "@/error/messages";
 import { useChains, useHoldings, usePayment, useResolve } from "@/hooks/queries";
 import { BalanceBar, holdingKey, TokenPicker, usd } from "@/components/payments/TokenPicker";
 import { useDebounced } from "@/hooks/useDebounced";
-import { signAndSend } from "@/services/transfer";
+import { AttemptRecovery, useUnsettledAttempt } from "@/components/payments/AttemptRecovery";
+import { clearAttempt, type SendAttempt } from "@/services/sendAttempts";
+import { paymentSummary, SendOutcomeUnknown, signAndSend } from "@/services/transfer";
 import { connectEvm, connectPhantom, discoverEvmProviders, WalletError, type ConnectedWallet, type EvmProviderInfo } from "@/services/wallets";
 import { useSendDraft } from "@/store/flows";
 import { useWallet } from "@/store/wallet";
@@ -67,7 +69,11 @@ export function SendFlow() {
   const selectedKey = assetMode === "native" ? "native" : token.toLowerCase();
   const selected = holdings.data?.find((h) => holdingKey(h) === selectedKey);
   const typedUsd = selected?.priceUsd && amountOk ? usd(Number(amount) * Number(selected.priceUsd)) : null;
-  const busy = phase.kind === "working";
+  // A send whose outcome is unknown (this visit, an earlier one, another tab)
+  // replaces the review: nothing new is signed until it's settled.
+  const unsettled = useUnsettledAttempt((p) => p.kind === "send");
+  const recovering = phase.kind === "review" ? unsettled : null;
+  const busy = phase.kind === "working" || !!recovering;
 
   // Signing and recording must not be interrupted by an accidental tab close.
   useEffect(() => {
@@ -145,11 +151,12 @@ export function SendFlow() {
     try {
       const draft = useSendDraft.getState();
       setPhase({ kind: "working", step: "sign" });
-      const txHash = draft.txHash ?? (await signAndSend(payment, w));
+      const txHash = draft.txHash ?? (await signAndSend(payment, w, { kind: "send" }, paymentSummary(payment)));
       draft.setTxHash(txHash);
       await record(payment, txHash);
     } catch (err) {
-      setPhase({ kind: "review" });
+      setPhase({ kind: "review" }); // shows recovery when the outcome is unknown
+      if (err instanceof SendOutcomeUnknown) return;
       if (errorCode(err) === "RESOLUTION_STALE") resolution.refetch();
       setError(errorMessage(err));
     }
@@ -159,6 +166,7 @@ export function SendFlow() {
     setPhase({ kind: "working", step: "record" });
     try {
       await max().transfers.submit(payment.id, txHash);
+      clearAttempt(payment.id);
       setPhase({ kind: "sent", paymentId: payment.id });
       useSendDraft.getState().reset();
     } catch (err) {
@@ -276,11 +284,19 @@ export function SendFlow() {
           <ReviewPanel
             handle={handle} chain={chain} receiveChain={receiveChain} resolution={resolution.data} resolving={resolution.isFetching && !resolution.data}
             resolveError={resolution.error} amount={amount} amountOk={amountOk} assetMode={assetMode} tokenOk={!tokenErr}
-            phase={phase} error={error} wallet={wallet}
+            phase={phase} recovering={recovering} error={error} wallet={wallet}
             onConfirm={(r) => confirm(r)}
             onSignQuote={(p, w) => signAndRecord(p, w)}
             onCancelQuote={() => setPhase({ kind: "review" })}
             onRetryRecord={(p, h) => record(p, h)}
+            onRecovered={(paymentId) => {
+              useSendDraft.getState().reset();
+              setPhase({ kind: "sent", paymentId });
+            }}
+            onNotSent={() => {
+              setPhase({ kind: "review" });
+              setError("Your last payment was never sent. You can send it again.");
+            }}
           />
         </section>
       </div>
@@ -291,13 +307,15 @@ export function SendFlow() {
 function ReviewPanel(props: {
   handle: string | null; chain?: Chain; receiveChain?: Chain; resolution?: Resolution; resolving: boolean; resolveError: unknown;
   amount: string; amountOk: boolean; assetMode: "native" | "token"; tokenOk: boolean;
-  phase: Phase; error: string | null; wallet: ConnectedWallet | null;
+  phase: Phase; recovering: SendAttempt | null; error: string | null; wallet: ConnectedWallet | null;
   onConfirm(r: Resolution): void; onRetryRecord(p: Payment, h: string): void;
   onSignQuote(p: Payment, w: ConnectedWallet): void; onCancelQuote(): void;
+  onRecovered(paymentId: string): void; onNotSent(): void;
 }) {
   const { handle, chain, receiveChain, resolution: r, phase } = props;
 
   if (phase.kind === "sent") return <SentCard paymentId={phase.paymentId} />;
+  if (props.recovering) return <AttemptRecovery attempt={props.recovering} onRecorded={props.onRecovered} onNotSent={props.onNotSent} />;
   if (phase.kind === "quote") return <QuoteCard payment={phase.payment} error={props.error} onSign={() => props.onSignQuote(phase.payment, phase.wallet)} onCancel={props.onCancelQuote} />;
   if (phase.kind === "record_failed") {
     return (

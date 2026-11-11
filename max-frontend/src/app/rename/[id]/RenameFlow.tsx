@@ -19,7 +19,9 @@ import { errorMessage } from "@/error/messages";
 import { useAccountId, useAvailability, useMyIds, usePayment, useRenameEligibility, useRenameRequest } from "@/hooks/queries";
 import { useDebounced } from "@/hooks/useDebounced";
 import { useEvmProviders } from "@/hooks/useEvmProviders";
-import { signAndSend } from "@/services/transfer";
+import { AttemptRecovery, useUnsettledAttempt } from "@/components/payments/AttemptRecovery";
+import { clearAttempt } from "@/services/sendAttempts";
+import { paymentSummary, SendOutcomeUnknown, signAndSend } from "@/services/transfer";
 import { connectFor } from "@/services/wallets";
 import { useWallet } from "@/store/wallet";
 import { formatDate, shortAddress } from "@/utils/format";
@@ -80,7 +82,10 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
   const settled = q === debounced;
   const same = name === maxId.name;
   const nameOk = settled && !!name && !same && !!avail.data?.available;
-  const busy = phase.kind === "working";
+  // A fee payment whose outcome is unknown replaces the form until it's settled.
+  const unsettled = useUnsettledAttempt((p) => p.kind === "rename" && p.maxId === maxId.id);
+  const recovering = phase.kind === "form" ? unsettled : null;
+  const busy = phase.kind === "working" || !!recovering;
 
   useEffect(() => {
     if (!busy) return;
@@ -111,13 +116,18 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
       }
 
       setPhase({ kind: "working", step: "sign" });
-      txHash = await signAndSend(view.feePayment, w);
+      txHash = await signAndSend(view.feePayment, w, { kind: "rename", maxId: maxId.id, requestId: view.request.id }, paymentSummary(view.feePayment, "MAX"));
 
       setPhase({ kind: "working", step: "record" });
       await max().transfers.submit(view.feePayment.id, txHash);
+      clearAttempt(view.feePayment.id);
       qc.invalidateQueries({ queryKey: keys.rename(accountId, maxId.id) });
       setPhase({ kind: "paid", requestId: view.request.id, paymentId: view.feePayment.id });
     } catch (err) {
+      if (err instanceof SendOutcomeUnknown) {
+        setPhase({ kind: "form" }); // shows recovery
+        return;
+      }
       if (view && txHash) {
         // Broadcast already happened; only recording failed. Retry without re-signing.
         setPhase({ kind: "record_failed", view, txHash, error: errorMessage(err) });
@@ -132,6 +142,7 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
     setPhase({ kind: "working", step: "record" });
     try {
       await max().transfers.submit(view.feePayment.id, txHash);
+      clearAttempt(view.feePayment.id);
       setPhase({ kind: "paid", requestId: view.request.id, paymentId: view.feePayment.id });
     } catch (err) {
       setPhase({ kind: "record_failed", view, txHash, error: errorMessage(err) });
@@ -158,7 +169,18 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
         </p>
       </div>
 
-      {!e.eligible ? (
+      {recovering ? (
+        <AttemptRecovery attempt={recovering}
+          onRecorded={(paymentId) => {
+            qc.invalidateQueries({ queryKey: keys.rename(accountId, maxId.id) });
+            const purpose = recovering.purpose;
+            setPhase({ kind: "paid", requestId: purpose.kind === "rename" ? purpose.requestId : "", paymentId });
+          }}
+          onNotSent={() => {
+            setPhase({ kind: "form" });
+            setError("Your fee was never sent. You can pay it again.");
+          }} />
+      ) : !e.eligible ? (
         <Banner tone="warn" title="Can’t rename right now">
           {e.reason?.startsWith("cooldown")
             ? `Handles can be renamed once every ${e.cooldownHours} hours. You can rename again ${formatDate(e.renameAvailableAt)} at ${cooldownUntil.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}.`
