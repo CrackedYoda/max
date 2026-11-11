@@ -140,6 +140,22 @@ func TestObserveEVM(t *testing.T) {
 		{"erc20 to someone else", AssetToken, func(f *fakeEVM) {
 			f.receipt.Logs = []evmrpc.Log{transferLog(usdcBase, evmSender, evmOther, 1000)}
 		}, Observation{Found: true, Mismatch: "no matching token Transfer from sender to recipient for the exact amount"}, false},
+		// security-review S02: only the payment's own transfer failing is a
+		// revert; an unrelated failed hash must not read as one.
+		{"reverted from another sender", AssetNative, func(f *fakeEVM) { f.receipt.Status = "0x0"; f.tx.From = evmOther },
+			Observation{Found: true, Mismatch: "failed transaction is not this payment's transfer: sent from a different address than the payment's sender"}, false},
+		{"reverted to another recipient", AssetNative, func(f *fakeEVM) { f.receipt.Status = "0x0"; f.tx.To = evmOther },
+			Observation{Found: true, Mismatch: "failed transaction is not this payment's transfer: sent to a different address than the resolved recipient"}, false},
+		{"reverted before the intent existed", AssetNative, func(f *fakeEVM) { f.receipt.Status = "0x0"; f.blockTime = 1_699_000_000 },
+			Observation{Found: true, Mismatch: "transaction was mined before this payment intent was created"}, false},
+		{"erc20 transfer call reverted", AssetToken, func(f *fakeEVM) {
+			f.receipt.Status = "0x0"
+			f.tx = &evmrpc.Transaction{From: evmSender, To: usdcBase, Value: "0x0", Input: chains.EncodeERC20Transfer(strings.ToLower(evmRecipient), big.NewInt(1000))}
+		}, Observation{Found: true, Reverted: true}, false},
+		{"erc20 unrelated call reverted", AssetToken, func(f *fakeEVM) {
+			f.receipt.Status = "0x0"
+			f.tx = &evmrpc.Transaction{From: evmSender, To: usdcBase, Value: "0x0", Input: chains.EncodeERC20Transfer(strings.ToLower(evmOther), big.NewInt(1000))}
+		}, Observation{Found: true, Mismatch: "failed transaction is not this payment's transfer: not a transfer call to the recipient for the exact amount"}, false},
 		{"erc20 removed (reorged) log ignored", AssetToken, func(f *fakeEVM) {
 			l := transferLog(usdcBase, evmSender, evmRecipient, 1000)
 			l.Removed = true
@@ -248,6 +264,11 @@ func TestObserveSolana(t *testing.T) {
 			tx.Meta.Err = json.RawMessage(`{"InstructionError":[0,"Custom"]}`)
 			return tx
 		}(), "finalized", Observation{Found: true, Reverted: true}},
+		{"failed transaction that is not this payment's", AssetNative, func() *solanarpc.Transaction {
+			tx := solTx(systemTransfer(solRecipient, solSender, 100_000_000))
+			tx.Meta.Err = json.RawMessage(`{"InstructionError":[0,"Custom"]}`)
+			return tx
+		}(), "finalized", Observation{Found: true, Mismatch: "failed transaction is not this payment's transfer: no SOL transfer from sender to recipient for the exact amount"}},
 	}
 	amountOverride := map[string]int64{
 		"SOL lamports above 2^53 match exactly": 9_007_199_254_740_993,

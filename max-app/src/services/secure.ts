@@ -31,6 +31,7 @@ const KEYS = {
   lockout: 'max.lockout.v1',
   bioFlag: 'max.bio_enabled.v1',
   bioSecret: 'max.bio_secret.v1',
+  pending: 'max.pending.v1',
 } as const;
 
 const importedKeySchema = z.object({
@@ -87,12 +88,37 @@ async function writeJson(key: string, value: unknown): Promise<void> {
   }
 }
 
+/** Keychain/Keystore wording for "there was nothing to delete". */
+const MISSING_ITEM = /not found|could not be found|doesn['’]t exist|does not exist|errSecItemNotFound|-25300/i;
+
+/**
+ * Deletes one item and makes sure it's gone. A missing item counts as deleted;
+ * any other failure throws, so callers never report a clean state while the
+ * item is still on the phone. Items behind requireAuthentication can't be read
+ * back without a biometric prompt, so only the delete call vouches for them.
+ */
 async function safeDelete(key: string, opts: SecureStore.SecureStoreOptions): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(key, opts);
-  } catch {
-    // Missing or invalidated items are fine to skip when clearing.
+  } catch (err) {
+    if (!MISSING_ITEM.test(err instanceof Error ? err.message : String(err))) {
+      throw new StorageError('Couldn’t delete data from this phone’s secure storage.');
+    }
   }
+  if (opts.requireAuthentication) return;
+  let left: string | null;
+  try {
+    left = await SecureStore.getItemAsync(key, opts);
+  } catch {
+    throw new StorageError('Couldn’t confirm data was deleted from this phone’s secure storage.');
+  }
+  if (left != null) throw new StorageError('Couldn’t delete data from this phone’s secure storage.');
+}
+
+/** Runs every delete, then throws once if any of them failed. */
+async function deleteAll(deletes: Promise<void>[]): Promise<void> {
+  const failed = (await Promise.allSettled(deletes)).filter((r) => r.status === 'rejected');
+  if (failed.length) throw new StorageError(`Couldn’t delete ${failed.length === 1 ? 'one item' : `${failed.length} items`} from this phone’s secure storage.`);
 }
 
 // ---- vault ----
@@ -152,18 +178,47 @@ export async function readBiometricSecret(): Promise<string | null> {
   }
 }
 
+/** The flag goes first: without it biometric unlock is off, whatever happens to the secret. */
 export async function clearBiometric(): Promise<void> {
   await safeDelete(KEYS.bioFlag, BASE_OPTS);
   await safeDelete(KEYS.bioSecret, BIO_OPTS);
 }
 
-/** Removes the wallet and everything bound to it from this phone. */
+// ---- payments signed on this phone but not yet recorded with MAX ----
+
+const pendingSchema = z.array(
+  z.object({
+    kind: z.enum(['send', 'rename']),
+    paymentId: z.string().min(1),
+    chainKey: z.string().min(1),
+    signed: z.object({
+      hash: z.string().min(1),
+      raw: z.string().min(1),
+      namespace: z.enum(['evm', 'solana']),
+      blockhash: z.string().optional(),
+      lastValidBlockHeight: z.number().optional(),
+    }),
+    at: z.number().int().nonnegative(),
+  }),
+);
+export type PendingPayment = z.infer<typeof pendingSchema>[number];
+
+export const readPending = async () => (await readJson(KEYS.pending, pendingSchema)) ?? [];
+export const savePending = (list: PendingPayment[]) => (list.length ? writeJson(KEYS.pending, pendingSchema.parse(list)) : safeDelete(KEYS.pending, BASE_OPTS));
+
+// ---- removal ----
+
+/** Deletes the recovery phrase and keys. Throws if they may still be on the phone. */
+export const deleteVault = () => safeDelete(KEYS.vault, BASE_OPTS);
+
+/** Removes everything bound to the wallet from this phone; throws if anything stayed. */
 export async function clearAll(): Promise<void> {
-  await Promise.all([
+  await deleteAll([
     safeDelete(KEYS.vault, BASE_OPTS),
     safeDelete(KEYS.session, BASE_OPTS),
     safeDelete(KEYS.passcode, BASE_OPTS),
     safeDelete(KEYS.lockout, BASE_OPTS),
+    safeDelete(KEYS.pending, BASE_OPTS),
     clearBiometric(),
   ]);
 }

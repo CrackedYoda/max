@@ -24,7 +24,9 @@ export default function ExportKey() {
   const [selected, setSelected] = useState<string | null>(null);
   const [shown, setShown] = useState(false);
 
-  const keys = allowed ? vault.allKeys() : [];
+  // A revoked gate (lock, blur) never reopens on this mount, so no key or secret derives from here on.
+  // The vault can unload a render before the gate closes: never ask a locked vault for keys.
+  const keys = allowed && vault.isLoaded() ? vault.allKeys() : [];
   const key = keys.find((k) => `${k.namespace}:${k.address}` === selected);
   const secret = key && shown ? exportSecret(key) : null;
 

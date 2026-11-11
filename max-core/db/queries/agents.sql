@@ -60,17 +60,21 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(agent_key)::text, 0));
 -- name: ListAgentSpend24h :many
 -- Committed spend over the rolling window: approved transfers plus approved
 -- market buys and offer payments, so splitting a budget across transfers and
--- the marketplace cannot exceed it. A market authorization whose action
--- failed, or whose sale expired or was cancelled, does not count.
-SELECT a.chain, a.asset_address, a.amount_base_units
+-- the marketplace cannot exceed it. Transfers come back with their payment
+-- status and failure event; agents.reservationHeld decides which still count.
+-- A market authorization whose action failed, or whose sale expired or was
+-- cancelled, does not count.
+SELECT a.chain, a.asset_address, a.amount_base_units, p.status AS payment_status,
+       coalesce((SELECT e.event_type FROM payment_events e
+                 WHERE e.payment_id = p.id AND e.to_status = 'FAILED'
+                 ORDER BY e.created_at DESC LIMIT 1), '')::text AS failure_event
 FROM agent_transfer_authorizations a
 JOIN payments p ON p.id = a.payment_id
 WHERE a.agent_account_id = $1
   AND a.decision IN ('auto_approved', 'approved')
   AND a.created_at > now() - interval '24 hours'
-  AND p.status NOT IN ('EXPIRED', 'FAILED', 'REFUNDED')
 UNION ALL
-SELECT m.chain, m.asset_address, m.amount_base_units
+SELECT m.chain, m.asset_address, m.amount_base_units, ''::text, ''::text
 FROM agent_market_authorizations m
 LEFT JOIN market_sales s ON s.id = m.sale_id
 WHERE m.agent_account_id = $1

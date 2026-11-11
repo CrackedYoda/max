@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus, Platform } from 'react-native';
 
 import { lock } from '@/services/session';
+import { useSession } from '@/store/session';
 
 export const INACTIVITY_LOCK_MS = 5 * 60_000;
 
@@ -26,7 +27,8 @@ export function useAppLock(): { covered: boolean; touch: () => void } {
       if (s === 'active') lastTouch.current = Date.now();
     });
     const timer = setInterval(() => {
-      if (Date.now() - lastTouch.current > INACTIVITY_LOCK_MS) lock();
+      // Only an open wallet times out: lock() while locked would cancel an unlock being typed.
+      if (useSession.getState().vault === 'unlocked' && Date.now() - lastTouch.current > INACTIVITY_LOCK_MS) lock();
     }, 15_000);
     return () => {
       sub.remove();
