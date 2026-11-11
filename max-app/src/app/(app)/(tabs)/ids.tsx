@@ -67,7 +67,11 @@ export default function Ids() {
           style: 'destructive',
           onPress: async () => {
             if (!(await stepUp('Confirm removing the wallet from this phone.'))) return;
-            await removeWallet(qc);
+            try {
+              await removeWallet(qc);
+            } catch (err) {
+              Alert.alert('Couldn’t remove everything', `${errorMessage(err)} Try removing the wallet again.`);
+            }
           },
         },
       ],

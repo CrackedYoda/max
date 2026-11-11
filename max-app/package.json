@@ -57,7 +57,8 @@
     "android": "expo run:android",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test:market": "node --test scripts/market-helpers.test.mjs"
+    "test:market": "node --test scripts/market-helpers.test.mjs",
+    "test:lifecycle": "node --no-warnings --import ./scripts/test-register.mjs --test scripts/lifecycle.test.mjs"
   },
   "private": true
 }

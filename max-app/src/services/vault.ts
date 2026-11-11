@@ -64,11 +64,18 @@ async function build(record: secure.VaultRecord): Promise<Account[]> {
   return list;
 }
 
-/** Call only after the passcode/Face ID check passed. */
-export async function load(): Promise<AccountInfo[]> {
+/**
+ * Call only after the passcode/Face ID check passed. `isCurrent` is asked
+ * after every await: if the unlock was cancelled meanwhile (lock, background),
+ * the derived keys are never installed and null is returned.
+ */
+export async function load(isCurrent: () => boolean = () => true): Promise<AccountInfo[] | null> {
   const record = await secure.readVault();
+  if (!isCurrent()) return null;
   if (!record) throw new secure.StorageError('This phone’s wallet couldn’t be read. Restore it from your recovery phrase.');
-  accounts = await build(record);
+  const built = await build(record);
+  if (!isCurrent()) return null;
+  accounts = built;
   return accountInfos();
 }
 

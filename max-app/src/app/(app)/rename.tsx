@@ -20,8 +20,9 @@ import { useAccountId, useAvailability, useMyIds, usePayment, useRenameEligibili
 import { useDebounced } from '@/hooks/useDebounced';
 import type { AccountInfo } from '@/services/vault';
 import { broadcast, ChainError, hasRpc, signPayment } from '@/services/chain';
+import * as pending from '@/services/pending';
 import { stepUp } from '@/services/session';
-import { useRenameDraft } from '@/store/flows';
+import { useRenameDraft, type SignedTx } from '@/store/flows';
 import { getGeneration, useSession } from '@/store/session';
 import { colors } from '@/theme';
 import { formatDate, shortAddress } from '@/utils/format';
@@ -106,12 +107,12 @@ function RenameFlow({ maxId, eligibility: e, onClose }: { maxId: MaxId; eligibil
     message = avail.data.available ? `${avail.data.handle} is available.` : `${avail.data.handle} isn’t available.`;
   }
 
-  async function record(view: RenameView, ambiguous: boolean) {
-    const s = useRenameDraft.getState().signed;
-    if (!s) return;
+  // `s` is passed in, not re-read: a lock mid-send clears the draft, and the hash must still reach MAX.
+  async function record(view: RenameView, s: SignedTx, ambiguous: boolean) {
     setPhase({ kind: 'working', step: 'record' });
     try {
       await max().transfers.submit(view.feePayment.id, s.hash);
+      pending.forgetQuietly(view.feePayment.id);
       qc.invalidateQueries({ queryKey: keys.rename(accountId, maxId.id) });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setPhase({ kind: 'form' });
@@ -125,6 +126,13 @@ function RenameFlow({ maxId, eligibility: e, onClose }: { maxId: MaxId; eligibil
     const s = useRenameDraft.getState().signed;
     if (!s) return;
     setPhase({ kind: 'working', step: 'broadcast' });
+    try {
+      // Saved before it can go out, so a lock or crash from here on never loses the hash.
+      await pending.remember('rename', view.feePayment.id, view.feePayment.chain.key, s);
+    } catch (err) {
+      setPhase({ kind: 'failed', error: errorMessage(err) });
+      return;
+    }
     let ambiguous = false;
     try {
       await broadcast(view.feePayment.chain, s);
@@ -133,12 +141,13 @@ function RenameFlow({ maxId, eligibility: e, onClose }: { maxId: MaxId; eligibil
         ambiguous = true; // may be on its way: record it, never sign again
       } else {
         // Definitely not sent: drop the signature so the next attempt is clean.
+        pending.forgetQuietly(view.feePayment.id);
         useRenameDraft.getState().setSigned(null);
         setPhase({ kind: 'failed', error: errorMessage(err) });
         return;
       }
     }
-    await record(view, ambiguous);
+    await record(view, s, ambiguous);
   }
 
   /** Signs (once) and sends the fee for a reserved rename. */

@@ -19,8 +19,9 @@ import { keys } from '@/api/keys';
 import { errorCode, errorMessage } from '@/error/messages';
 import { useAccountId, usePayment } from '@/hooks/queries';
 import { broadcast, ChainError, estimateFee, signPayment } from '@/services/chain';
+import * as pending from '@/services/pending';
 import { stepUp } from '@/services/session';
-import { useSendDraft } from '@/store/flows';
+import { useSendDraft, type SignedTx } from '@/store/flows';
 import { getGeneration, useSession } from '@/store/session';
 import { colors, fonts, spacing } from '@/theme';
 import { formatAmount } from '@/utils/amount';
@@ -121,14 +122,14 @@ function Review() {
     return () => clearTimeout(t);
   }, [prepare]);
 
+  // `s` is passed in, not re-read: a lock mid-send clears the draft, and the hash must still reach MAX.
   const record = useCallback(
-    async (p: Payment, ambiguous: boolean) => {
-      const s = useSendDraft.getState().signed;
-      if (!s) return;
+    async (p: Payment, s: SignedTx, ambiguous: boolean) => {
       setPhase({ kind: 'working', step: 'record' });
       try {
         const updated = await max().transfers.submit(p.id, s.hash);
-        useSendDraft.getState().setPayment(updated);
+        pending.forgetQuietly(p.id);
+        if (useSendDraft.getState().payment?.id === p.id) useSendDraft.getState().setPayment(updated);
         qc.invalidateQueries({ queryKey: keys.account(accountId) });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         setPhase({ kind: 'sent', ambiguous });
@@ -144,6 +145,13 @@ function Review() {
       const s = useSendDraft.getState().signed;
       if (!s) return;
       setPhase({ kind: 'working', step: 'broadcast' });
+      try {
+        // Saved before it can go out, so a lock or crash from here on never loses the hash.
+        await pending.remember('send', p.id, p.chain.key, s);
+      } catch (err) {
+        setPhase({ kind: 'failed', error: errorMessage(err) });
+        return;
+      }
       let ambiguous = false;
       try {
         await broadcast(p.chain, s);
@@ -152,12 +160,13 @@ function Review() {
           ambiguous = true; // may be on its way: record it, never sign again
         } else {
           // Definitely not sent: drop the signature so the next attempt is clean.
+          pending.forgetQuietly(p.id);
           useSendDraft.getState().setSigned(null);
           setPhase({ kind: 'failed', error: errorMessage(err) });
           return;
         }
       }
-      await record(p, ambiguous);
+      await record(p, s, ambiguous);
     },
     [record],
   );
