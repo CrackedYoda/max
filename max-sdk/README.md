@@ -155,6 +155,19 @@ const { transfer, payment } = await signer.proposeAndExecute(
 
 `PolicySigner` always runs in the same order: fetch the authorization, verify it against MAX's published keys, call your signing function, then submit the hash. If verification fails, your function is never called. On EVM, build the transaction with `evmTransactionFromClaims(claims)` and check it with `assertEvmTransactionMatches`.
 
+Each payment is signed at most once. Calls for the same payment run one after another, and a repeat call (concurrent, or a retry after a timeout) reuses the first attempt instead of signing again. For retries that are safe after a lost broadcast, sign and broadcast as separate steps: the signed bytes are saved first, and every retry broadcasts those same bytes.
+
+```ts
+await signer.execute(paymentId, {
+  sign: async (claims) => signOnly(claims),   // { raw, txHash }: nothing broadcast yet
+  broadcast: async (tx) => sendRaw(tx.raw),   // may run again with the same bytes; treat "already known" as success
+});
+```
+
+With a single sign-and-send function, PolicySigner can't tell whether a failed call sent anything, so it never calls it twice for that payment. Later calls throw `SigningOutcomeUnknownError` until you check the chain and `release` the attempt. Throw `AuthorizationError` from your function only before signing; that releases the payment for another try.
+
+Attempts are recorded in process memory by default. If the signer can restart mid-payment, or several processes sign for one wallet, pass `attempts` with a durable store shared by all of them whose `reserve` is atomic (for example an insert into a table with a unique key on the payment id). Pin each transaction to one slot where the chain allows (an explicit EVM nonce, a Solana blockhash).
+
 If you build your own signer, call `verifyAuthorization(signed, await client.agent.keys(), { paymentId, sender })` before signing anything. Pass `{ verify }` with an ed25519 implementation (e.g. `@noble/curves`) where WebCrypto lacks Ed25519.
 
 Administrators handle held proposals with `max.agents.transfers(agentId, { decision: "pending_approval" })`, `approve(paymentId)` and `deny(paymentId, reason)`. Keys are managed with `rotateKey` and `revokeKey`, and `pause` / `resume` turn the agent off and on.

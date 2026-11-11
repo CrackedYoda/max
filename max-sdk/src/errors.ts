@@ -32,6 +32,19 @@ export class AuthorizationError extends Error {
   override readonly name = "AuthorizationError";
 }
 
+/**
+ * A payment has a signing attempt with no recorded result: a signer crashed
+ * or failed mid-way, or another process sharing the attempt store is signing
+ * it now. Signing again could pay twice, so PolicySigner refuses. Check the
+ * chain for a transaction from the sender before releasing the attempt.
+ */
+export class SigningOutcomeUnknownError extends Error {
+  override readonly name = "SigningOutcomeUnknownError";
+  constructor(readonly paymentId: string) {
+    super(`payment ${paymentId} has a signing attempt with no recorded result; check the chain before releasing it`);
+  }
+}
+
 export function isMaxApiError(err: unknown, ...codes: string[]): err is MaxApiError {
   return err instanceof MaxApiError && (codes.length === 0 || codes.includes(err.code));
 }

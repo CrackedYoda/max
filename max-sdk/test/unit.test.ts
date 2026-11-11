@@ -8,6 +8,8 @@ import {
   AuthorizationError,
   AUTHORIZATION_DOMAIN,
   PolicySigner,
+  MemoryAttemptStore,
+  SigningOutcomeUnknownError,
   assertEvmTransactionMatches,
   assertSolanaTransferMatches,
   evmTransactionFromClaims,
@@ -265,6 +267,149 @@ describe("PolicySigner", () => {
     });
     assert.equal(res.transfer.authorization.decision, "pending_approval");
     assert.equal(res.payment, undefined);
+  });
+});
+
+// A client stub for the signer: verifiedClaims and submit only.
+function signerClient(opts: { claims?: () => Promise<AuthorizationClaims>; submit?: (id: string, hash: string) => Promise<any> } = {}) {
+  const submitted: string[] = [];
+  const claims = { paymentId: "pay-1", sender: "S" } as AuthorizationClaims;
+  const agent = {
+    verifiedClaims: opts.claims ?? (async () => claims),
+    submit: async (id: string, hash: string) => {
+      submitted.push(hash);
+      return opts.submit ? opts.submit(id, hash) : { id, status: "SUBMITTED", txHash: hash };
+    },
+  };
+  return { client: { agent } as any as MaxClient, submitted };
+}
+
+describe("PolicySigner runs each payment once", () => {
+  // security-review S01: two concurrent calls used to sign twice.
+  test("concurrent calls with a sign-and-send callback sign once", async () => {
+    let reads = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((r) => (release = r));
+    const { client } = signerClient({
+      claims: async () => {
+        if (++reads === 2) release();
+        await Promise.race([barrier, new Promise((r) => setTimeout(r, 50))]);
+        return { paymentId: "pay-1", sender: "S" } as AuthorizationClaims;
+      },
+    });
+    const signer = new PolicySigner({ client, sender: "S" });
+    let signCalls = 0;
+    const sign = async () => `tx-${++signCalls}`;
+    const [a, b] = await Promise.all([signer.execute("pay-1", sign), signer.execute("pay-1", sign)]);
+    assert.equal(signCalls, 1);
+    assert.equal(a.txHash, "tx-1");
+    assert.equal(b.txHash, "tx-1");
+  });
+
+  test("concurrent calls with separate signing and broadcasting sign once", async () => {
+    const { client, submitted } = signerClient();
+    const signer = new PolicySigner({ client, sender: "S" });
+    let signs = 0;
+    const broadcasts: string[] = [];
+    const steps = {
+      sign: async () => ({ raw: `raw-${++signs}`, txHash: `tx-${signs}` }),
+      broadcast: async (t: { raw: string }) => void broadcasts.push(t.raw),
+    };
+    await Promise.all([signer.execute("pay-1", steps), signer.execute("pay-1", steps), signer.execute("pay-1", steps)]);
+    assert.equal(signs, 1);
+    assert.deepEqual(broadcasts, ["raw-1"]);
+    assert.deepEqual([...new Set(submitted)], ["tx-1"]);
+  });
+
+  test("after a crash between signing and broadcasting, a new signer broadcasts the saved bytes", async () => {
+    const store = new MemoryAttemptStore();
+    await store.reserve("pay-1");
+    await store.put({ paymentId: "pay-1", state: "signed", raw: "raw-saved", txHash: "tx-saved" });
+    const { client, submitted } = signerClient();
+    const signer = new PolicySigner({ client, sender: "S", attempts: store });
+    const broadcasts: string[] = [];
+    const p = await signer.execute("pay-1", {
+      sign: async () => assert.fail("must not sign again"),
+      broadcast: async (t) => void broadcasts.push(t.raw),
+    });
+    assert.deepEqual(broadcasts, ["raw-saved"]);
+    assert.deepEqual(submitted, ["tx-saved"]);
+    assert.equal(p.txHash, "tx-saved");
+  });
+
+  test("a broadcast timeout is retried with the same bytes", async () => {
+    const { client, submitted } = signerClient();
+    const signer = new PolicySigner({ client, sender: "S" });
+    let signs = 0;
+    const broadcasts: string[] = [];
+    const steps = {
+      sign: async () => ({ raw: `raw-${++signs}`, txHash: `tx-${signs}` }),
+      broadcast: async (t: { raw: string }) => {
+        broadcasts.push(t.raw);
+        if (broadcasts.length === 1) throw new Error("timeout");
+      },
+    };
+    await assert.rejects(signer.execute("pay-1", steps), /timeout/);
+    await signer.execute("pay-1", steps);
+    assert.equal(signs, 1);
+    assert.deepEqual(broadcasts, ["raw-1", "raw-1"]);
+    assert.deepEqual(submitted, ["tx-1"]);
+  });
+
+  test("an API submit failure is retried without signing or broadcasting again", async () => {
+    let fail = true;
+    const { client, submitted } = signerClient({
+      submit: async (id, hash) => {
+        if (fail) ((fail = false), assert.fail("network down"));
+        return { id, status: "SUBMITTED", txHash: hash };
+      },
+    });
+    const signer = new PolicySigner({ client, sender: "S" });
+    let signs = 0;
+    let broadcasts = 0;
+    const steps = { sign: async () => ({ raw: "raw", txHash: `tx-${++signs}` }), broadcast: async () => void broadcasts++ };
+    await assert.rejects(signer.execute("pay-1", steps));
+    const p = await signer.execute("pay-1", steps);
+    assert.equal(signs, 1);
+    assert.equal(broadcasts, 1);
+    assert.deepEqual(submitted, ["tx-1", "tx-1"]);
+    assert.equal(p.txHash, "tx-1");
+  });
+
+  test("a sign-and-send callback that fails is never retried", async () => {
+    const { client } = signerClient();
+    const signer = new PolicySigner({ client, sender: "S" });
+    let calls = 0;
+    const sign = async () => {
+      calls++;
+      throw new Error("RPC timeout after broadcast?");
+    };
+    await assert.rejects(signer.execute("pay-1", sign), /RPC timeout/);
+    await assert.rejects(signer.execute("pay-1", sign), SigningOutcomeUnknownError);
+    assert.equal(calls, 1);
+  });
+
+  test("a failure before anything is signed releases the reservation", async () => {
+    let first = true;
+    const { client } = signerClient({
+      claims: async () => {
+        if (first) ((first = false), assert.fail("authorization fetch failed"));
+        return { paymentId: "pay-1", sender: "S" } as AuthorizationClaims;
+      },
+    });
+    const signer = new PolicySigner({ client, sender: "S" });
+    let signs = 0;
+    await assert.rejects(signer.execute("pay-1", async () => `tx-${++signs}`));
+    await signer.execute("pay-1", async () => `tx-${++signs}`);
+    assert.equal(signs, 1);
+  });
+
+  test("an attempt reserved by another process is not signed here", async () => {
+    const store = new MemoryAttemptStore();
+    await store.reserve("pay-1"); // another signer sharing the store is mid-signing (or crashed)
+    const { client } = signerClient();
+    const signer = new PolicySigner({ client, sender: "S", attempts: store });
+    await assert.rejects(signer.execute("pay-1", async () => assert.fail("must not sign")), SigningOutcomeUnknownError);
   });
 });
 
