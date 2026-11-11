@@ -15,6 +15,7 @@ import (
 	"github.com/max/max-core/internal/audit"
 	"github.com/max/max-core/internal/database"
 	"github.com/max/max-core/internal/maxids"
+	"github.com/max/max-core/internal/payments"
 	"github.com/max/max-core/internal/shared"
 )
 
@@ -322,8 +323,35 @@ func LockSpend(ctx context.Context, q *generated.Queries, agentID uuid.UUID) (Sp
 	if err != nil {
 		return nil, err
 	}
+	return sumSpend(rows)
+}
+
+// reservationHeld reports whether an approved transfer still counts against
+// the budget. It is released only when its funds provably never moved or came
+// back: the payment's own transaction failed on-chain ("reverted": the
+// gateway checks the failed transaction is this payment's transfer from the
+// agent's wallet), it was rejected before it could be signed, or it was
+// refunded. Anything else stays held for the rolling window, including a
+// mismatched or never-seen hash (anyone with payments:submit can attach one
+// while the real transaction settles) and an approved intent that expired
+// unrecorded (it may have been broadcast). Market rows have no payment status
+// and are always counted; their query already filtered them.
+func reservationHeld(paymentStatus, failureEvent string) bool {
+	switch payments.Status(paymentStatus) {
+	case payments.StatusRefunded:
+		return false
+	case payments.StatusFailed:
+		return failureEvent != "reverted" && failureEvent != "rejected"
+	}
+	return true
+}
+
+func sumSpend(rows []generated.ListAgentSpend24hRow) (SpendFunc, error) {
 	spent := map[string]*big.Int{}
 	for _, row := range rows {
+		if !reservationHeld(row.PaymentStatus, row.FailureEvent) {
+			continue
+		}
 		v, ok := new(big.Int).SetString(row.AmountBaseUnits, 10)
 		if !ok {
 			return nil, fmt.Errorf("invalid committed amount %q", row.AmountBaseUnits)

@@ -184,17 +184,30 @@ func (g *gateway) observeEVM(ctx context.Context, p Payment) (Observation, error
 		return Observation{Found: false}, nil
 	}
 	obs := Observation{Found: true}
-	if rcpt.Status != "0x1" {
-		obs.Reverted = true
-		return obs, nil
-	}
-
 	ts, err := c.BlockTimestamp(ctx, rcpt.BlockNumber)
 	if err != nil {
 		return Observation{}, err
 	}
 	if time.Unix(ts, 0).Before(p.CreatedAt.Add(-blockTimeSkew)) {
 		obs.Mismatch = "transaction was mined before this payment intent was created"
+		return obs, nil
+	}
+	if rcpt.Status != "0x1" {
+		// A revert proves the payment's funds never moved only when the failed
+		// transaction is the payment's own transfer. Any other failed hash says
+		// nothing about it, so it is a mismatch.
+		tx, err := c.Transaction(ctx, p.TxHash)
+		if err != nil {
+			return Observation{}, err
+		}
+		if tx == nil {
+			return Observation{Found: false}, nil
+		}
+		if m := matchEVMCall(tx, p); m != "" {
+			obs.Mismatch = notThisPayment + m
+		} else {
+			obs.Reverted = true
+		}
 		return obs, nil
 	}
 
@@ -244,6 +257,25 @@ func matchEVMNative(tx *evmrpc.Transaction, p Payment) string {
 	return ""
 }
 
+const notThisPayment = "failed transaction is not this payment's transfer: "
+
+// matchEVMCall checks a transaction is the call MAX's instructions describe:
+// from the sender, and either the native transfer or a direct ERC-20
+// transfer(recipient, amount). Used for failed transactions, which emit no logs.
+func matchEVMCall(tx *evmrpc.Transaction, p Payment) string {
+	if p.Asset.Kind == AssetNative {
+		return matchEVMNative(tx, p)
+	}
+	if !strings.EqualFold(tx.From, p.SenderAddress) {
+		return "sent from a different address than the payment's sender"
+	}
+	want := chains.EncodeERC20Transfer(strings.ToLower(p.PayTo()), p.Amount)
+	if !strings.EqualFold(tx.To, p.Asset.Address) || !strings.EqualFold(tx.Input, want) {
+		return "not a transfer call to the recipient for the exact amount"
+	}
+	return ""
+}
+
 // matchERC20Transfer looks for the exact Transfer(sender → recipient, amount)
 // event from the expected token contract, which holds no matter how the
 // transfer was routed (direct call, smart wallet, multicall).
@@ -277,12 +309,17 @@ func (g *gateway) observeSolana(ctx context.Context, p Payment) (Observation, er
 		return Observation{Found: false}, nil
 	}
 	obs := Observation{Found: true}
-	if tx.Failed() {
-		obs.Reverted = true
-		return obs, nil
-	}
 	if tx.BlockTime != nil && time.Unix(*tx.BlockTime, 0).Before(p.CreatedAt.Add(-blockTimeSkew)) {
 		obs.Mismatch = "transaction landed before this payment intent was created"
+		return obs, nil
+	}
+	if tx.Failed() {
+		// As on EVM: only the payment's own transfer failing is a revert.
+		if m := matchSolanaTransfer(tx, p); m != "" {
+			obs.Mismatch = notThisPayment + m
+		} else {
+			obs.Reverted = true
+		}
 		return obs, nil
 	}
 	if obs.Mismatch = matchSolanaTransfer(tx, p); obs.Mismatch != "" {
