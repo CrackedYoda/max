@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "npm --prefix ../max-sdk ci && npm --prefix ../max-sdk run build",
+    "prebuild": "npm --prefix ../max-sdk ci --include=dev &&npm --prefix ../max-sdk run build",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
