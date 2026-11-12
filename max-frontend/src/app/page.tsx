@@ -4,8 +4,10 @@ import { normalizeName } from "@max/sdk";
 import Link from "next/link";
 import { useState } from "react";
 
+import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { Handle } from "@/components/identity/Handle";
+import { AnyChain, LinkWallets, NoComplexity } from "@/components/landing/Sections";
 import { ButtonLink } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Blocks";
 import { HandleInput } from "@/components/ui/Fields";
@@ -116,7 +118,11 @@ export default function Landing() {
           </div>
         </section>
 
-        <section aria-labelledby="how" className="border-t border-line bg-surface">
+        <AnyChain />
+        <NoComplexity />
+        <LinkWallets />
+
+        <section aria-labelledby="how" className="border-t border-line">
           <div className="mx-auto flex max-w-[1200px] flex-col gap-10 px-6 py-[88px]">
             <h2 id="how" className="m-0 font-display text-[40px] font-medium tracking-[-0.01em]">Three steps. No custody.</h2>
             <ol className="m-0 grid list-none gap-6 p-0 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
@@ -125,7 +131,7 @@ export default function Landing() {
                 ["02", "Claim", "Pick a handle for yourself or your agent, then choose which wallet receives on each chain."],
                 ["03", "Get paid", "Share your handle. Senders sign the transfer; funds land straight in your wallet. You do nothing."],
               ].map(([n, title, body]) => (
-                <li key={n} className="flex flex-col gap-3 rounded-2xl border border-line bg-ivory p-7">
+                <li key={n} className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-7">
                   <span className="font-mono text-sm font-semibold text-clay-text">{n}</span>
                   <h3 className="m-0 text-xl font-semibold">{title}</h3>
                   <p className="m-0 text-[15px] leading-relaxed text-muted">{body}</p>
@@ -135,11 +141,7 @@ export default function Landing() {
           </div>
         </section>
       </main>
-      <footer className="border-t border-line">
-        <div className="mx-auto flex max-w-[1200px] flex-wrap justify-between gap-4 px-6 py-8 text-sm text-muted">
-          <span><span className="font-mono font-semibold text-clay-text">max.</span> never holds funds or keys. Only the sender signs.</span>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }
