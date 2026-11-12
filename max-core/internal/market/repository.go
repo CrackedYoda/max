@@ -130,6 +130,18 @@ func (r *repository) BuyCooldown(ctx context.Context, buyer, listingID uuid.UUID
 	return &until, nil
 }
 
+// lockBuyerQuota takes the buyer's account lock and refuses a buyer whose
+// owned IDs plus open purchases leave no room for this one; plain claims
+// check the same quota under the same lock. It runs first in the
+// transaction: account locks come before max_ids row locks everywhere.
+func lockBuyerQuota(ctx context.Context, q *generated.Queries, buyer uuid.UUID, self bool) error {
+	err := maxids.LockQuota(ctx, q, buyer)
+	if errors.Is(err, maxids.ErrIDLimitReached) {
+		return idLimit(self)
+	}
+	return err
+}
+
 // lockBuyerCap takes the per-buyer sale lock and refuses a buyer already at
 // the open-sale cap. Runs inside the caller's transaction, after the
 // max_ids lock.
@@ -279,6 +291,9 @@ func (r *repository) OpenSale(ctx context.Context, in NewSale) (Sale, error) {
 	var out Sale
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
+		if err := lockBuyerQuota(ctx, q, in.Buyer, true); err != nil {
+			return err
+		}
 		if err := lockListable(ctx, q, in.MaxID, in.Seller, ErrListingNotActive); err != nil {
 			return err
 		}

@@ -45,6 +45,12 @@ func (r *repository) Remove(ctx context.Context, accountID, walletID uuid.UUID) 
 	err := database.InTx(ctx, r.pool, func(tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 
+		// The wallet row lock alone lets two removals of different wallets
+		// both count two and leave the account with none; the account lock
+		// makes them (and LinkWallet) take turns.
+		if err := q.LockAccount(ctx, accountID); err != nil {
+			return err
+		}
 		w, err := q.LockActiveWalletForAccount(ctx, generated.LockActiveWalletForAccountParams{ID: walletID, AccountID: accountID})
 		if err != nil {
 			if database.IsNoRows(err) {

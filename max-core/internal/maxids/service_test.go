@@ -96,7 +96,7 @@ func (f *fakeRepo) NameStatus(_ context.Context, n string) (string, error) {
 	return "", nil
 }
 
-func (f *fakeRepo) CountByOwner(_ context.Context, owner uuid.UUID) (int64, error) {
+func (f *fakeRepo) QuotaUsage(_ context.Context, owner uuid.UUID) (int64, error) {
 	var n int64
 	for _, m := range f.ids {
 		if m.OwnerAccountID == owner {

@@ -240,6 +240,19 @@ func (q *Queries) GetActiveWalletByAddress(ctx context.Context, arg GetActiveWal
 	return i, err
 }
 
+const lockAccount = `-- name: LockAccount :exec
+SELECT id FROM accounts WHERE id = $1 FOR NO KEY UPDATE
+`
+
+// Serializes per-account invariants (last active wallet, MAX ID quota) that a
+// row lock on the changed row cannot protect under Read Committed. NO KEY
+// UPDATE still conflicts with itself but lets foreign-key inserts (sessions,
+// wallets, payments) that reference the account through.
+func (q *Queries) LockAccount(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockAccount, id)
+	return err
+}
+
 const revokeSession = `-- name: RevokeSession :exec
 UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 `

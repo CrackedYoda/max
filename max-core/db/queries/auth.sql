@@ -20,6 +20,13 @@ INSERT INTO accounts (type) VALUES ($1) RETURNING *;
 -- name: GetAccount :one
 SELECT * FROM accounts WHERE id = $1;
 
+-- name: LockAccount :exec
+-- Serializes per-account invariants (last active wallet, MAX ID quota) that a
+-- row lock on the changed row cannot protect under Read Committed. NO KEY
+-- UPDATE still conflicts with itself but lets foreign-key inserts (sessions,
+-- wallets, payments) that reference the account through.
+SELECT id FROM accounts WHERE id = $1 FOR NO KEY UPDATE;
+
 -- name: CreateWallet :one
 INSERT INTO wallets (account_id, chain_namespace, address, proof_message, proof_signature, verified_at)
 VALUES ($1, $2, $3, $4, $5, now())
