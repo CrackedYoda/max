@@ -1,0 +1,10 @@
+package holdings
+import("context";"fmt";"math/big";"testing";"time")
+func TestSecurityReviewCacheDoesNotEvict(t *testing.T){
+ s:=NewService(nil,map[string]NativeReader{"base":func(context.Context,string)(*big.Int,error){return big.NewInt(0),nil}})
+ now:=time.Now();s.now=func()time.Time{return now}
+ for i:=1;i<=1000;i++{_,err:=s.List(context.Background(),"base",fmt.Sprintf("0x%040x",i));if err!=nil{t.Fatal(err)}}
+ now=now.Add(24*time.Hour);_,_=s.List(context.Background(),"base",fmt.Sprintf("0x%040x",1001))
+ if len(s.cache)!=1001{t.Fatalf("unexpected cache size %d",len(s.cache))}
+ t.Log("CONFIRMED: 1000 expired cache entries remain after 24 hours and a fresh lookup")
+}

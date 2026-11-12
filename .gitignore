@@ -14,3 +14,6 @@ build-test/
 coverage.out
 
 .DS_Store
+
+# Demo video project (kept local)
+max-demo-video/

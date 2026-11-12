@@ -1,0 +1,29 @@
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-6809
+    Distrust compromised intermediate certificates in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-6809
+  Standard library
+    Found in: crypto/x509@go1.27.2
+    Fixed in: crypto/x509@go1.27.3
+    Example traces found:
+      #1: internal/jsonrpc/client.go:65:24: jsonrpc.Client.Call calls io.ReadAll, which eventually calls x509.Certificate.Verify
+
+Vulnerability #2: GO-2026-5676
+    HTTP/3 QPACK Trailer Expansion Memory Exhaustion in
+    github.com/quic-go/quic-go
+  More info: https://pkg.go.dev/vuln/GO-2026-5676
+  Module: github.com/quic-go/quic-go
+    Found in: github.com/quic-go/quic-go@v0.59.0
+    Fixed in: github.com/quic-go/quic-go@v0.59.1
+    Example traces found:
+      #1: internal/server/server.go:32:31: server.Run calls http.Server.ListenAndServe, which eventually calls http3.ConfigureTLSConfig
+      #2: internal/shared/error.go:23:56: shared.AppError.Error calls http3.Error.Error
+      #3: internal/jsonrpc/client.go:65:24: jsonrpc.Client.Call calls io.ReadAll, which eventually calls http3.countingByteReader.Read
+      #4: internal/shared/error.go:23:56: shared.AppError.Error calls http3.qpackError.Error
+
+Your code is affected by 2 vulnerabilities from 1 module and the Go standard library.
+This scan also found 0 vulnerabilities in packages you import and 3
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.

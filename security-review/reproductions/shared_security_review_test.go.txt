@@ -1,0 +1,11 @@
+package shared
+import("net/http/httptest";"strings";"testing";"github.com/gin-gonic/gin")
+func TestSecurityReviewUnboundedJSON(t *testing.T){
+ c,_:=gin.CreateTestContext(httptest.NewRecorder())
+ c.Request=httptest.NewRequest("POST","/",strings.NewReader(`{"value":"`+strings.Repeat("a",8<<20)+`"}`))
+ c.Request.Header.Set("Content-Type","application/json")
+ var body struct{Value string `json:"value"`}
+ if err:=BindJSON(c,&body);err!=nil{t.Fatal(err)}
+ if len(body.Value)!=(8<<20){t.Fatal("unexpected length")}
+ t.Log("CONFIRMED: JSON binder accepts an 8 MiB field without a request size limit")
+}

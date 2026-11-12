@@ -1,0 +1,18 @@
+package payments
+import("context";"testing";"time";"github.com/google/uuid")
+// Reproduction tests assert current vulnerable behavior, not the desired behavior.
+func TestSecurityReviewReplayIgnoresOwner(t *testing.T){
+ h:=newHarness(); in:=prepareIn("base","","0.001",evmSender);owner:=uuid.New();in.Caller=&owner
+ first,err:=h.svc.Prepare(context.Background(),in);if err!=nil{t.Fatal(err)}
+ in.Caller=nil;replay,err:=h.svc.Prepare(context.Background(),in)
+ if err!=nil||replay.Payment.ID!=first.Payment.ID{t.Fatalf("replay failed: %v",err)}
+ if _,_,err:=h.svc.Get(context.Background(),nil,first.Payment.ID);err==nil{t.Fatal("expected GET denial")}
+ t.Log("CONFIRMED: anonymous prepare replay returns an owner-protected payment denied by GET")
+}
+func TestSecurityReviewLateSubmitDependsOnSweeper(t *testing.T){
+ h:=newHarness();p,err:=h.svc.Prepare(context.Background(),prepareIn("base","","0.001",evmSender));if err!=nil{t.Fatal(err)}
+ h.now=p.Payment.ExpiresAt.Add(24*time.Hour)
+ _,err=h.svc.Submit(context.Background(),SubmitInput{PaymentID:p.Payment.ID,TxHash:"0x1111111111111111111111111111111111111111111111111111111111111111"})
+ if err!=nil{t.Fatal(err)}
+ t.Log("CONFIRMED: unswept intent accepts submit 24 hours after expiry")
+}
