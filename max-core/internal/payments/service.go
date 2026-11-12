@@ -215,7 +215,12 @@ func requiredConfirmations(c chains.Chain) int64 {
 // replay returns an existing intent only if the retried request asks for the
 // same payment; reusing a key for different terms is rejected.
 func (s *service) replay(existing Payment, in PrepareInput, chain chains.Chain) (Prepared, error) {
-	same := existing.Chain.Key == chain.Key
+	// Replay follows the same ownership rule as GET; anyone else sees a
+	// conflict, never the other account's intent.
+	if !sameCaller(existing.SenderAccountID, in.Caller) {
+		return Prepared{}, ErrIdempotencyConflict
+	}
+	same := purposeOr(existing.Purpose) == PurposeTransfer && existing.Chain.Key == chain.Key
 	if canonical, err := maxids.Normalize(in.Recipient); err != nil || maxids.Handle(canonical) != existing.RecipientHandle {
 		same = false
 	}
@@ -232,6 +237,16 @@ func (s *service) replay(existing Payment, in PrepareInput, chain chains.Chain) 
 		if (in.AmountType == "output") != (r.SwapType == routing.ExactOutput) {
 			same = false
 		}
+		if in.DestinationChain != "" && !sameAssetParam(r.DestinationChain.Namespace, in.DestinationAsset, r.DestinationAsset.Address) {
+			same = false
+		}
+		slippage := s.cfg.DefaultSlippageBps
+		if in.SlippageBps != nil {
+			slippage = *in.SlippageBps
+		}
+		if slippage != r.SlippageBps {
+			same = false
+		}
 		compareTo = r.RequestedAmount
 		if r.SwapType == routing.ExactOutput {
 			amountDecimals = r.DestinationAsset.Decimals
@@ -245,7 +260,19 @@ func (s *service) replay(existing Payment, in PrepareInput, chain chains.Chain) 
 	if !same {
 		return Prepared{}, ErrIdempotencyConflict
 	}
+	if in.ResolutionVersion != nil && *in.ResolutionVersion != existing.ResolutionVersion {
+		return Prepared{}, ErrResolutionStale
+	}
 	return Prepared{Payment: existing, Instructions: buildInstructions(existing), Replayed: true}, nil
+}
+
+// sameCaller reports whether a retry comes from the principal that created
+// the intent: the same account, or anonymous for an anonymous intent.
+func sameCaller(owner, caller *uuid.UUID) bool {
+	if owner == nil || caller == nil {
+		return owner == nil && caller == nil
+	}
+	return *owner == *caller
 }
 
 // canonicalAssetParam normalizes "native"/"" or a contract/mint address.
@@ -316,10 +343,14 @@ func (s *service) Submit(ctx context.Context, in SubmitInput) (Payment, error) {
 		// After the quote deadline the provider refunds instead of swapping.
 		lateUntil = p.CrossChain.QuoteDeadline
 	}
-	switch {
-	case p.Status == StatusAwaitingSenderSignature, p.Status == StatusQuoted:
-	case p.Status == StatusExpired && now.Before(lateUntil):
+	// The deadline is absolute: an intent the sweeper hasn't expired yet is
+	// still past it.
+	switch p.Status {
+	case StatusAwaitingSenderSignature, StatusQuoted, StatusExpired:
 	default:
+		return Payment{}, ErrInvalidState
+	}
+	if !now.Before(lateUntil) {
 		return Payment{}, ErrInvalidState
 	}
 
@@ -384,7 +415,7 @@ func (s *service) PrepareFee(ctx context.Context, in FeeInput) (Prepared, error)
 	}
 
 	if existing, err := s.repo.GetByIdempotencyKey(ctx, sender, in.IdempotencyKey); err == nil {
-		if existing.Purpose != in.Purpose || existing.Chain.Key != chain.Key || existing.Asset.Address != in.Asset ||
+		if !sameCaller(existing.SenderAccountID, in.Caller) || existing.Purpose != in.Purpose || existing.Chain.Key != chain.Key || existing.Asset.Address != in.Asset ||
 			existing.Amount.Cmp(in.Amount) != 0 || existing.RecipientAddress != in.Treasury {
 			return Prepared{}, ErrIdempotencyConflict
 		}

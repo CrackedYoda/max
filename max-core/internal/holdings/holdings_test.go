@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -234,5 +237,58 @@ func TestResponseShape(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in %s", want, s)
 		}
+	}
+}
+
+func TestCache_IsBounded(t *testing.T) {
+	svc := NewService(nil, map[string]NativeReader{
+		"base": func(context.Context, string) (*big.Int, error) { return big.NewInt(1), nil },
+	})
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	addr := func(i int) string { return fmt.Sprintf("0x%040x", i) }
+	for i := 1; i <= maxCacheEntries+50; i++ {
+		if _, err := svc.List(context.Background(), "base", addr(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(svc.cache); n > maxCacheEntries {
+		t.Fatalf("cache grew to %d entries", n)
+	}
+	// Once the old entries expire, a full cache sheds them rather than live ones.
+	now = now.Add(24 * time.Hour)
+	if _, err := svc.List(context.Background(), "base", addr(0)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(svc.cache); n != 1 {
+		t.Fatalf("expired entries kept: %d", n)
+	}
+}
+
+func TestList_CollapsesConcurrentMisses(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	svc := NewService(nil, map[string]NativeReader{
+		"base": func(context.Context, string) (*big.Int, error) {
+			calls.Add(1)
+			<-release
+			return big.NewInt(1), nil
+		},
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.List(context.Background(), "base", evmOwner); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("fetches = %d, want 1", n)
 	}
 }

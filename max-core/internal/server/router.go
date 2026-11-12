@@ -45,6 +45,9 @@ type Deps struct {
 	Market         *market.Handler
 }
 
+// maxBodyBytes caps every request body; the largest real payloads are a few KB.
+const maxBodyBytes = 1 << 20
+
 func NewRouter(d Deps) *gin.Engine {
 	if d.Production {
 		gin.SetMode(gin.ReleaseMode)
@@ -59,6 +62,7 @@ func NewRouter(d Deps) *gin.Engine {
 		middleware.Recovery(),
 		middleware.SecurityHeaders(d.Production),
 		middleware.CORS(d.CORSOrigins),
+		middleware.BodyLimit(maxBodyBytes),
 	)
 
 	r.NoRoute(func(c *gin.Context) { shared.Fail(c, shared.ErrNotFound) })
