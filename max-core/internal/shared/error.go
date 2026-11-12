@@ -59,6 +59,7 @@ var (
 	ErrInternal     = NewAppError("INTERNAL_ERROR", http.StatusInternalServerError, "something went wrong")
 	ErrBadRequest   = NewAppError("BAD_REQUEST", http.StatusBadRequest, "invalid request")
 	ErrValidation   = NewAppError("VALIDATION_FAILED", http.StatusBadRequest, "request validation failed")
+	ErrBodyTooLarge = NewAppError("BODY_TOO_LARGE", http.StatusRequestEntityTooLarge, "request body is too large")
 	ErrUnauthorized = NewAppError("UNAUTHORIZED", http.StatusUnauthorized, "authentication required")
 	ErrForbidden    = NewAppError("FORBIDDEN", http.StatusForbidden, "not allowed")
 	ErrNotFound     = NewAppError("NOT_FOUND", http.StatusNotFound, "resource not found")

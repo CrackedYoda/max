@@ -3,6 +3,7 @@ package shared
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,10 @@ import (
 // client-safe validation error that names the offending fields.
 func BindJSON(c *gin.Context, dst any) error {
 	if err := c.ShouldBindJSON(dst); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return ErrBodyTooLarge.WithError(err)
+		}
 		var verrs validator.ValidationErrors
 		if errors.As(err, &verrs) {
 			parts := make([]string, 0, len(verrs))

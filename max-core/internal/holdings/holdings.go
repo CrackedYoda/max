@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/max/max-core/internal/chains"
 	"github.com/max/max-core/internal/shared"
 )
@@ -21,6 +23,9 @@ const (
 	KindToken  = "token"
 
 	cacheTTL = 20 * time.Second
+	// maxCacheEntries bounds memory for a public endpoint fed arbitrary addresses.
+	maxCacheEntries = 10_000
+	fetchTimeout    = 30 * time.Second
 )
 
 var (
@@ -67,6 +72,8 @@ type Service struct {
 
 	mu    sync.Mutex
 	cache map[string]cached
+	// inflight collapses simultaneous misses for one wallet into one fetch.
+	inflight singleflight.Group
 }
 
 // NewService builds the lister. src may be nil (no indexer configured);
@@ -92,15 +99,45 @@ func (s *Service) List(ctx context.Context, chainKey, address string) ([]Holding
 	}
 	s.mu.Unlock()
 
-	out, err := s.fetch(ctx, chain, owner)
+	v, err, _ := s.inflight.Do(key, func() (any, error) {
+		// Shared by every waiter, so one caller hanging up must not fail the
+		// rest; the timeout still bounds it.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		out, err := s.fetch(fctx, chain, owner)
+		if err != nil {
+			return nil, err
+		}
+		out = finish(chain, out)
+		s.store(key, out)
+		return out, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	out = finish(chain, out)
+	return v.([]Holding), nil
+}
+
+// store caches a result, first dropping expired entries when the cache is
+// full and then, if it is still full, arbitrary ones.
+func (s *Service) store(key string, out []Holding) {
 	s.mu.Lock()
-	s.cache[key] = cached{at: s.now(), out: out}
-	s.mu.Unlock()
-	return out, nil
+	defer s.mu.Unlock()
+	now := s.now()
+	if len(s.cache) >= maxCacheEntries {
+		for k, c := range s.cache {
+			if now.Sub(c.at) >= cacheTTL {
+				delete(s.cache, k)
+			}
+		}
+	}
+	for k := range s.cache {
+		if len(s.cache) < maxCacheEntries {
+			break
+		}
+		delete(s.cache, k)
+	}
+	s.cache[key] = cached{at: now, out: out}
 }
 
 func (s *Service) fetch(ctx context.Context, chain chains.Chain, owner string) ([]Holding, error) {
