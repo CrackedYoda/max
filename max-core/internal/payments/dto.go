@@ -239,3 +239,13 @@ func toEventResponses(events []Event) []eventResponse {
 func RenderPayment(p Payment) any { return toPaymentResponse(p) }
 
 func RenderInstructions(ins Instructions) any { return toInstructionsResponse(ins) }
+
+type receivableAssetResponse struct {
+	Chain    string  `json:"chain"`
+	Kind     string  `json:"kind"`
+	Address  string  `json:"address,omitempty"`
+	Symbol   string  `json:"symbol"`
+	Decimals int     `json:"decimals"`
+	PriceUSD float64 `json:"priceUsd,omitempty"`
+	Verified bool    `json:"verified"`
+}

@@ -29,12 +29,14 @@ const (
 // blockchainCodes maps MAX chain keys to 1Click blockchain identifiers.
 // 1Click is mainnet-only, so testnets are deliberately absent.
 var blockchainCodes = map[string]string{
-	"ethereum": "eth",
-	"base":     "base",
-	"arbitrum": "arb",
-	"optimism": "op",
-	"polygon":  "pol",
-	"solana":   "sol",
+	"ethereum":  "eth",
+	"base":      "base",
+	"arbitrum":  "arb",
+	"optimism":  "op",
+	"polygon":   "pol",
+	"bnb":       "bsc",
+	"avalanche": "avax",
+	"solana":    "sol",
 	// Receive-only chains: valid as route destinations only, since MAX
 	// never builds or tracks payments that originate there.
 	"bitcoin":  "btc",
@@ -112,7 +114,7 @@ func (c *Client) Asset(ctx context.Context, ref routing.AssetRef) (routing.Provi
 	var match *token
 	for i := range tokens {
 		t := &tokens[i]
-		if t.Blockchain != code {
+		if t.Blockchain != code || deprecated(t) {
 			continue
 		}
 		if ref.Kind == routing.AssetNative {
@@ -130,6 +132,40 @@ func (c *Client) Asset(ctx context.Context, ref routing.AssetRef) (routing.Provi
 		return routing.ProviderAsset{}, routing.ErrRouteUnavailable
 	}
 	return routing.ProviderAsset{ID: match.AssetID, Decimals: match.Decimals, Symbol: match.Symbol}, nil
+}
+
+// deprecated reports 1Click entries kept only for old balances; their
+// replacements share the symbol and often the contract address.
+func deprecated(t *token) bool {
+	return strings.Contains(strings.ToUpper(t.Symbol), "(DEPRECATED)")
+}
+
+var _ routing.AssetLister = (*Client)(nil)
+
+// Assets lists every current token 1Click delivers on a MAX chain.
+func (c *Client) Assets(ctx context.Context) ([]routing.ListedAsset, error) {
+	tokens, err := c.listTokens(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]string, len(blockchainCodes))
+	for key, code := range blockchainCodes {
+		keys[code] = key
+	}
+	var out []routing.ListedAsset
+	for i := range tokens {
+		t := &tokens[i]
+		key, ok := keys[t.Blockchain]
+		if !ok || deprecated(t) {
+			continue
+		}
+		a := routing.ListedAsset{ChainKey: key, Kind: routing.AssetNative, Symbol: t.Symbol, Decimals: t.Decimals, PriceUSD: t.Price}
+		if t.ContractAddress != "" {
+			a.Kind, a.Address = routing.AssetToken, t.ContractAddress
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 type quoteRequest struct {

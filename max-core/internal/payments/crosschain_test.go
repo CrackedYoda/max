@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -453,3 +454,46 @@ func TestProcessCrossChain_ProviderNotYetAware(t *testing.T) {
 }
 
 var _ = uuid.Nil
+
+type listingProvider struct {
+	fakeProvider
+	assets []routing.ListedAsset
+}
+
+func (l *listingProvider) Assets(context.Context) ([]routing.ListedAsset, error) {
+	return l.assets, nil
+}
+
+func TestReceivableAssets(t *testing.T) {
+	baseUSDC := chains.VerifiedTokensFor("base")[0]
+	prov := &listingProvider{assets: []routing.ListedAsset{
+		{ChainKey: "base", Kind: routing.AssetToken, Address: "0x4200000000000000000000000000000000000042", Symbol: "ZZZ", Decimals: 18},
+		{ChainKey: "base", Kind: routing.AssetToken, Address: strings.ToLower(baseUSDC.Address), Symbol: "USDC", Decimals: baseUSDC.Decimals},
+		{ChainKey: "base", Kind: routing.AssetNative, Symbol: "ETH", Decimals: 18},
+		{ChainKey: "bitcoin", Kind: routing.AssetNative, Symbol: "BTC(OMNI)", Decimals: 8},
+		{ChainKey: "bitcoin", Kind: routing.AssetNative, Symbol: "BTC", Decimals: 8},
+		{ChainKey: "base-sepolia", Kind: routing.AssetNative, Symbol: "ETH", Decimals: 18},
+		{ChainKey: "nowhere", Kind: routing.AssetNative, Symbol: "X", Decimals: 1},
+	}}
+	svc := &service{provider: prov, cfg: Config{RoutingEnabled: true}}
+	got, err := svc.ReceivableAssets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, a := range got {
+		names = append(names, fmt.Sprintf("%s/%s/%v", a.Chain.Key, a.Symbol, a.Verified))
+	}
+	want := []string{"base/ETH/true", "base/USDC/true", "base/ZZZ/false", "bitcoin/BTC/true"}
+	if strings.Join(names, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v, want %v", names, want)
+	}
+	if want := chains.DisplayAddress(chains.NamespaceEVM, baseUSDC.Address); got[1].Address != want {
+		t.Errorf("USDC address = %s, want display form %s", got[1].Address, want)
+	}
+
+	svc.cfg.RoutingEnabled = false
+	if got, _ := svc.ReceivableAssets(context.Background()); len(got) != 0 {
+		t.Errorf("routing off still lists %d assets", len(got))
+	}
+}

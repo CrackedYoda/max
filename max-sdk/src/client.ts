@@ -23,6 +23,7 @@ import {
   type MaxIdType,
   type Namespace,
   type Holding,
+  type ReceivableAsset,
   type DestinationTarget,
   type Payment,
   type PrepareTransferInput,
@@ -94,6 +95,11 @@ export class MaxClient {
   /** Supported chains. Anything not listed is refused rather than guessed. */
   chains(): Promise<Chain[]> {
     return this.http.get("/v1/chains");
+  }
+
+  /** Every asset a cross-chain payment can deliver, grouped by chain (coin first, then verified tokens). */
+  receivableAssets(): Promise<ReceivableAsset[]> {
+    return this.http.get("/v1/routes/assets");
   }
 
   /** Every token a wallet holds on a chain MAX can send from, with USD prices where known. */

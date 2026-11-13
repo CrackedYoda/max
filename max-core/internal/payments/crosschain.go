@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -373,4 +375,60 @@ func bigOrEmpty(v *big.Int) string {
 		return ""
 	}
 	return v.String()
+}
+
+func (s *service) ReceivableAssets(ctx context.Context) ([]ReceivableAsset, error) {
+	lister, ok := s.provider.(routing.AssetLister)
+	if !ok || !s.cfg.RoutingEnabled {
+		return []ReceivableAsset{}, nil
+	}
+	listed, err := lister.Assets(ctx)
+	if err != nil {
+		return nil, mapRoutingErr(err)
+	}
+	out := make([]ReceivableAsset, 0, len(listed))
+	for _, a := range listed {
+		c, ok := chains.Lookup(a.ChainKey)
+		if !ok || c.Testnet {
+			continue
+		}
+		r := ReceivableAsset{Chain: c, Kind: AssetKind(a.Kind), Symbol: a.Symbol, Decimals: a.Decimals, PriceUSD: a.PriceUSD}
+		if a.Kind == routing.AssetNative {
+			// Providers can list wrapped variants as natives too; only the
+			// chain's own coin is delivered as "native".
+			if a.Symbol != c.NativeCoin || a.Decimals != c.NativeDecimals {
+				continue
+			}
+			r.Verified = true
+		} else {
+			addr, err := chains.NormalizeAddress(c.Namespace, a.Address)
+			if err != nil {
+				continue
+			}
+			if known, ok := chains.LookupVerifiedToken(c.Key, addr); ok && known.Decimals == a.Decimals {
+				r.Symbol, r.Verified = known.Symbol, true
+			}
+			r.Address = chains.DisplayAddress(c.Namespace, addr)
+		}
+		out = append(out, r)
+	}
+	// Chains in MAX's order; within a chain the coin, then verified tokens, then the rest by symbol.
+	order := map[string]int{}
+	for i, c := range chains.Supported {
+		order[c.Key] = i
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Chain.Key != b.Chain.Key {
+			return order[a.Chain.Key] < order[b.Chain.Key]
+		}
+		if (a.Kind == AssetNative) != (b.Kind == AssetNative) {
+			return a.Kind == AssetNative
+		}
+		if a.Verified != b.Verified {
+			return a.Verified
+		}
+		return strings.ToLower(a.Symbol) < strings.ToLower(b.Symbol)
+	})
+	return out, nil
 }

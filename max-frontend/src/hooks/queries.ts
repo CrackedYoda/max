@@ -22,6 +22,11 @@ export function useChains() {
   return useQuery({ queryKey: keys.chains, queryFn: () => max().chains(), staleTime: 60 * 60_000 });
 }
 
+/** What a cross-chain payment can deliver; the provider's list changes rarely. */
+export function useReceivableAssets() {
+  return useQuery({ queryKey: keys.receivableAssets, queryFn: () => max().receivableAssets(), staleTime: 10 * 60_000 });
+}
+
 /** Availability for a debounced input. Invalid names never hit the API. */
 export function useAvailability(input: string) {
   const name = normalizeName(input);

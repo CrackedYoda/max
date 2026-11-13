@@ -48,6 +48,18 @@ const (
 	RouteCrossChain RouteType = "cross_chain"
 )
 
+// ReceivableAsset is an asset a cross-chain payment can deliver.
+type ReceivableAsset struct {
+	Chain    chains.Chain
+	Kind     AssetKind
+	Address  string // display form; empty for the native coin
+	Symbol   string
+	Decimals int
+	PriceUSD float64
+	// Verified is true for native coins and tokens on MAX's verified list.
+	Verified bool
+}
+
 type Asset struct {
 	Kind         AssetKind
 	Address      string // canonical contract/mint; empty for native

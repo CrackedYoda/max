@@ -115,3 +115,21 @@ func callerID(c *gin.Context) *uuid.UUID {
 	}
 	return nil
 }
+
+// ReceivableAssets lists what a recipient can be paid in through a
+// cross-chain route, grouped by chain.
+func (h *Handler) ReceivableAssets(c *gin.Context) {
+	assets, err := h.svc.ReceivableAssets(c.Request.Context())
+	if err != nil {
+		shared.Fail(c, err)
+		return
+	}
+	out := make([]receivableAssetResponse, 0, len(assets))
+	for _, a := range assets {
+		out = append(out, receivableAssetResponse{
+			Chain: a.Chain.Key, Kind: string(a.Kind), Address: a.Address, Symbol: a.Symbol,
+			Decimals: a.Decimals, PriceUSD: a.PriceUSD, Verified: a.Verified,
+		})
+	}
+	shared.OK(c, out)
+}

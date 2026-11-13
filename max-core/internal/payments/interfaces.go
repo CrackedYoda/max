@@ -52,6 +52,9 @@ type Gateway interface {
 
 type Service interface {
 	Prepare(ctx context.Context, in PrepareInput) (Prepared, error)
+	// ReceivableAssets lists what a cross-chain payment can deliver: every
+	// asset the routing provider supports on a MAX mainnet chain.
+	ReceivableAssets(ctx context.Context) ([]ReceivableAsset, error)
 	// PrepareFee creates a direct payment to a MAX treasury address.
 	PrepareFee(ctx context.Context, in FeeInput) (Prepared, error)
 	Submit(ctx context.Context, in SubmitInput) (Payment, error)

@@ -78,6 +78,20 @@ export interface Resolution {
 }
 
 /** One asset in a wallet, as listed for Send. */
+/** Something a cross-chain payment can deliver to a recipient (GET /v1/routes/assets). */
+export interface ReceivableAsset {
+  /** MAX chain key, e.g. "base", "bitcoin". */
+  chain: string;
+  kind: "native" | "token";
+  /** Token contract or mint; absent for the native coin. */
+  address?: string;
+  symbol: string;
+  decimals: number;
+  priceUsd?: number;
+  /** Native coin, or on MAX's verified token list. */
+  verified: boolean;
+}
+
 export interface Holding {
   kind: "native" | "token";
   /** Token contract or mint; empty for the native coin. */

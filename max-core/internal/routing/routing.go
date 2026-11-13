@@ -46,6 +46,21 @@ type ProviderAsset struct {
 	Symbol   string
 }
 
+// ListedAsset is something a provider can deliver on a MAX chain.
+type ListedAsset struct {
+	ChainKey string
+	Kind     AssetKind
+	Address  string // empty for the native coin
+	Symbol   string
+	Decimals int
+	PriceUSD float64
+}
+
+// AssetLister is implemented by providers that can list what they deliver.
+type AssetLister interface {
+	Assets(ctx context.Context) ([]ListedAsset, error)
+}
+
 type SwapType string
 
 const (

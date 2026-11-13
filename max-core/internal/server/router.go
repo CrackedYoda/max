@@ -110,6 +110,7 @@ func NewRouter(d Deps) *gin.Engine {
 	// Transfers: signed-in senders get ownership checks; anonymous senders
 	// address their intent by its unguessable id. Agents cannot use prepare;
 	// they propose through the policy engine under /v1/agent.
+	v1.GET("/routes/assets", lookupLimit, d.Payments.ReceivableAssets)
 	v1.POST("/transfers/prepare", payLimit, optional, d.Payments.Prepare)
 	v1.POST("/transfers/:id/submit", payLimit, optional, scope(agents.ScopePaymentsSubmit), d.Payments.Submit)
 	v1.GET("/transfers/:id", lookupLimit, optional, scope(agents.ScopePaymentsRead), d.Payments.Get)

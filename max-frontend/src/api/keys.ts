@@ -4,6 +4,7 @@
  */
 export const keys = {
   chains: ["chains"] as const,
+  receivableAssets: ["receivable-assets"] as const,
   availability: (name: string) => ["availability", name] as const,
   profile: (handle: string) => ["profile", handle] as const,
   resolve: (handle: string, chain: string, asset: string) => ["resolve", handle, chain, asset] as const,

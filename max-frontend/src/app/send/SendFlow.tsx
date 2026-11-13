@@ -1,6 +1,6 @@
 "use client";
 
-import { isMaxApiError, normalizeName, type Chain, type Payment, type Resolution } from "@max/sdk";
+import { isMaxApiError, normalizeName, type Chain, type Payment, type ReceivableAsset, type Resolution } from "@max/sdk";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -14,7 +14,9 @@ import { cx } from "@/components/ui/cx";
 import { HandleInput, Segmented } from "@/components/ui/Fields";
 import { Icon } from "@/components/ui/Icon";
 import { errorCode, errorMessage } from "@/error/messages";
-import { useChains, useHoldings, usePayment, useResolve } from "@/hooks/queries";
+import { useChains, useHoldings, usePayment, useReceivableAssets, useResolve } from "@/hooks/queries";
+import { ReceivePicker } from "@/components/payments/ReceivePicker";
+import { TokenLogo } from "@/components/ui/TokenLogo";
 import { BalanceBar, holdingKey, TokenPicker, usd } from "@/components/payments/TokenPicker";
 import { useDebounced } from "@/hooks/useDebounced";
 import { AttemptRecovery, useUnsettledAttempt } from "@/components/payments/AttemptRecovery";
@@ -42,9 +44,10 @@ export function SendFlow() {
   const chains = useChains();
   const [to, setTo] = useState(stripPrefix(params.get("to") ?? ""));
   const [chainKey, setChainKey] = useState(DEFAULT_CHAIN);
-  // "" pays and delivers on the same network; a receive-only chain key asks
-  // NEAR Intents to convert and deliver there.
-  const [receiveKey, setReceiveKey] = useState("");
+  // null delivers the same asset on the same network; anything else asks
+  // NEAR Intents to convert and deliver that asset on its chain.
+  const [receive, setReceive] = useState<ReceivableAsset | null>(null);
+  const receivable = useReceivableAssets();
   const [assetMode, setAssetMode] = useState<"native" | "token">("native");
   const [token, setToken] = useState("");
   const [amount, setAmount] = useState("");
@@ -56,11 +59,12 @@ export function SendFlow() {
   useEffect(() => discoverEvmProviders(setEvm), []);
 
   const chain = chains.data?.find((c) => c.key === chainKey);
-  const receiveChain = receiveKey && !chain?.testnet ? chains.data?.find((c) => c.key === receiveKey) : undefined;
+  const receiveChain = receive && !chain?.testnet ? chains.data?.find((c) => c.key === receive.chain) : undefined;
+  const receiveAsset = receiveChain && receive ? (receive.kind === "native" ? "native" : receive.address ?? "") : undefined;
   const handle = normalizeName(useDebounced(to));
   const tokenErr = assetMode === "token" && chain ? tokenAddressError(chain.namespace, token) : null;
   const assetParam = assetMode === "token" && !tokenErr ? token.trim() : "native";
-  const resolution = useResolve(handle, receiveChain?.key ?? chainKey, receiveChain ? "native" : assetMode === "token" && tokenErr ? "" : assetParam);
+  const resolution = useResolve(handle, receiveChain?.key ?? chainKey, receiveAsset ?? (assetMode === "token" && tokenErr ? "" : assetParam));
   const amountOk = amountSchema.safeParse(amount).success;
   // The connected wallet's tokens on this network, once one is connected.
   const sender = chain && wallet && wallet.namespace === chain.namespace ? wallet.address : undefined;
@@ -120,13 +124,13 @@ export function SendFlow() {
       const w = await ensureWallet(chain);
       const draft = useSendDraft.getState();
       // One key per exact set of terms: a retry replays the same intent, never a second one.
-      const key = draft.keyFor(JSON.stringify([r.maxId, r.resolutionVersion, chain.key, assetParam, amount.trim(), w.address, receiveChain?.key ?? ""]));
+      const key = draft.keyFor(JSON.stringify([r.maxId, r.resolutionVersion, chain.key, assetParam, amount.trim(), w.address, receiveChain?.key ?? "", receiveAsset ?? ""]));
 
       setPhase({ kind: "working", step: "prepare" });
       const payment = await max().transfers.prepare({
         recipient: r.handle, chain: chain.key, asset: assetParam, amount: amount.trim(),
         senderAddress: w.address, idempotencyKey: key, resolutionVersion: r.resolutionVersion,
-        ...(receiveChain ? { destinationChain: receiveChain.key, destinationAsset: "native" } : {}),
+        ...(receiveChain && receiveAsset ? { destinationChain: receiveChain.key, destinationAsset: receiveAsset } : {}),
       });
       draft.setPayment(payment);
       if (payment.txHash) {
@@ -175,8 +179,6 @@ export function SendFlow() {
     }
   }
 
-  const receiveOptions = useMemo(() => (chains.data ?? []).filter((c) => c.receiveOnly && !c.testnet), [chains.data]);
-
   const chainList = useMemo(() => {
     // MAX can't send on receive-only chains (Bitcoin, Litecoin, Tron).
     const list = (chains.data ?? []).filter((c) => !c.receiveOnly);
@@ -214,20 +216,17 @@ export function SendFlow() {
             </div>
           </div>
 
-          {receiveOptions.length && !chain?.testnet ? (
+          {chain && !chain.testnet ? (
             <div className="flex flex-col gap-2.5">
               <label htmlFor="receive" className="text-sm font-semibold">Recipient receives</label>
-              <select id="receive" value={receiveKey} disabled={busy}
-                onChange={(e) => { editing(); setReceiveKey(e.target.value); if (e.target.value) setAssetMode("native"); }}
-                className="min-h-12 rounded-xl border border-line bg-surface px-4 text-[15px] outline-none focus:border-ink">
-                <option value="">The same asset, on {chain?.name ?? "this network"}</option>
-                {receiveOptions.map((c) => <option key={c.key} value={c.key}>{c.nativeCoin} on {c.name}</option>)}
-              </select>
+              <ReceivePicker value={receive} disabled={busy} sendChain={chain} chains={chains.data ?? []}
+                assets={receivable.data ?? []} loading={receivable.isLoading}
+                onChange={(a) => { editing(); setReceive(a); }} />
               {receiveChain ? <p className="m-0 text-[13px] text-muted">Converted through NEAR Intents. You’ll see the quote before you sign.</p> : null}
             </div>
           ) : null}
 
-          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0" disabled={!!receiveChain || busy}>
+          <fieldset className="m-0 flex flex-col gap-2.5 border-0 p-0" disabled={busy}>
             <legend className="mb-2.5 p-0 text-sm font-semibold">Asset</legend>
             {chain && !sender ? (
               <Button variant="secondary" onClick={() => connectForTokens(chain)}>
@@ -265,7 +264,7 @@ export function SendFlow() {
 
           <div className="flex flex-col gap-2.5">
             <label htmlFor="amount" className="text-sm font-semibold">Amount</label>
-            {selected && !receiveChain ? (
+            {selected ? (
               <BalanceBar holding={selected} disabled={busy} onMax={() => { editing(); setAmount(selected.balance.display); }} />
             ) : null}
             <div className="field flex items-center gap-2 rounded-xl border border-line px-4 focus-within:border-ink">
@@ -282,7 +281,7 @@ export function SendFlow() {
 
         <section aria-labelledby="confirm" aria-live="polite" className="flex min-w-0 flex-[1_1_420px] flex-col gap-4">
           <ReviewPanel
-            handle={handle} chain={chain} receiveChain={receiveChain} resolution={resolution.data} resolving={resolution.isFetching && !resolution.data}
+            handle={handle} chain={chain} receiveChain={receiveChain} receive={receive} resolution={resolution.data} resolving={resolution.isFetching && !resolution.data}
             resolveError={resolution.error} amount={amount} amountOk={amountOk} assetMode={assetMode} tokenOk={!tokenErr}
             phase={phase} recovering={recovering} error={error} wallet={wallet}
             onConfirm={(r) => confirm(r)}
@@ -305,14 +304,14 @@ export function SendFlow() {
 }
 
 function ReviewPanel(props: {
-  handle: string | null; chain?: Chain; receiveChain?: Chain; resolution?: Resolution; resolving: boolean; resolveError: unknown;
+  handle: string | null; chain?: Chain; receiveChain?: Chain; receive?: ReceivableAsset | null; resolution?: Resolution; resolving: boolean; resolveError: unknown;
   amount: string; amountOk: boolean; assetMode: "native" | "token"; tokenOk: boolean;
   phase: Phase; recovering: SendAttempt | null; error: string | null; wallet: ConnectedWallet | null;
   onConfirm(r: Resolution): void; onRetryRecord(p: Payment, h: string): void;
   onSignQuote(p: Payment, w: ConnectedWallet): void; onCancelQuote(): void;
   onRecovered(paymentId: string): void; onNotSent(): void;
 }) {
-  const { handle, chain, receiveChain, resolution: r, phase } = props;
+  const { handle, chain, receiveChain, receive, resolution: r, phase } = props;
 
   if (phase.kind === "sent") return <SentCard paymentId={phase.paymentId} />;
   if (props.recovering) return <AttemptRecovery attempt={props.recovering} onRecorded={props.onRecovered} onNotSent={props.onNotSent} />;
@@ -378,7 +377,7 @@ function ReviewPanel(props: {
       </div>
       <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 text-[15px]">
         <ReviewRow label="Network" value={<span className="inline-flex items-center gap-1.5"><ChainLogo chain={chain.key} size={16} />{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</span>} />
-        {receiveChain ? <ReviewRow label="They receive" value={<span className="inline-flex items-center gap-1.5"><ChainLogo chain={receiveChain.key} size={16} />{receiveChain.nativeCoin} on {receiveChain.name}</span>} /> : null}
+        {receiveChain && receive ? <ReviewRow label="They receive" value={<span className="inline-flex items-center gap-1.5"><TokenLogo symbol={receive.symbol} chain={receiveChain.key} size={18} />{receive.symbol} on {receiveChain.name}</span>} /> : null}
         <ReviewRow label="Asset" value={assetText} />
         <ReviewRow label="Resolution version" value={r.resolutionVersion} mono />
         <ReviewRow label="Network fee" value={<span className="font-normal">Set in your wallet</span>} />

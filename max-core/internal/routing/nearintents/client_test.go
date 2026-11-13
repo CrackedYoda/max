@@ -23,7 +23,12 @@ const tokensJSON = `[
  {"assetId":"nep141:btc.omft.near","decimals":8,"blockchain":"btc","symbol":"BTC","price":100000,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
  {"assetId":"nep141:ltc.omft.near","decimals":8,"blockchain":"ltc","symbol":"LTC","price":90,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
  {"assetId":"nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near","decimals":6,"blockchain":"tron","symbol":"USDT","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
- {"assetId":"nep141:tron.omft.near","decimals":6,"blockchain":"tron","symbol":"TRX","price":0.3,"priceUpdatedAt":"2026-01-01T00:00:00Z"}
+ {"assetId":"nep141:tron.omft.near","decimals":6,"blockchain":"tron","symbol":"TRX","price":0.3,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
+ {"assetId":"nep245:old-bnb","decimals":18,"blockchain":"bsc","symbol":"BNB(DEPRECATED)","price":600,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
+ {"assetId":"nep245:old-bsc-usdt","decimals":18,"blockchain":"bsc","symbol":"USDT(DEPRECATED)","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"0x55d398326f99059ff775485246999027b3197955"},
+ {"assetId":"nep245:bnb","decimals":18,"blockchain":"bsc","symbol":"BNB","price":600,"priceUpdatedAt":"2026-01-01T00:00:00Z"},
+ {"assetId":"nep245:bsc-usdt","decimals":18,"blockchain":"bsc","symbol":"USDT","price":1,"priceUpdatedAt":"2026-01-01T00:00:00Z","contractAddress":"0x55d398326f99059ff775485246999027b3197955"},
+ {"assetId":"nep141:doge.omft.near","decimals":8,"blockchain":"doge","symbol":"DOGE","price":0.2,"priceUpdatedAt":"2026-01-01T00:00:00Z"}
 ]`
 
 const (
@@ -117,6 +122,8 @@ func TestAsset(t *testing.T) {
 		{"native LTC", routing.AssetRef{Chain: chain("litecoin"), Kind: routing.AssetNative}, "nep141:ltc.omft.near", nil},
 		{"native TRX, not Tron USDT", routing.AssetRef{Chain: chain("tron"), Kind: routing.AssetNative}, "nep141:tron.omft.near", nil},
 		{"testnets are not routable", routing.AssetRef{Chain: chain("base-sepolia"), Kind: routing.AssetNative}, "", routing.ErrRouteUnavailable},
+		{"native BNB skips the deprecated entry", routing.AssetRef{Chain: chain("bnb"), Kind: routing.AssetNative}, "nep245:bnb", nil},
+		{"BSC USDT skips the deprecated entry with the same contract", routing.AssetRef{Chain: chain("bnb"), Kind: routing.AssetToken, Address: chains.ChecksumEVMAddress("0x55d398326f99059ff775485246999027b3197955")}, "nep245:bsc-usdt", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,5 +226,30 @@ func TestStatus(t *testing.T) {
 	f.statusCode, f.statusBody = 404, `{"message":"not found"}`
 	if _, err := c.Status(ctx, "0x9999"); !errors.Is(err, routing.ErrDepositNotFound) {
 		t.Fatalf("404 err = %v", err)
+	}
+}
+
+func TestAssets(t *testing.T) {
+	f := &fake{t: t}
+	srv := f.server()
+	defer srv.Close()
+	got, err := New(Config{BaseURL: srv.URL}).Assets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, a := range got {
+		if strings.Contains(a.Symbol, "DEPRECATED") {
+			t.Errorf("deprecated asset listed: %+v", a)
+		}
+		seen[a.ChainKey+"/"+a.Symbol] = true
+	}
+	for _, want := range []string{"base/ETH", "base/USDC", "solana/USDC", "bitcoin/BTC", "tron/USDT", "bnb/BNB", "bnb/USDT"} {
+		if !seen[want] {
+			t.Errorf("missing %s in %v", want, seen)
+		}
+	}
+	if seen["doge/DOGE"] || len(seen) != len(got) {
+		t.Errorf("unexpected assets: %v", seen)
 	}
 }
