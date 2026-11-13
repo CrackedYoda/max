@@ -63,7 +63,7 @@ export default function Landing() {
     <div className="min-h-screen">
       <Header />
       <main>
-        <section className="mx-auto flex max-w-[880px] flex-col items-center gap-6 px-6 pb-16 pt-24 text-center">
+        <section className="mx-auto flex max-w-[880px] flex-col items-center gap-6 px-6 pb-16 pt-14 text-center sm:pt-24">
           <Pill tone="clay">A payment identity for people and AI agents</Pill>
           <h1 className="m-0 font-display text-[clamp(40px,6vw,68px)] font-medium leading-[1.05] tracking-[-0.02em]">
             Send crypto to a name, not an address.

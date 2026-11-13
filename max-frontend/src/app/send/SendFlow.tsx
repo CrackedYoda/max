@@ -188,7 +188,7 @@ export function SendFlow() {
       <h1 className="m-0 font-display text-[44px] font-medium tracking-[-0.01em]">Send</h1>
       <div className="flex flex-wrap items-start gap-6">
         <form aria-label="Payment details" onSubmit={(e) => e.preventDefault()}
-          className="flex flex-[1_1_380px] flex-col gap-6 rounded-2xl border border-line bg-surface p-7 shadow-[0_8px_24px_rgba(20,20,19,0.04)]">
+          className="flex min-w-0 flex-[1_1_380px] flex-col gap-6 rounded-2xl border border-line bg-surface p-5 shadow-[0_8px_24px_rgba(20,20,19,0.04)] sm:p-7">
           <div className="flex flex-col gap-2.5">
             <label htmlFor="to" className="text-sm font-semibold">To</label>
             <HandleInput id="to" scale="md" value={to} disabled={busy} placeholder="yourfriend"
