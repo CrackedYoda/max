@@ -198,8 +198,13 @@ func toPaymentResponse(p Payment) paymentResponse {
 			a := amt(r.RefundedAmount, p.Asset.Decimals)
 			cc.RefundedAmount = &a
 		}
-		if cc.DestinationTxs == nil {
-			cc.DestinationTxs = []routing.TxRef{}
+		// The provider often leaves the explorer link empty; build it from the destination chain.
+		cc.DestinationTxs = make([]routing.TxRef, 0, len(r.DestinationTxs))
+		for _, tx := range r.DestinationTxs {
+			if tx.ExplorerURL == "" && tx.Hash != "" {
+				tx.ExplorerURL = r.DestinationChain.TxURL(tx.Hash)
+			}
+			cc.DestinationTxs = append(cc.DestinationTxs, tx)
 		}
 		resp.CrossChain = cc
 	}
