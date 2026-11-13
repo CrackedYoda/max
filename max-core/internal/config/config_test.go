@@ -41,7 +41,7 @@ func TestLoad_MarketDefaults(t *testing.T) {
 		m.OfferPayWindow != 24*time.Hour || m.MinOffer != "1" {
 		t.Fatalf("unexpected market defaults: %+v", m)
 	}
-	if cfg.Registration.MinBalanceUSD != 100 {
+	if cfg.Registration.MinBalanceUSD != 50 {
 		t.Fatalf("MinBalanceUSD = %v", cfg.Registration.MinBalanceUSD)
 	}
 	if cfg.Pricing.TTL != 60*time.Second || cfg.Pricing.MaxAge != 5*time.Minute {

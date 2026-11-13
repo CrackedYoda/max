@@ -273,7 +273,7 @@ in one Solana transaction that they sign themselves. MAX never holds funds or si
 | `MARKET_REVIEW_THRESHOLD` | off | A decimal amount. Sales above it wait in `pending_review` for an admin. |
 | `MARKET_MIN_OFFER` | `1` | A decimal amount. It is the minimum offer and also the minimum listing price. When the fee is on it must be at least `ceil(10000 / MARKET_FEE_BPS)` base units of every asset, so the fee is never 0. |
 | `TREASURY_SOLANA`, `TREASURY_EVM` | `RENAME_TREASURY_*` | Where the fee is paid. |
-| `REGISTRATION_MIN_BALANCE_USD` | `100` | The balance needed to claim a name. `0` turns the gate off and never calls the price feed. |
+| `REGISTRATION_MIN_BALANCE_USD` | `50` | The balance needed to claim a name. `0` turns the gate off and never calls the price feed. |
 | `PRICE_FEED_URL`, `PRICE_FEED_TTL`, `PRICE_FEED_MAX_AGE` | CoinGecko, `60s`, `5m` | The registration gate's price feed. A stale or failed feed fails closed with `PRICE_UNAVAILABLE`. |
 
 Startup fails when the market is enabled and an asset has no treasury or no RPC URL.
@@ -326,7 +326,7 @@ Codes: `MARKET_DISABLED`, `MARKET_PAUSED`, `NOT_LISTABLE` (`details.reason`), `L
 #### Going to mainnet
 
 1. **max-core:** set `APP_ENV=production`.
-   - Set `RPC_URL_SOLANA`, plus `RPC_URL_ETHEREUM`, `RPC_URL_BASE`, `RPC_URL_ARBITRUM`, `RPC_URL_OPTIMISM` and `RPC_URL_POLYGON`, each from a dedicated provider. A chain without an RPC refuses payments and isn't counted by the $100 gate.
+   - Set `RPC_URL_SOLANA`, plus `RPC_URL_ETHEREUM`, `RPC_URL_BASE`, `RPC_URL_ARBITRUM`, `RPC_URL_OPTIMISM` and `RPC_URL_POLYGON`, each from a dedicated provider. A chain without an RPC refuses payments and isn't counted by the $50 gate.
    - Set `MARKET_ASSETS=solana:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`.
    - Set real `TREASURY_SOLANA` and `RENAME_TREASURY_*` addresses that MAX controls.
    - Set `PRICE_FEED_API_KEY`.

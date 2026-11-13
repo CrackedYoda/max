@@ -244,7 +244,7 @@ func Load() (Config, error) {
 	if cfg.Market.FeeBPS < 0 || cfg.Market.FeeBPS > 5000 {
 		errs = append(errs, errors.New("MARKET_FEE_BPS must be between 0 and 5000"))
 	}
-	cfg.Registration = RegistrationConfig{MinBalanceUSD: number("REGISTRATION_MIN_BALANCE_USD", "100")}
+	cfg.Registration = RegistrationConfig{MinBalanceUSD: number("REGISTRATION_MIN_BALANCE_USD", "50")}
 	if m := cfg.Registration.MinBalanceUSD; math.IsNaN(m) || math.IsInf(m, 0) {
 		errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD must be a finite number"))
 	} else if m < 0 {
