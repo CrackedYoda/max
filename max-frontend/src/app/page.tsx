@@ -86,7 +86,7 @@ export default function Landing() {
             <p aria-live="polite" className="m-0 min-h-[22px] text-sm text-muted">{detail}</p>
             <div className="flex flex-wrap gap-3">
               <ButtonLink href={claimHref}>Claim yours</ButtonLink>
-              <ButtonLink href="/max.yoda" variant="secondary" className="!font-medium">See an example profile</ButtonLink>
+              <ButtonLink href="/max.theyodafx" variant="secondary" className="!font-medium">See an example profile</ButtonLink>
             </div>
           </div>
         </section>
@@ -95,7 +95,7 @@ export default function Landing() {
           <div className="grid items-center gap-8 rounded-2xl border border-line bg-surface p-8 [grid-template-columns:repeat(auto-fit,minmax(260px,1fr))]">
             <div className="flex flex-col gap-2">
               <span className="text-[13px] font-semibold uppercase tracking-[0.06em] text-muted">Example</span>
-              <Handle name="yoda" className="text-[32px]" />
+              <Handle name="alice" className="text-[32px]" />
               <span className="text-[15px] leading-normal text-muted">
                 The sender picks a chain. MAX returns the one wallet linked for it, or tells them there isn’t one.
               </span>
