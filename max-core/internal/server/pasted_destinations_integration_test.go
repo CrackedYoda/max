@@ -54,7 +54,7 @@ func TestPaste_ResolveRemove(t *testing.T) {
 	if code != http.StatusOK || data(t, body)["address"] != pastedBTC {
 		t.Fatalf("resolve: %d %v", code, body)
 	}
-	if code, body = paste(alice.c, id, "bitcoin", pastedBTC[:len(pastedBTC)-1]+"q"); code != http.StatusBadRequest || errCode(body) != "INVALID_ADDRESS" {
+	if code, body = paste(alice.c, id, "bitcoin", pastedBTC[:len(pastedBTC)-1]+"p"); code != http.StatusBadRequest || errCode(body) != "INVALID_ADDRESS" {
 		t.Fatalf("bad checksum: %d %v", code, body)
 	}
 	if code, body = alice.c.do("PUT", "/v1/ids/"+id+"/destinations/bitcoin", map[string]any{"address": pastedBTC}); errCode(body) != "CONFIRMATION_REQUIRED" {
@@ -100,7 +100,7 @@ func TestPaste_UnlinkWalletKeepsPasted(t *testing.T) {
 	id := claimOwn(t, alice, "alice")
 	paste(alice.c, id, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
 	evmWallet := str(t, env, `SELECT id::text FROM wallets WHERE chain_namespace = 'evm' AND account_id = $1`, alice.account)
-	if code, body := alice.c.do("DELETE", "/v1/wallets/"+evmWallet, nil); code != http.StatusOK {
+	if code, body := alice.c.do("DELETE", "/v1/wallets/"+evmWallet, nil); code != http.StatusNoContent {
 		t.Fatalf("unlink: %d %v", code, body)
 	}
 	if code, body := (&client{t: t, h: env.handler}).do("GET", "/v1/resolve/max.alice?chain=tron", nil); code != http.StatusOK {
