@@ -45,7 +45,8 @@ export function ReceivePicker({ value, onChange, sendChain, chains, assets, load
       </button>
       {open ? (
         <Dialog title="Recipient receives" labelId="receive-title" onClose={() => setOpen(false)} width={560}>
-          <ReceiveList value={value} sendChain={sendChain} chains={chains} assets={assets} loading={loading}
+          <AssetPickerList value={value} chains={chains} assets={assets} loading={loading}
+            none={{ title: "The same asset", subtitle: `Delivered on ${sendChain?.name ?? "this network"}, no conversion`, chain: sendChain?.key }}
             onPick={(a, el) => { onChange(a); closeDialog(el); }} />
         </Dialog>
       ) : null}
@@ -53,9 +54,13 @@ export function ReceivePicker({ value, onChange, sendChain, chains, assets, load
   );
 }
 
-function ReceiveList({ value, sendChain, chains, assets, loading, onPick }: {
+/**
+ * Pick "none" (the top option) or a chain and then one of its coins. Search
+ * spans every chain. Shared by "Recipient receives" and "Get paid in".
+ */
+export function AssetPickerList({ value, none, chains, assets, loading, onPick }: {
   value: ReceivableAsset | null;
-  sendChain?: Chain;
+  none: { title: string; subtitle: string; chain?: string };
   chains: Chain[];
   assets: ReceivableAsset[];
   loading?: boolean;
@@ -104,10 +109,10 @@ function ReceiveList({ value, sendChain, chains, assets, loading, onPick }: {
           <button type="button" onClick={(e) => onPick(null, e.currentTarget)} aria-pressed={!current}
             className={cx("flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left",
               !current ? "border-accent bg-clay-soft" : "border-line hover:bg-sunken")}>
-            {sendChain ? <ChainLogo chain={sendChain.key} size={28} /> : null}
+            {none.chain ? <ChainLogo chain={none.chain} size={28} /> : null}
             <span className="flex flex-1 flex-col">
-              <span className="text-[15px] font-semibold">The same asset</span>
-              <span className="text-[13px] text-muted">Delivered on {sendChain?.name ?? "this network"}, no conversion</span>
+              <span className="text-[15px] font-semibold">{none.title}</span>
+              <span className="text-[13px] text-muted">{none.subtitle}</span>
             </span>
             {!current ? <Icon name="check" size={18} className="text-clay-text" /> : null}
           </button>

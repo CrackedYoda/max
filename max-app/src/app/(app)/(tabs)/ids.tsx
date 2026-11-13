@@ -9,9 +9,10 @@ import { Banner, List, ListRow, Loading, Pill, SectionTitle } from '@/components
 import { Button, LinkButton } from '@/components/ui/Button';
 import { ChainLogo } from '@/components/ui/ChainLogo';
 import { Icon } from '@/components/ui/Icon';
+import { TokenLogo } from '@/components/ui/TokenLogo';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { errorMessage } from '@/error/messages';
-import { useMyIds } from '@/hooks/queries';
+import { useChains, useMyIds, useReceivableAssets } from '@/hooks/queries';
 import { lock, refreshAccounts, removeWallet, stepUp } from '@/services/session';
 import * as vault from '@/services/vault';
 import { toast } from '@/store/flows';
@@ -154,6 +155,13 @@ export default function Ids() {
 function IdCard({ id }: { id: MaxId }) {
   const dest = (ns: string) => id.destinations.find((d) => d.namespace === ns && !d.chain);
   const overrides = id.destinations.filter((d) => d.chain).length;
+  const chains = useChains();
+  const assets = useReceivableAssets();
+  const s = id.settlement?.enabled ? id.settlement : null;
+  const sChain = s ? chains.data?.find((c) => c.key === s.chain) : undefined;
+  const sNative = !s || s.asset === '' || s.asset === 'native';
+  const sAsset = s ? assets.data?.find((a) => a.chain === s.chain && (sNative ? a.kind === 'native' : a.address?.toLowerCase() === s.asset.toLowerCase())) : undefined;
+  const sSymbol = s ? (sAsset?.symbol ?? (sNative ? (sChain?.nativeCoin ?? '') : shortAddress(s.asset))) : '';
   return (
     <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 18, gap: 14 }}>
       <View style={{ gap: 10 }}>
@@ -216,6 +224,33 @@ function IdCard({ id }: { id: MaxId }) {
             </View>
           );
         })}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Get paid in: ${s ? `${sSymbol} on ${sChain?.name ?? s.chain}` : 'whatever the sender pays with'}. Change`}
+          onPress={() => router.push({ pathname: '/receive-asset', params: { mode: 'settle', id: id.id } })}
+          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52, borderTopWidth: 1, borderTopColor: colors.sunken, opacity: pressed ? 0.6 : 1 })}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, width: 92 }}>
+            <Icon name="receive" size={16} color={colors.clayText} />
+            <AppText weight="semibold" size={12} color={colors.muted}>
+              Get paid in
+            </AppText>
+          </View>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {s ? (
+              <>
+                <TokenLogo symbol={sSymbol} chain={s.chain} size={20} />
+                <AppText weight="semibold" size={13} numberOfLines={1}>
+                  {sSymbol} on {sChain?.name ?? s.chain}
+                </AppText>
+              </>
+            ) : (
+              <AppText size={13} color={colors.muted} numberOfLines={1}>
+                Whatever the sender pays with
+              </AppText>
+            )}
+          </View>
+          <Icon name="chevronRight" size={18} color={colors.muted} />
+        </Pressable>
       </View>
     </View>
   );

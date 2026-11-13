@@ -1,4 +1,4 @@
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type DestinationTarget, type MaxIdType, type Namespace, type SaleStatus } from '@max/sdk';
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Chain, type DestinationTarget, type MaxIdType, type Namespace, type ReceivableAsset, type SaleStatus } from '@max/sdk';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
@@ -182,6 +182,18 @@ export function useClaimId() {
       if (!key) throw new Error('Unlock your wallet to claim a name.');
       return max().ids.claim(v, walletSigner(key));
     },
+    onSuccess: invalidate,
+  });
+}
+
+/** The ID's "get paid in" preference; null clears it (receive whatever is sent). */
+export function useSetSettlement() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (v: { id: string; asset: ReceivableAsset | null }) =>
+      v.asset
+        ? max().ids.setSettlement(v.id, { chain: v.asset.chain, asset: v.asset.kind === 'native' ? 'native' : v.asset.address })
+        : max().ids.removeSettlement(v.id),
     onSuccess: invalidate,
   });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type DestinationTarget, type MaxIdType, type Namespace, type SearchParams, type WalletSigner } from "@max/sdk";
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type DestinationTarget, type MaxIdType, type Namespace, type ReceivableAsset, type SearchParams, type WalletSigner } from "@max/sdk";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { max } from "@/api/client";
@@ -130,6 +130,18 @@ export function useSetDestination() {
   const invalidate = useInvalidateAccount();
   return useMutation({
     mutationFn: (v: { id: string; namespace: Namespace; target: DestinationTarget }) => max().ids.setDestination(v.id, v.namespace, v.target),
+    onSuccess: invalidate,
+  });
+}
+
+/** The ID's "get paid in" preference; null clears it (receive whatever is sent). */
+export function useSetSettlement() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (v: { id: string; asset: ReceivableAsset | null }) =>
+      v.asset
+        ? max().ids.setSettlement(v.id, { chain: v.asset.chain, asset: v.asset.kind === "native" ? "native" : v.asset.address })
+        : max().ids.removeSettlement(v.id),
     onSuccess: invalidate,
   });
 }

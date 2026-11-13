@@ -10,9 +10,10 @@ import { tokenLogoSvg } from './token-logos';
 /**
  * A token's logo by symbol, falling back to its initials. With `chain`, the
  * chain's logo sits on the corner so USDC on Base and USDC on Solana differ.
+ * `plain` shows initials only: an unverified token must not borrow a real logo.
  */
-export function TokenLogo({ symbol, chain, size = 28 }: { symbol: string; chain?: string; size?: number }) {
-  const xml = tokenLogoSvg(symbol);
+export function TokenLogo({ symbol, chain, size = 28, plain }: { symbol: string; chain?: string; size?: number; plain?: boolean }) {
+  const xml = plain ? null : tokenLogoSvg(symbol);
   const badge = Math.round(size * 0.42);
   return (
     <View style={{ width: size, height: size }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">

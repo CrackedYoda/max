@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { errorMessage } from "@/error/messages";
-import { useChains, useRemoveChainDestination, useSetChainDestination, useSetDestination } from "@/hooks/queries";
+import { useChains, useReceivableAssets, useRemoveChainDestination, useSetChainDestination, useSetDestination, useSetSettlement } from "@/hooks/queries";
 import { toast } from "@/store/flows";
 import { namespaceLabel, shortAddress } from "@/utils/format";
 
@@ -13,8 +13,10 @@ import { Button } from "../ui/Button";
 import { Card, KindBadge } from "../ui/Blocks";
 import { ChainLogo } from "../ui/ChainLogo";
 import { CopyButton } from "../ui/Copy";
-import { Dialog } from "../ui/Dialog";
+import { closeDialog, Dialog } from "../ui/Dialog";
 import { Icon } from "../ui/Icon";
+import { TokenLogo } from "../ui/TokenLogo";
+import { AssetPickerList } from "../payments/ReceivePicker";
 
 import { EditProfileDialog } from "./EditProfileDialog";
 import { Handle } from "./Handle";
@@ -43,6 +45,7 @@ export function IdCard({ id, wallets }: { id: MaxId; wallets: Wallet[] }) {
         {NAMESPACES.map((ns) => (
           <DestinationRow key={ns} id={id} namespace={ns} wallets={wallets.filter((w) => w.namespace === ns)} />
         ))}
+        <SettlementRow id={id} />
       </ul>
       <div className="flex flex-wrap gap-x-5 gap-y-2">
         <Link href={`/${id.handle}`} className="text-sm font-medium">View public profile</Link>
@@ -301,5 +304,56 @@ export function IdCardSkeleton() {
       <div className="h-3.5 w-[80%] rounded-md bg-sunken" />
       <div className="h-3.5 w-[70%] rounded-md bg-sunken" />
     </div>
+  );
+}
+
+/** "Get paid in": payments in anything else are converted to this coin. */
+function SettlementRow({ id }: { id: MaxId }) {
+  const [open, setOpen] = useState(false);
+  const chains = useChains();
+  const assets = useReceivableAssets();
+  const set = useSetSettlement();
+  const s = id.settlement?.enabled ? id.settlement : null;
+  const chainList = chains.data ?? [];
+  const sChain = s ? chainList.find((c) => c.key === s.chain) : undefined;
+  const sNative = !s || s.asset === "" || s.asset === "native";
+  // Only coins on chains this ID can receive on; receive-only chains take their native coin only.
+  const canReceive = (key: string) => {
+    const c = chainList.find((x) => x.key === key);
+    return !!c && id.destinations.some((d) => d.namespace === c.namespace && (!d.chain || d.chain === c.key));
+  };
+  const options = (assets.data ?? []).filter((a) => canReceive(a.chain) && (a.kind === "native" || !chainList.find((c) => c.key === a.chain)?.receiveOnly));
+  const current = s
+    ? (assets.data ?? []).find((a) => a.chain === s.chain && (sNative ? a.kind === "native" : a.address?.toLowerCase() === s.asset.toLowerCase())) ?? null
+    : null;
+  const symbol = s ? current?.symbol ?? (sNative ? sChain?.nativeCoin ?? "" : shortAddress(s.asset)) : null;
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line py-3.5 last:border-b-0">
+      <span className="flex min-w-[96px] items-center gap-2 text-[15px] font-semibold"><Icon name="receive" size={16} className="text-clay-text" />Get paid in</span>
+      <span className="flex min-w-0 flex-1 items-center gap-2.5 text-sm">
+        {s && symbol ? (
+          <>
+            <TokenLogo symbol={symbol} chain={s.chain} size={22} />
+            <span className="font-medium">{symbol} on {sChain?.name ?? s.chain}</span>
+          </>
+        ) : <span className="text-muted">Whatever the sender pays with</span>}
+      </span>
+      <Button variant="secondary" size="sm" className="!text-sm" onClick={() => { set.reset(); setOpen(true); }}>{s ? "Change" : "Set"}</Button>
+      {open ? (
+        <Dialog title="Get paid in" labelId={`settle-${id.id}`} onClose={() => setOpen(false)} width={560} locked={set.isPending}>
+          <p className="m-0 -mt-2 text-sm text-muted">Payments to {id.handle} in anything else are converted to this coin before they reach you.</p>
+          {set.error ? <p role="alert" className="m-0 text-sm text-danger">{errorMessage(set.error)}</p> : null}
+          <AssetPickerList value={current} chains={chainList} assets={options} loading={assets.isLoading}
+            none={{ title: "Whatever the sender pays with", subtitle: "No conversion. You receive exactly what they send." }}
+            onPick={(a, el) => set.mutate({ id: id.id, asset: a }, {
+              onSuccess: () => {
+                toast(a ? `${id.handle} now gets paid in ${a.symbol}` : `${id.handle} receives whatever is sent`);
+                closeDialog(el);
+              },
+            })} />
+        </Dialog>
+      ) : null}
+    </li>
   );
 }

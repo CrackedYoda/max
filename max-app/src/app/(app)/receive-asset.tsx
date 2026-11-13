@@ -11,24 +11,47 @@ import { Icon } from '@/components/ui/Icon';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
 import { TokenLogo } from '@/components/ui/TokenLogo';
 import { errorMessage } from '@/error/messages';
-import { useChains, useReceivableAssets } from '@/hooks/queries';
-import { useReceivePick } from '@/store/flows';
+import { useChains, useMyIds, useReceivableAssets, useSetSettlement } from '@/hooks/queries';
+import { toast, useReceivePick } from '@/store/flows';
 import { colors } from '@/theme';
 import { shortAddress } from '@/utils/format';
 
 const idOf = (a: ReceivableAsset) => `${a.chain}:${a.kind === 'native' ? 'native' : (a.address ?? '').toLowerCase()}`;
 
 /**
- * "They receive": the same asset on the sending network, or pick a chain and
- * then one of the coins a cross-chain route can deliver there. Search spans
- * every chain.
+ * Pick a coin: the "none" option on top, or a chain and then one of the coins a
+ * cross-chain route can deliver there. Search spans every chain.
+ * - Send (default): "They receive" for the payment being composed.
+ * - `mode=settle&id=…`: an ID's "Get paid in" preference, saved on pick.
  */
 export default function ReceiveAsset() {
-  const { chain: sendKey } = useLocalSearchParams<{ chain: string }>();
+  const { chain: sendKey, mode, id: maxId } = useLocalSearchParams<{ chain?: string; mode?: 'settle'; id?: string }>();
+  const settle = mode === 'settle';
   const chains = useChains();
-  const assets = useReceivableAssets();
-  const picked = useReceivePick((s) => s.asset);
+  const allAssets = useReceivableAssets();
+  const ids = useMyIds();
+  const saveSettlement = useSetSettlement();
+  const sendPick = useReceivePick((s) => s.asset);
   const setPicked = useReceivePick((s) => s.set);
+  const theId = ids.data?.find((x) => x.id === maxId);
+  const chainOf = (key: string) => chains.data?.find((c) => c.key === key);
+  // An ID can only be paid on chains it has an address for; receive-only chains take their native coin only.
+  const assets = useMemo(() => {
+    if (!settle) return allAssets;
+    const data = (allAssets.data ?? []).filter((a) => {
+      const c = chainOf(a.chain);
+      if (!c || (c.receiveOnly && a.kind !== 'native')) return false;
+      return !!theId?.destinations.some((d) => d.namespace === c.namespace && (!d.chain || d.chain === c.key));
+    });
+    return { ...allAssets, data };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settle, allAssets, theId, chains.data]);
+  const s = theId?.settlement?.enabled ? theId.settlement : null;
+  const picked = settle
+    ? s
+      ? ((allAssets.data ?? []).find((a) => a.chain === s.chain && (s.asset === '' || s.asset === 'native' ? a.kind === 'native' : a.address?.toLowerCase() === s.asset.toLowerCase())) ?? null)
+      : null
+    : sendPick;
   const [q, setQ] = useState('');
   // null shows the list of chains; a chain key shows that chain's coins.
   const [chainKey, setChainKey] = useState<string | null>(null);
@@ -46,9 +69,25 @@ export default function ReceiveAsset() {
   const shown = chainKey ? (byChain.get(chainKey) ?? []).filter((a) => !needle || matches(a)) : needle ? (assets.data ?? []).filter(matches) : [];
 
   const pick = (a: ReceivableAsset | null) => {
-    setPicked(a);
-    router.back();
+    if (!settle) {
+      setPicked(a);
+      router.back();
+      return;
+    }
+    if (!theId) return;
+    saveSettlement.mutate(
+      { id: theId.id, asset: a },
+      {
+        onSuccess: () => {
+          toast(a ? `${theId.handle} now gets paid in ${a.symbol}` : `${theId.handle} receives whatever is sent`);
+          router.back();
+        },
+      },
+    );
   };
+  const none = settle
+    ? { title: 'Whatever the sender pays with', subtitle: 'No conversion. You receive exactly what they send.', chain: undefined }
+    : { title: 'The same asset', subtitle: `Delivered on ${sendChain?.name ?? 'this network'}, no conversion`, chain: sendChain?.key };
   const back = () => {
     if (chainKey) {
       setChainKey(null);
@@ -60,7 +99,9 @@ export default function ReceiveAsset() {
     <Screen
       scroll
       topPadding={0}
-      header={<TitleHeader title={chainKey ? name(chainKey) : 'They receive'} icon={chainKey ? 'back' : 'close'} onBack={back} />}>
+      header={<TitleHeader title={chainKey ? name(chainKey) : settle ? 'Get paid in' : 'They receive'} icon={chainKey ? 'back' : 'close'} onBack={back} />}>
+      {settle && theId ? <AppText variant="small">Payments to {theId.handle} in anything else are converted to this coin before they reach you.</AppText> : null}
+      {saveSettlement.error ? <Banner tone="danger">{errorMessage(saveSettlement.error)}</Banner> : null}
       <TextField
         value={q}
         onChangeText={setQ}
@@ -74,14 +115,14 @@ export default function ReceiveAsset() {
           <List>
             <ListRow
               last
-              accessibilityLabel={`The same asset, on ${sendChain?.name ?? 'this network'}`}
+              accessibilityLabel={none.title}
               onPress={() => pick(null)}
               title={
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {sendChain ? <ChainLogo chain={sendChain.key} size={26} /> : null}
+                  {none.chain ? <ChainLogo chain={none.chain} size={26} /> : null}
                   <View style={{ flex: 1 }}>
-                    <AppText weight="semibold" size={14}>The same asset</AppText>
-                    <AppText variant="caption">Delivered on {sendChain?.name ?? 'this network'}, no conversion</AppText>
+                    <AppText weight="semibold" size={14}>{none.title}</AppText>
+                    <AppText variant="caption">{none.subtitle}</AppText>
                   </View>
                 </View>
               }
