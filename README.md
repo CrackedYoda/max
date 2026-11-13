@@ -18,7 +18,7 @@ Sending crypto means copying a 42-character address, checking you're on the netw
 |---|---|
 | **Names that resolve per chain** | `max.alice` points to Alice's wallet on Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche and Solana, plus receive-only Bitcoin, Litecoin and Tron addresses. The sender picks a chain; MAX returns the one address for it, or says there isn't one. |
 | **Pay in anything, receive anything** | The sender pays with what they hold. "Recipient receives" lets them pick the chain, then any coin NEAR Intents delivers there (104 assets across 11 chains today). |
-| **Your own wallets** | Sign in with MetaMask or Phantom by signing a message, never a payment. Link more wallets, choose which receives on each chain, or paste a receive-only address (marked *Unverified*). |
+| **Your own wallets** | Sign in with any EVM-compatible or Solana wallet by signing a message, never a payment. Link more wallets, choose which receives on each chain, or paste a receive-only address (marked *Unverified*). |
 | **Every account gets a name** | A free default ID (like `max.6f8d6gum9e2sy5fa`) from first sign-in, so anyone can be paid straight away. |
 | **Custom names** | Claim `max.yourname` by signing a claim message with a linked wallet. Claims need a $50 balance on a mainnet chain (testnet coins don't count) to discourage squatting. |
 | **Reserved brand names** | Names like `max.solana` or `max.near` can only be claimed by proving the matching X account over OAuth. |
@@ -39,7 +39,7 @@ So someone holding SOL can pay `max.alice` and she receives BTC, USDC on Base or
 
 ## Try it
 
-On the hosted site (https://www.usemax.xyz), with MetaMask or Phantom installed:
+On the hosted site (https://www.usemax.xyz), with an EVM-compatible or Solana wallet installed:
 
 1. **Look up a name:** type `theyodafx` in "Find your handle" on the home page. You see that it's taken; open its profile to see the chains it receives on.
 2. **Sign in:** click *Connect wallet*, pick your wallet and sign the message. You land on the dashboard with your free default ID and the wallet you signed in with.

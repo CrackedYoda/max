@@ -221,7 +221,7 @@ function RenameForm({ maxId, eligibility: e }: { maxId: MaxId; eligibility: NonN
                           <span className="inline-flex items-center gap-1.5 text-[13px] text-muted"><ChainLogo chain={f.chain.key} size={14} />{f.chain.name}</span>
                         </span>
                       </span>
-                      <span className="text-xs text-muted">{f.chain.namespace === "solana" ? "Phantom" : "EVM wallet"}</span>
+                      <span className="text-xs text-muted">{f.chain.namespace === "solana" ? "Solana wallet" : "EVM wallet"}</span>
                     </label>
                   );
                 })}

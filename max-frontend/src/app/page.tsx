@@ -127,7 +127,7 @@ export default function Landing() {
             <h2 id="how" className="m-0 font-display text-[40px] font-medium tracking-[-0.01em]">Three steps. No custody.</h2>
             <ol className="m-0 grid list-none gap-6 p-0 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
               {[
-                ["01", "Connect", "Sign in with Phantom or MetaMask. You sign a message to prove ownership, never a payment."],
+                ["01", "Connect", "Sign in with any EVM-compatible or Solana wallet. You sign a message to prove ownership, never a payment."],
                 ["02", "Claim", "Pick a handle for yourself or your agent, then choose which wallet receives on each chain."],
                 ["03", "Get paid", "Share your handle. Senders sign the transfer; funds land straight in your wallet. You do nothing."],
               ].map(([n, title, body]) => (

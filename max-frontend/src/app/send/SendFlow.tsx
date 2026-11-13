@@ -100,7 +100,7 @@ export function SendFlow() {
     if (c.namespace === "solana") w = await connectPhantom();
     else {
       const p = evm.find((x) => /metamask/i.test(x.name)) ?? evm[0];
-      if (!p) throw new WalletError("No EVM wallet found. Install MetaMask to send on this network.");
+      if (!p) throw new WalletError("No EVM wallet found. Install an EVM-compatible wallet, such as MetaMask, to send on this network.");
       w = await connectEvm(p);
     }
     useWallet.getState().set(w);
@@ -230,7 +230,7 @@ export function SendFlow() {
             <legend className="mb-2.5 p-0 text-sm font-semibold">Asset</legend>
             {chain && !sender ? (
               <Button variant="secondary" onClick={() => connectForTokens(chain)}>
-                Connect {chain.namespace === "solana" ? "Phantom" : "wallet"} to see your tokens
+                Connect your {chain.namespace === "solana" ? "Solana" : "EVM"} wallet to see your tokens
               </Button>
             ) : holdings.isLoading ? (
               <Skeleton className="h-36 w-full" />

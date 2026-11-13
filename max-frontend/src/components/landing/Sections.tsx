@@ -132,8 +132,8 @@ export function NoComplexity() {
 }
 
 const LINKED: [chain: string, label: string, addr: string, via: React.ReactNode][] = [
-  ["evm", "EVM chains", "0x6b1d…93fa", "MetaMask"],
-  ["solana", "Solana", "4Hq8…tLm2", "Phantom"],
+  ["evm", "EVM chains", "0x6b1d…93fa", "EVM wallet"],
+  ["solana", "Solana", "4Hq8…tLm2", "Solana wallet"],
   ["bitcoin", "Bitcoin", "bc1q…7x2k",
     <span key="u" title="Pasted, not proven by a wallet signature." className="rounded-full border border-line-strong bg-sunken px-2 py-[2px] text-xs font-semibold text-body">Unverified</span>],
 ];
@@ -148,7 +148,7 @@ export function LinkWallets() {
             title="Just link your wallets."
             lead="No new wallet, no deposits, no seed phrase to hand over. Sign in with the wallets you already use and your name points to them." />
           <ul className="m-0 flex list-none flex-col gap-3 p-0 text-[15px] leading-relaxed text-body">
-            <li className="flex items-start gap-3"><Icon name="check" size={18} className="mt-0.5 shrink-0 text-clay-text" />Connect MetaMask or Phantom. Signing in is a message, never a payment.</li>
+            <li className="flex items-start gap-3"><Icon name="check" size={18} className="mt-0.5 shrink-0 text-clay-text" />Connect any EVM-compatible or Solana wallet. Signing in is a message, never a payment.</li>
             <li className="flex items-start gap-3"><Icon name="check" size={18} className="mt-0.5 shrink-0 text-clay-text" />Choose which wallet receives on each chain, and change it any time.</li>
             <li className="flex items-start gap-3"><Icon name="check" size={18} className="mt-0.5 shrink-0 text-clay-text" />Paste a receive-only address for chains you don’t sign in with, like Bitcoin.</li>
           </ul>

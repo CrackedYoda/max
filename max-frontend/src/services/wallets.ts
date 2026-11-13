@@ -177,7 +177,7 @@ export async function connectLinkedWallet(
   let w: ConnectedWallet;
   if (hasSol && phantomProvider()) w = await connectPhantom();
   else if (hasEvm && evm.length) w = await connectFor("evm", evm);
-  else throw new WalletError("Open a wallet that’s linked to your account (Phantom or MetaMask) to sign.");
+  else throw new WalletError("Open an EVM-compatible or Solana wallet that’s linked to your account to sign.");
   if (!isLinked(w)) {
     const want = linked.find((x) => x.namespace === w.namespace) ?? linked[0];
     throw new WalletError(`${w.label} is on ${short(w.address)}, which isn’t linked to your account.${want ? ` Switch to ${short(want.address)}.` : ""}`);

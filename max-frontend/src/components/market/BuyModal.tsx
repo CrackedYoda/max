@@ -245,7 +245,7 @@ export function BuyModal({ target, onClose }: { target: PayTarget; onClose(): vo
                 ? "Continuing reserves the name for you for 15 minutes and shows the full quote, including the network fee, before anything is signed."
                 : "Continuing fetches a fresh quote, including the network fee, before anything is signed."}
             </p>
-            <p className="m-0 text-[13px] text-muted">You pay from a Solana wallet linked to your MAX account, with Phantom. MAX never holds funds: the payment goes straight to the seller and the MAX fee.</p>
+            <p className="m-0 text-[13px] text-muted">You pay from a Solana wallet linked to your MAX account. MAX never holds funds: the payment goes straight to the seller and the MAX fee.</p>
             {error ? <Banner tone="danger">{error}</Banner> : null}
             <Button onClick={start} loading={phase.k === "working"}>{phase.k === "working" ? STEP[phase.step] : "Continue"}</Button>
           </>

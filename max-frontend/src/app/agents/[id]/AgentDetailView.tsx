@@ -286,7 +286,7 @@ function WalletsSection({ agent }: { agent: AgentDetail }) {
         <h3 className="m-0 text-base font-semibold">Link a wallet</h3>
         <p className="m-0 text-sm text-muted">Switch your browser wallet to the agent’s account, then sign a message to prove it. Signing never moves funds.</p>
         <div className="max-w-[320px]">
-          <Segmented label="Network" value={ns} onChange={setNs} options={[{ value: "solana", label: "Solana (Phantom)" }, { value: "evm", label: "EVM" }]} />
+          <Segmented label="Network" value={ns} onChange={setNs} options={[{ value: "solana", label: "Solana" }, { value: "evm", label: "EVM" }]} />
         </div>
         {err ? (
           <Banner tone="danger">
