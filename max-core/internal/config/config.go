@@ -121,6 +121,8 @@ type PaymentsConfig struct {
 	CrossChain    CrossChainConfig
 	// RPCURLs maps chain key → JSON-RPC endpoint, from RPC_URL_<CHAIN_KEY>.
 	RPCURLs map[string]string
+	// TestnetsEnabled lists testnet chains in GET /v1/chains (TESTNETS_ENABLED, off by default).
+	TestnetsEnabled bool
 }
 
 type CrossChainConfig struct {
@@ -205,9 +207,10 @@ func Load() (Config, error) {
 			CookieSecure:  boolean("SESSION_COOKIE_SECURE", "true"),
 		},
 		Payments: PaymentsConfig{
-			IntentTTL:     duration("PAYMENT_INTENT_TTL", "15m"),
-			WorkerEnabled: boolean("PAYMENTS_WORKER_ENABLED", "true"),
-			RPCURLs:       map[string]string{},
+			IntentTTL:       duration("PAYMENT_INTENT_TTL", "15m"),
+			WorkerEnabled:   boolean("PAYMENTS_WORKER_ENABLED", "true"),
+			TestnetsEnabled: boolean("TESTNETS_ENABLED", "false"),
+			RPCURLs:         map[string]string{},
 			CrossChain: CrossChainConfig{
 				Enabled:            boolean("CROSS_CHAIN_ENABLED", "true"),
 				BaseURL:            get("NEAR_INTENTS_BASE_URL", "https://1click.chaindefuser.com"),

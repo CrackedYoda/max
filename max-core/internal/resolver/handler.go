@@ -8,11 +8,31 @@ import (
 )
 
 type Handler struct {
-	svc Service
+	svc    Service
+	chains []chains.Chain // what GET /v1/chains lists
 }
 
 func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+	return &Handler{svc: svc, chains: mainnets()}
+}
+
+// WithTestnets lists testnet chains too in GET /v1/chains.
+func (h *Handler) WithTestnets(on bool) *Handler {
+	h.chains = chains.Supported
+	if !on {
+		h.chains = mainnets()
+	}
+	return h
+}
+
+func mainnets() []chains.Chain {
+	var out []chains.Chain
+	for _, c := range chains.Supported {
+		if !c.Testnet {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (h *Handler) Resolve(c *gin.Context) {
@@ -35,6 +55,7 @@ func (h *Handler) Profile(c *gin.Context) {
 	shared.OK(c, toProfileResponse(p, reach))
 }
 
+// Chains lists the chains clients offer: mainnets only unless testnets are on.
 func (h *Handler) Chains(c *gin.Context) {
-	shared.OK(c, chains.Supported)
+	shared.OK(c, h.chains)
 }

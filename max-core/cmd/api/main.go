@@ -182,7 +182,7 @@ func run() error {
 		MaxIDs: maxids.NewHandler(maxidSvc, func(ctx context.Context, caller uuid.UUID, name, nonce, sig string) error {
 			return authSvc.VerifyClaim(ctx, auth.ClaimProof{Caller: caller, Name: name, Nonce: nonce, Signature: sig})
 		}),
-		Resolver: resolver.NewHandler(resolverSvc),
+		Resolver: resolver.NewHandler(resolverSvc).WithTestnets(cfg.Payments.TestnetsEnabled),
 		Holdings: holdings.NewHandler(newHoldings(cfg)),
 		RPCProxy: rpcproxy.NewHandler(cfg.Payments.RPCURLs),
 		Payments: payments.NewHandler(paymentSvc),

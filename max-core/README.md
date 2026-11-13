@@ -276,6 +276,7 @@ in one Solana transaction that they sign themselves. MAX never holds funds or si
 | `MARKET_MIN_OFFER` | `1` | A decimal amount. It is the minimum offer and also the minimum listing price. When the fee is on it must be at least `ceil(10000 / MARKET_FEE_BPS)` base units of every asset, so the fee is never 0. |
 | `TREASURY_SOLANA`, `TREASURY_EVM` | `RENAME_TREASURY_*` | Where the fee is paid. |
 | `REGISTRATION_MIN_BALANCE_USD` | `50` | The balance needed to claim a name. `0` turns the gate off and never calls the price feed. |
+| `TESTNETS_ENABLED` | `false` | List testnet chains in `GET /v1/chains`. Off: the website and app show mainnets only. Testnets still take payments only when they have an `RPC_URL_*`. |
 | `PRICE_FEED_URL`, `PRICE_FEED_TTL`, `PRICE_FEED_MAX_AGE` | CoinGecko, `60s`, `5m` | The registration gate's price feed. A stale or failed feed fails closed with `PRICE_UNAVAILABLE`. |
 
 Startup fails when the market is enabled and an asset has no treasury or no RPC URL.
