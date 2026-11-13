@@ -69,11 +69,12 @@ function Review() {
       const draft = useSendDraft.getState();
       // Fresh resolution every time: the sender signs for the wallet they see now.
       // A converted payment resolves on the chain the recipient receives on.
+      const receiveAsset = t.receiveAsset ?? 'native';
       const r = t.receiveChain
-        ? await max().resolve(t.handle, { chain: t.receiveChain })
+        ? await max().resolve(t.handle, { chain: t.receiveChain, asset: receiveAsset === 'native' ? undefined : receiveAsset })
         : await max().resolve(t.handle, { chain: t.chain, asset: t.asset === 'native' ? undefined : t.asset });
-      const route = t.receiveChain ? { destinationChain: t.receiveChain, destinationAsset: 'native' } : {};
-      const fingerprint = JSON.stringify([r.maxId, r.resolutionVersion, t.chain, t.asset, t.amount, t.senderAddress, t.receiveChain ?? '']);
+      const route = t.receiveChain ? { destinationChain: t.receiveChain, destinationAsset: receiveAsset } : {};
+      const fingerprint = JSON.stringify([r.maxId, r.resolutionVersion, t.chain, t.asset, t.amount, t.senderAddress, t.receiveChain ?? '', t.receiveChain ? receiveAsset : '']);
       let p = await max().transfers.prepare({
         recipient: t.handle,
         chain: t.chain,

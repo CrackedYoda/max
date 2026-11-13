@@ -1,20 +1,22 @@
 import { isMaxApiError, normalizeName, type Chain } from '@max/sdk';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, useWindowDimensions, View } from 'react-native';
+import { Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { AppText } from '@/components/ui/AppText';
 import { Banner, Choice } from '@/components/ui/Blocks';
 import { Button, IconButton, LinkButton } from '@/components/ui/Button';
 import { HandleField, Keypad } from '@/components/ui/Fields';
+import { ChainLogo } from '@/components/ui/ChainLogo';
 import { Icon } from '@/components/ui/Icon';
 import { Screen, TitleHeader } from '@/components/ui/Screen';
+import { TokenLogo } from '@/components/ui/TokenLogo';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { USDC } from '@/config/env';
 import { errorMessage } from '@/error/messages';
 import { useBalances, useChains, useHoldings, useResolve, useUsableChains } from '@/hooks/queries';
 import { useDebounced } from '@/hooks/useDebounced';
-import { useSendDraft } from '@/store/flows';
+import { useReceivePick, useSendDraft } from '@/store/flows';
 import { useSession } from '@/store/session';
 import { colors, fonts } from '@/theme';
 import { applyAmountKey, formatAmount, isPositiveAmount } from '@/utils/amount';
@@ -34,8 +36,8 @@ export default function Send() {
   const [to, setTo] = useState('');
   const [chainKey, setChainKey] = useState<string | null>(null);
   const [asset, setAsset] = useState<string>('native');
-  // null: the recipient gets the same asset; otherwise a receive-only chain key.
-  const [receiveKey, setReceiveKey] = useState<string | null>(null);
+  // null: the recipient gets the same asset; otherwise what a route delivers, picked on /receive-asset.
+  const receive = useReceivePick((s) => s.asset);
   const allChains = useChains();
   const [amount, setAmount] = useState('0');
   const { chains, isLoading: chainsLoading, error: chainsError } = useUsableChains();
@@ -71,12 +73,12 @@ export default function Send() {
   const worth = held?.valueUsd != null ? usd(held.valueUsd) : null;
   const typedUsd = held?.priceUsd && isPositiveAmount(amount) ? usd(Number(amount) * Number(held.priceUsd)) : null;
 
-  const receiveOptions = (allChains.data ?? []).filter((c) => c.receiveOnly && !c.testnet);
-  const receiveChain = chain && !chain.testnet ? receiveOptions.find((c) => c.key === receiveKey) : undefined;
+  const receiveChain = chain && !chain.testnet && receive ? allChains.data?.find((c) => c.key === receive.chain) : undefined;
+  const receiveAsset = receiveChain && receive ? (receive.kind === 'native' ? 'native' : (receive.address ?? '')) : undefined;
 
   const debounced = useDebounced(to, 350);
   const handle = normalizeName(debounced);
-  const resolution = useResolve(maxReady ? handle : null, receiveChain?.key ?? chain?.key ?? '', receiveChain ? 'native' : assetParam);
+  const resolution = useResolve(maxReady ? handle : null, receiveChain?.key ?? chain?.key ?? '', receiveAsset ?? assetParam);
   const settled = to === debounced;
 
   let status: { text: string; tone: 'success' | 'danger' | 'muted' } | null = null;
@@ -114,7 +116,7 @@ export default function Send() {
           label="Review"
           disabled={!canReview}
           onPress={() => {
-            setTerms({ handle: handle!, chain: chain.key, asset: assetParam, amount, senderAddress: senderAddress!, receiveChain: receiveChain?.key });
+            setTerms({ handle: handle!, chain: chain.key, asset: assetParam, amount, senderAddress: senderAddress!, receiveChain: receiveChain?.key, receiveAsset });
             router.push('/review');
           }}
         />
@@ -168,14 +170,21 @@ export default function Send() {
         </View>
       ) : null}
 
-      {receiveOptions.length && !chain.testnet ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="radiogroup" accessibilityLabel="They receive" contentContainerStyle={{ gap: 8, alignItems: 'center' }}>
-          <AppText variant="small">They receive</AppText>
-          <Choice pill label="Same" selected={!receiveChain} onPress={() => setReceiveKey(null)} />
-          {receiveOptions.map((c) => (
-            <Choice key={c.key} pill label={c.nativeCoin} selected={receiveChain?.key === c.key} onPress={() => setReceiveKey(c.key)} />
-          ))}
-        </ScrollView>
+      {!chain.testnet ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`They receive: ${receiveChain && receive ? `${receive.symbol} on ${receiveChain.name}` : 'the same asset'}. Change`}
+          onPress={() => router.push({ pathname: '/receive-asset', params: { chain: chain.key } })}
+          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: pressed ? colors.sunken : colors.surface })}>
+          {receiveChain && receive ? <TokenLogo symbol={receive.symbol} chain={receiveChain.key} size={28} /> : <ChainLogo chain={chain.key} size={24} />}
+          <View style={{ flex: 1 }}>
+            <AppText variant="caption">They receive</AppText>
+            <AppText weight="semibold" size={14} numberOfLines={1}>
+              {receiveChain && receive ? `${receive.symbol} on ${receiveChain.name}` : `The same asset, on ${chain.name}`}
+            </AppText>
+          </View>
+          <Icon name="chevronDown" size={18} color={colors.muted} />
+        </Pressable>
       ) : null}
 
       <View accessibilityLiveRegion="polite" style={{ alignItems: 'center', gap: 6, paddingVertical: 4 }}>

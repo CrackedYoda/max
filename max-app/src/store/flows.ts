@@ -1,4 +1,4 @@
-import type { Payment, RenameView, SaleView } from '@max/sdk';
+import type { Payment, ReceivableAsset, RenameView, SaleView } from '@max/sdk';
 import * as Crypto from 'expo-crypto';
 import { create } from 'zustand';
 
@@ -34,9 +34,17 @@ export type SendTerms = {
   asset: string; // "native" or contract/mint
   amount: string;
   senderAddress: string;
-  /** Receive-only chain the recipient gets the native coin on, converted via NEAR Intents. */
+  /** Chain the recipient receives on, converted via NEAR Intents. */
   receiveChain?: string;
+  /** What they receive there: "native" or a token contract/mint. */
+  receiveAsset?: string;
 };
+
+/** "They receive" on the Send screen: null delivers the same asset, no conversion. */
+export const useReceivePick = create<{ asset: ReceivableAsset | null; set(asset: ReceivableAsset | null): void }>((set) => ({
+  asset: null,
+  set: (asset) => set({ asset }),
+}));
 
 /**
  * A signed transaction kept so retries re-broadcast it instead of signing
