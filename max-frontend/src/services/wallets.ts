@@ -48,6 +48,13 @@ function isRejection(err: unknown): boolean {
   return e?.code === 4001 || /reject|denied|cancel/i.test(e?.message ?? "");
 }
 
+/** The wallet's own reason, appended to our message so failures can be diagnosed. */
+function walletReason(err: unknown): string {
+  console.error("wallet error", err);
+  const m = (err as { message?: unknown } | undefined)?.message;
+  return typeof m === "string" && m.trim() ? `: ${m.trim().replace(/\.$/, "")}` : "";
+}
+
 // ---- discovery ----
 
 export function phantomProvider(): PhantomSolana | null {
@@ -105,7 +112,7 @@ export async function connectPhantom(): Promise<ConnectedWallet> {
         const { signature } = await p.signMessage(new TextEncoder().encode(message), "utf8");
         return bs58.encode(signature);
       } catch (err) {
-        throw new WalletError(isRejection(err) ? "Signature was rejected in Phantom. Nothing was signed." : "Phantom couldn’t sign the message.", isRejection(err));
+        throw new WalletError(isRejection(err) ? "Signature was rejected in Phantom. Nothing was signed." : `Phantom couldn’t sign the message${walletReason(err)}.`, isRejection(err));
       }
     },
   };
@@ -130,7 +137,7 @@ export async function connectEvm(info: EvmProviderInfo): Promise<ConnectedWallet
       try {
         return (await info.provider.request({ method: "personal_sign", params: [toHex(message), address] })) as string;
       } catch (err) {
-        throw new WalletError(isRejection(err) ? `Signature was rejected in ${info.name}. Nothing was signed.` : `${info.name} couldn’t sign the message.`, isRejection(err));
+        throw new WalletError(isRejection(err) ? `Signature was rejected in ${info.name}. Nothing was signed.` : `${info.name} couldn’t sign the message${walletReason(err)}.`, isRejection(err));
       }
     },
   };

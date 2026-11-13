@@ -58,7 +58,9 @@ export function ConnectFlow() {
   }
 
   async function loadChallenge(w: ConnectedWallet) {
-    setChallenge(await max().auth.challenge({ purpose, namespace: w.namespace, address: w.address }));
+    const c = await max().auth.challenge({ purpose, namespace: w.namespace, address: w.address });
+    setChallenge(c);
+    return c;
   }
 
   async function sign() {
@@ -66,8 +68,10 @@ export function ConnectFlow() {
     setError(null);
     setBusy("sign");
     try {
-      const signature = await wallet.signMessage(challenge.message);
-      const res = await max().auth.verify({ nonce: challenge.nonce, signature });
+      // Challenges expire after a few minutes, and wallets refuse to sign an expired sign-in message.
+      const fresh = Date.parse(challenge.expiresAt) - Date.now() > 30_000 ? challenge : await loadChallenge(wallet);
+      const signature = await wallet.signMessage(fresh.message);
+      const res = await max().auth.verify({ nonce: fresh.nonce, signature });
       setStep("done");
       if (purpose === "link") {
         await qc.invalidateQueries({ queryKey: ["account"] });
