@@ -379,12 +379,8 @@ function ReviewPanel(props: {
         <ReviewRow label="Network" value={<span className="inline-flex items-center gap-1.5"><ChainLogo chain={chain.key} size={16} />{chain.name}{chain.testnet ? <span className="ml-1.5 text-xs font-normal text-muted">Testnet</span> : null}</span>} />
         {receiveChain && receive ? <ReviewRow label="They receive" value={<span className="inline-flex items-center gap-1.5"><TokenLogo symbol={receive.symbol} chain={receiveChain.key} size={18} />{receive.symbol} on {receiveChain.name}</span>} /> : null}
         <ReviewRow label="Asset" value={assetText} />
-        <ReviewRow label="Resolution version" value={r.resolutionVersion} mono />
         <ReviewRow label="Network fee" value={<span className="font-normal">Set in your wallet</span>} />
       </dl>
-      {r.notes.map((n) => (
-        <div key={n} role="note" className="rounded-xl bg-clay-soft px-4 py-3.5 text-sm leading-normal text-[#7E3A20]"><strong>Note from resolver:</strong> {n}</div>
-      ))}
       {props.error ? <Banner tone="danger">{props.error}</Banner> : null}
       <Button className="min-h-14 rounded-[14px] text-[17px]" loading={!!working} disabled={!ready || !!working} onClick={() => props.onConfirm(r)}>{label}</Button>
       {chain.namespace === "solana" && chain.testnet ? <p className="m-0 text-center text-[13px] text-muted">Set Phantom to Devnet before signing.</p> : null}
@@ -409,13 +405,9 @@ function QuoteCard({ payment: p, error, onSign, onCancel }: { payment: Payment; 
         <ReviewRow label="At least" value={`${r.minAmountOut.display} ${symbol}`} />
         <ReviewRow label="Usually arrives in" value={`${Math.max(1, Math.round(r.timeEstimateSeconds / 60))} min`} />
       </dl>
-      {(p.warnings ?? []).map((w) => (
-        <div key={w} role="note" className="rounded-xl bg-clay-soft px-4 py-3.5 text-sm leading-normal text-[#7E3A20]">{w}</div>
-      ))}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <Button className="min-h-14 rounded-[14px] text-[17px]" onClick={onSign}>Confirm and sign in wallet</Button>
       <Button variant="secondary" onClick={onCancel}>Back</Button>
-      <p className="m-0 text-center text-[13px] text-muted">If the conversion can’t complete, the funds are refunded to your wallet.</p>
     </div>
   );
 }

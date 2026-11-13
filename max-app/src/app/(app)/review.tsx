@@ -277,16 +277,8 @@ function Review() {
                     {sender?.label ?? 'Account'} · <Mono size={14}>{shortAddress(terms.senderAddress)}</Mono>
                   </AppText>
                 </ReviewRow>
-                <ReviewRow label="Network fee">{fee === undefined ? '…' : fee === null ? 'Unavailable' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
-                <ReviewRow label="Resolution" last>
-                  <Mono size={14}>v{payment.recipient.resolutionVersion}</Mono>
-                </ReviewRow>
+                <ReviewRow label="Network fee" last>{fee === undefined ? '…' : fee === null ? 'Unavailable' : `≈ ${formatAmount(fee, 6)} ${payment.chain.nativeCoin}`}</ReviewRow>
               </View>
-              {payment.warnings?.map((w) => (
-                <Banner key={w} tone="clay">
-                  {w}
-                </Banner>
-              ))}
             </>
           ) : null}
 

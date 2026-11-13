@@ -33,7 +33,8 @@ func CORS(origins []string) gin.HandlerFunc {
 			if ok {
 				h := c.Writer.Header()
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+				// Solana-Client is sent by @solana/web3.js on every call through the /v1/rpc proxy.
+				h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, Solana-Client")
 				h.Set("Access-Control-Max-Age", "600")
 			}
 			c.AbortWithStatus(http.StatusNoContent)
