@@ -6,7 +6,7 @@ import { useState } from "react";
 
 import { Header } from "@/components/Header";
 import { IdCard, IdCardSkeleton } from "@/components/identity/IdCard";
-import { PaymentRow } from "@/components/payments/PaymentRow";
+import { ActivityFeed, type ActivityItem } from "@/components/payments/Activity";
 import { MarketInbox } from "@/components/market/MarketInbox";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Button, ButtonLink } from "@/components/ui/Button";
@@ -146,26 +146,33 @@ function WalletsSection({ wallets, loading }: { wallets: Wallet[]; loading: bool
 }
 
 function ActivitySection() {
-  const [direction, setDirection] = useState<"received" | "sent">("received");
-  const transfers = useTransfers(direction);
+  const [view, setView] = useState<"all" | "received" | "sent">("all");
+  const received = useTransfers("received");
+  const sent = useTransfers("sent");
+  const items: ActivityItem[] = [
+    ...(view !== "sent" ? (received.data ?? []).map((payment) => ({ payment, direction: "received" as const })) : []),
+    ...(view !== "received" ? (sent.data ?? []).map((payment) => ({ payment, direction: "sent" as const })) : []),
+  ];
+  const loading = (view !== "sent" && received.isLoading) || (view !== "received" && sent.isLoading);
+  const error = (view !== "sent" ? received.error : null) ?? (view !== "received" ? sent.error : null);
   return (
     <section aria-labelledby="activity" className="flex flex-col gap-5">
-      <SectionHeader id="activity" title="Activity" lead="Payments to your MAX IDs arrive without you doing anything." />
-      <div className="max-w-[320px]">
-        <Segmented label="Direction" value={direction} onChange={setDirection}
-          options={[{ value: "received", label: "Received" }, { value: "sent", label: "Sent" }]} />
+      <SectionHeader id="activity" title="Activity" lead="Every payment to and from your MAX IDs. Only you can see this." />
+      <div className="max-w-[380px]">
+        <Segmented label="Show" value={view} onChange={setView}
+          options={[{ value: "all", label: "All" }, { value: "received", label: "Received" }, { value: "sent", label: "Sent" }]} />
       </div>
-      <Card className="px-4 py-2">
-        {transfers.isLoading ? (
-          <p className="m-0 py-4 text-sm text-muted">Loading…</p>
-        ) : transfers.error ? (
-          <p role="alert" className="m-0 py-4 text-sm text-danger">{errorMessage(transfers.error)}</p>
-        ) : transfers.data?.length ? (
-          <ul className="m-0 list-none p-0">
-            {transfers.data.map((p) => <PaymentRow key={p.id} payment={p} direction={direction} />)}
-          </ul>
+      <Card className="px-3 py-4 sm:px-4">
+        {loading ? (
+          <p className="m-0 px-1 py-2 text-sm text-muted">Loading…</p>
+        ) : error ? (
+          <p role="alert" className="m-0 px-1 py-2 text-sm text-danger">{errorMessage(error)}</p>
+        ) : items.length ? (
+          <ActivityFeed items={items} />
         ) : (
-          <p className="m-0 py-4 text-sm text-muted">{direction === "received" ? "No payments received yet. Share your handle to get paid." : "You haven’t sent anything yet."}</p>
+          <p className="m-0 px-1 py-2 text-sm text-muted">
+            {view === "sent" ? "You haven’t sent anything yet." : "No payments yet. Share your handle to get paid."}
+          </p>
         )}
       </Card>
     </section>

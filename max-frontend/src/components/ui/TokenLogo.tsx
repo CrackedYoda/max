@@ -5,9 +5,10 @@ import { tokenLogoSvg } from "./token-logos";
 /**
  * A token's logo by symbol, falling back to its initials. With `chain`, the
  * chain's logo sits on the corner so "USDC on Base" and "USDC on Solana" differ.
+ * `plain` shows initials only: an unverified token must not borrow a real logo.
  */
-export function TokenLogo({ symbol, chain, size = 28, className }: { symbol: string; chain?: string; size?: number; className?: string }) {
-  const svg = tokenLogoSvg(symbol);
+export function TokenLogo({ symbol, chain, size = 28, plain, className }: { symbol: string; chain?: string; size?: number; plain?: boolean; className?: string }) {
+  const svg = plain ? null : tokenLogoSvg(symbol);
   const badge = Math.round(size * 0.42);
   return (
     <span className={cx("relative inline-flex shrink-0", className)} style={{ width: size, height: size }} aria-hidden="true">
