@@ -89,7 +89,7 @@ export default function ReceiveAsset() {
             />
           </List>
 
-          {assets.isLoading ? <Loading label="Loading what NEAR Intents can deliver" /> : null}
+          {assets.isLoading ? <Loading label="Loading coins" /> : null}
           {assets.error ? <Banner tone="danger">{errorMessage(assets.error)}</Banner> : null}
           {!assets.isLoading && !assets.error && !byChain.size ? <AppText variant="small">Cross-chain delivery isn’t available right now.</AppText> : null}
 

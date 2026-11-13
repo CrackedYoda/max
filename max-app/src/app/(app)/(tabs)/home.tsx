@@ -9,6 +9,7 @@ import { Banner, Loading, SectionTitle } from '@/components/ui/Blocks';
 import { IconButton } from '@/components/ui/Button';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { ChainLogo } from '@/components/ui/ChainLogo';
+import { TokenLogo } from '@/components/ui/TokenLogo';
 import { MaxStatusBanner } from '@/components/wallet/MaxStatusBanner';
 import { errorMessage } from '@/error/messages';
 import { useActivity } from '@/hooks/useActivity';
@@ -178,11 +179,8 @@ function BalanceRow({ b, last }: { b: Balance; last: boolean }) {
       accessible
       accessibilityLabel={`${b.name} on ${b.chain.name}: ${formatAmount(b.amount)} ${b.symbol}`}
       style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.sunken }}>
-      <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.sunken, alignItems: 'center', justifyContent: 'center' }}>
-        <AppText weight="semibold" size={b.symbol.length > 3 ? 10 : 12} color={colors.body}>
-          {b.symbol}
-        </AppText>
-      </View>
+      {/* Balances are native coins and known USDC only, so a logo by symbol is safe. */}
+      <TokenLogo symbol={b.symbol} size={36} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <AppText weight="semibold" size={15}>
           {b.name}

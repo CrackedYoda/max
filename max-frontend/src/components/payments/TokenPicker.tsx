@@ -3,6 +3,7 @@
 import type { Holding } from "@max/sdk";
 
 import { cx } from "../ui/cx";
+import { TokenLogo } from "../ui/TokenLogo";
 
 /** USD with cents, or "<$0.01" for dust. */
 export function usd(v: string | number | null | undefined): string | null {
@@ -32,6 +33,9 @@ export function TokenPicker({ holdings, selected, disabled, onSelect }: {
               {h.logo ? (
                 // eslint-disable-next-line @next/next/no-img-element -- token logos come from many hosts
                 <img src={h.logo} alt="" width={28} height={28} className="size-7 shrink-0 rounded-full bg-sunken object-cover" />
+              ) : h.kind === "native" || h.verified ? (
+                // Only trusted coins get a logo by symbol; an unverified "USDC" must not look like the real one.
+                <TokenLogo symbol={h.symbol} size={28} />
               ) : (
                 <span aria-hidden="true" className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-sunken text-[11px] font-semibold text-muted">{h.symbol.slice(0, 3)}</span>
               )}

@@ -38,7 +38,7 @@ export function ReceivePicker({ value, onChange, sendChain, chains, assets, load
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="text-[15px] font-semibold">{value ? `${value.symbol} on ${chainName(value.chain)}` : "The same asset"}</span>
           <span className="truncate text-[13px] text-muted">
-            {value ? "Converted through NEAR Intents" : `On ${sendChain?.name ?? "this network"}, no conversion`}
+            {value ? "Converted when you pay" : `On ${sendChain?.name ?? "this network"}, no conversion`}
           </span>
         </span>
         <Icon name="chevronDown" size={18} className="text-muted" />
@@ -112,7 +112,7 @@ function ReceiveList({ value, sendChain, chains, assets, loading, onPick }: {
             {!current ? <Icon name="check" size={18} className="text-clay-text" /> : null}
           </button>
 
-          {loading ? <p className="m-0 text-sm text-muted">Loading what NEAR Intents can deliver…</p> : null}
+          {loading ? <p className="m-0 text-sm text-muted">Loading coins…</p> : null}
           {!loading && !byChain.size ? <p className="m-0 text-sm text-muted">Cross-chain delivery isn’t available right now.</p> : null}
           {byChain.size ? (
             <div className="flex flex-col gap-2.5">

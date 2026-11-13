@@ -222,7 +222,7 @@ export function SendFlow() {
               <ReceivePicker value={receive} disabled={busy} sendChain={chain} chains={chains.data ?? []}
                 assets={receivable.data ?? []} loading={receivable.isLoading}
                 onChange={(a) => { editing(); setReceive(a); }} />
-              {receiveChain ? <p className="m-0 text-[13px] text-muted">Converted through NEAR Intents. You’ll see the quote before you sign.</p> : null}
+              {receiveChain ? <p className="m-0 text-[13px] text-muted">You’ll see what they receive before you sign.</p> : null}
             </div>
           ) : null}
 
