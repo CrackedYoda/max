@@ -11,6 +11,10 @@ type claimRequest struct {
 	Name        string `json:"name" binding:"required,max=64"`
 	Type        string `json:"type" binding:"omitempty,oneof=human agent"`
 	DisplayName string `json:"displayName" binding:"max=64"`
+	// Nonce and Signature are a claim challenge (POST /v1/wallets/challenge,
+	// purpose "claim") signed by one of the caller's wallets.
+	Nonce     string `json:"nonce" binding:"omitempty,len=32,hexadecimal"`
+	Signature string `json:"signature" binding:"max=256"`
 }
 
 type profileRequest struct {

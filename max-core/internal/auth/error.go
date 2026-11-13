@@ -9,7 +9,9 @@ import (
 var (
 	ErrUnsupportedChain      = shared.NewAppError("UNSUPPORTED_CHAIN", http.StatusBadRequest, "wallet linking is not supported for this chain")
 	ErrInvalidAddress        = shared.NewAppError("INVALID_ADDRESS", http.StatusBadRequest, "wallet address is invalid")
-	ErrInvalidPurpose        = shared.NewAppError("INVALID_PURPOSE", http.StatusBadRequest, "purpose must be login or link")
+	ErrInvalidPurpose        = shared.NewAppError("INVALID_PURPOSE", http.StatusBadRequest, "purpose must be login, link or claim")
+	ErrClaimChallengeName    = shared.NewAppError("INVALID_MAX_ID", http.StatusBadRequest, "a claim challenge needs a valid name")
+	ErrClaimWalletNotOwned   = shared.NewAppError("WALLET_NOT_LINKED", http.StatusForbidden, "sign the claim with a wallet linked to your account")
 	ErrChallengeInvalid      = shared.NewAppError("CHALLENGE_INVALID", http.StatusUnauthorized, "challenge is invalid, expired or already used")
 	ErrSignatureInvalid      = shared.NewAppError("SIGNATURE_INVALID", http.StatusUnauthorized, "signature verification failed")
 	ErrWalletLinkedElsewhere = shared.NewAppError("WALLET_ALREADY_LINKED", http.StatusConflict, "this wallet is linked to another MAX account")

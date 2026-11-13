@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { normalizeName } from "@max/sdk";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
@@ -12,9 +13,11 @@ import { Banner, Heading } from "@/components/ui/Blocks";
 import { HandleInput, Segmented, TextField } from "@/components/ui/Fields";
 import { Icon } from "@/components/ui/Icon";
 import { errorCode, errorDetails, errorMessage } from "@/error/messages";
-import { useAvailability, useClaimId, useMe } from "@/hooks/queries";
+import { useAvailability, useClaimId, useMe, useWallets } from "@/hooks/queries";
 import { useDebounced } from "@/hooks/useDebounced";
+import { connectLinkedWallet, discoverEvmProviders, type EvmProviderInfo } from "@/services/wallets";
 import { toast } from "@/store/flows";
+import { useWallet } from "@/store/wallet";
 import { handleSchema, stripPrefix } from "@/validation/identity";
 
 const schema = z.object({
@@ -30,6 +33,9 @@ export function ClaimForm() {
   const router = useRouter();
   const claim = useClaimId();
   const me = useMe();
+  const wallets = useWallets();
+  const [evm, setEvm] = useState<EvmProviderInfo[]>([]);
+  useEffect(() => discoverEvmProviders(setEvm), []);
   const defaultHandle = me.data?.defaultMaxId?.handle;
   const { control, register, handleSubmit, formState } = useForm<z.input<typeof schema>, unknown, z.output<typeof schema>>({
     resolver: zodResolver(schema),
@@ -64,7 +70,14 @@ export function ClaimForm() {
   const ready = status.kind === "ok";
   const onSubmit = handleSubmit((v) =>
     claim.mutate(
-      { name: v.name, type: v.type, displayName: v.displayName || undefined },
+      {
+        name: v.name, type: v.type, displayName: v.displayName || undefined,
+        signer: async () => {
+          const w = await connectLinkedWallet(wallets.data ?? [], evm, useWallet.getState().wallet);
+          useWallet.getState().set(w);
+          return w;
+        },
+      },
       {
         onSuccess: (id) => {
           toast(`${id.handle} is yours`);
@@ -129,7 +142,7 @@ export function ClaimForm() {
           <Button type="submit" disabled={!ready} loading={claim.isPending}>
             {ready && canonical ? `Claim max.${canonical}` : "Claim"}
           </Button>
-          <span className="text-[13px] text-muted">You can choose where payments go after claiming.</span>
+          <span className="text-[13px] text-muted">Your wallet asks you to sign a short message to confirm. It’s free and moves no funds.</span>
         </div>
       </form>
     </main>

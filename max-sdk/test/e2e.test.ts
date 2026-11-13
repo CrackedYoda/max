@@ -56,7 +56,7 @@ test("SDK end-to-end against max-core", { skip: !enabled && "set MAX_E2E=1 with 
   const aliceWallet = solanaWallet();
   const login = await alice.auth.login(aliceWallet);
   assert.equal(login.accountCreated, true);
-  const yoda = await alice.ids.claim({ name: `yoda${rand()}` });
+  const yoda = await alice.ids.claim({ name: `yoda${rand()}` }, aliceWallet);
 
   const dev = new MaxClient({ baseUrl, persistSession: true });
   await dev.auth.login(solanaWallet());

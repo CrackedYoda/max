@@ -6,6 +6,8 @@ import { max } from '@/api/client';
 import { keys } from '@/api/keys';
 import { getEnv } from '@/config/env';
 import { hasRpc, mintDecimals, nativeBalance, usdcBalance, type Balance } from '@/services/chain';
+import { walletSigner } from '@/services/keys';
+import * as vault from '@/services/vault';
 import { trustedDecimals } from '@/utils/money';
 import { useSession } from '@/store/session';
 
@@ -169,7 +171,12 @@ export function useInvalidateAccount() {
 export function useClaimId() {
   const invalidate = useInvalidateAccount();
   return useMutation({
-    mutationFn: (v: { name: string; type: MaxIdType }) => max().ids.claim(v),
+    // The phone's own key (the one that signs in) signs the claim message for this name.
+    mutationFn: (v: { name: string; type: MaxIdType }) => {
+      const key = vault.primaryKey('evm') ?? vault.primaryKey('solana');
+      if (!key) throw new Error('Unlock your wallet to claim a name.');
+      return max().ids.claim(v, walletSigner(key));
+    },
     onSuccess: invalidate,
   });
 }

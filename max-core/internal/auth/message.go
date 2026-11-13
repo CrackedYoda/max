@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/maxids"
 )
 
 const (
 	statementLogin = "Sign in to MAX. This proves you control this wallet. It does not authorize any payment or transaction."
 	statementLink  = "Link this wallet to your MAX account so it can receive payments sent to your MAX IDs. This does not authorize any payment or transaction."
+	statementClaim = "Claim %s for your MAX account. This proves you control this wallet. It does not authorize any payment or transaction."
 )
 
 type messageParams struct {
@@ -19,6 +21,7 @@ type messageParams struct {
 	Namespace chains.Namespace
 	Address   string
 	Purpose   Purpose
+	ClaimName string
 	Nonce     string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
@@ -29,8 +32,11 @@ type messageParams struct {
 // text, so verification never has to parse a client-supplied message.
 func buildMessage(p messageParams) string {
 	statement := statementLogin
-	if p.Purpose == PurposeLink {
+	switch p.Purpose {
+	case PurposeLink:
 		statement = statementLink
+	case PurposeClaim:
+		statement = fmt.Sprintf(statementClaim, maxids.Handle(p.ClaimName))
 	}
 
 	var b strings.Builder

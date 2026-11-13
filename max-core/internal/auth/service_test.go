@@ -79,6 +79,15 @@ func (f *fakeRepo) LinkWallet(_ context.Context, accountID uuid.UUID, p WalletPr
 	return w, nil
 }
 
+func (f *fakeRepo) WalletOwner(_ context.Context, ns chains.Namespace, address string) (uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w, ok := f.wallets[string(ns)+"|"+address]; ok {
+		return w.AccountID, nil
+	}
+	return uuid.Nil, nil
+}
+
 func (f *fakeRepo) GetAccount(_ context.Context, id uuid.UUID) (Account, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -350,4 +359,94 @@ func TestCreateChallenge_SignInSite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func claimChallenge(t *testing.T, svc *service, w solWallet, caller uuid.UUID, name string) Challenge {
+	t.Helper()
+	ch, err := svc.CreateChallenge(context.Background(), ChallengeInput{Purpose: PurposeClaim, Namespace: "solana", Address: w.addr, Caller: &caller, Name: name})
+	if err != nil {
+		t.Fatalf("claim challenge: %v", err)
+	}
+	return ch
+}
+
+func TestClaimChallenge_Message(t *testing.T) {
+	svc, _ := newTestService()
+	w := newSolWallet()
+	acct := login(t, svc, w).Account.ID
+	ch := claimChallenge(t, svc, w, acct, "MAX.Alice")
+	if !strings.Contains(ch.Message, "Claim max.alice for your MAX account.") || !strings.Contains(ch.Message, "does not authorize any payment") {
+		t.Errorf("claim message:\n%s", ch.Message)
+	}
+}
+
+func TestClaimChallenge_Refusals(t *testing.T) {
+	svc, _ := newTestService()
+	w, other := newSolWallet(), newSolWallet()
+	acct := login(t, svc, w).Account.ID
+	login(t, svc, other)
+	ctx := context.Background()
+	for name, in := range map[string]ChallengeInput{
+		"no session":        {Purpose: PurposeClaim, Namespace: "solana", Address: w.addr, Name: "alice"},
+		"bad name":          {Purpose: PurposeClaim, Namespace: "solana", Address: w.addr, Caller: &acct, Name: "-x-"},
+		"someone else's":    {Purpose: PurposeClaim, Namespace: "solana", Address: other.addr, Caller: &acct, Name: "alice"},
+		"wallet not linked": {Purpose: PurposeClaim, Namespace: "solana", Address: newSolWallet().addr, Caller: &acct, Name: "alice"},
+	} {
+		if _, err := svc.CreateChallenge(ctx, in); err == nil {
+			t.Errorf("%s: challenge was issued", name)
+		}
+	}
+}
+
+func TestVerifyClaim(t *testing.T) {
+	svc, repo := newTestService()
+	w := newSolWallet()
+	acct := login(t, svc, w).Account.ID
+	ctx := context.Background()
+
+	t.Run("signed for this name", func(t *testing.T) {
+		ch := claimChallenge(t, svc, w, acct, "alice")
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: acct, Name: "alice", Nonce: ch.Nonce, Signature: w.sign(ch.Message)}); err != nil {
+			t.Fatal(err)
+		}
+		// Single use.
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: acct, Name: "alice", Nonce: ch.Nonce, Signature: w.sign(ch.Message)}); !errors.Is(err, ErrChallengeInvalid) {
+			t.Fatalf("replay: %v", err)
+		}
+	})
+	t.Run("different name", func(t *testing.T) {
+		ch := claimChallenge(t, svc, w, acct, "alice")
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: acct, Name: "bob", Nonce: ch.Nonce, Signature: w.sign(ch.Message)}); !errors.Is(err, ErrChallengeInvalid) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("different account", func(t *testing.T) {
+		ch := claimChallenge(t, svc, w, acct, "alice")
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: uuid.New(), Name: "alice", Nonce: ch.Nonce, Signature: w.sign(ch.Message)}); !errors.Is(err, ErrChallengeInvalid) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("bad signature", func(t *testing.T) {
+		ch := claimChallenge(t, svc, w, acct, "alice")
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: acct, Name: "alice", Nonce: ch.Nonce, Signature: newSolWallet().sign(ch.Message)}); !errors.Is(err, ErrSignatureInvalid) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("wallet unlinked before claiming", func(t *testing.T) {
+		ch := claimChallenge(t, svc, w, acct, "alice")
+		repo.mu.Lock()
+		delete(repo.wallets, "solana|"+w.addr)
+		repo.mu.Unlock()
+		if err := svc.VerifyClaim(ctx, ClaimProof{Caller: acct, Name: "alice", Nonce: ch.Nonce, Signature: w.sign(ch.Message)}); !errors.Is(err, ErrClaimWalletNotOwned) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("a claim challenge can't log in", func(t *testing.T) {
+		w2 := newSolWallet()
+		acct2 := login(t, svc, w2).Account.ID
+		ch := claimChallenge(t, svc, w2, acct2, "carol")
+		if _, err := svc.Verify(ctx, VerifyInput{Nonce: ch.Nonce, Signature: w2.sign(ch.Message)}); !errors.Is(err, ErrChallengeInvalid) {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

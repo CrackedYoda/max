@@ -1,18 +1,27 @@
 package maxids
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/max/max-core/internal/shared"
 )
 
+// ClaimVerifier checks a signed claim challenge: that it was signed for exactly
+// this name by a wallet the caller owns. It spends the challenge.
+type ClaimVerifier func(ctx context.Context, caller uuid.UUID, name, nonce, signature string) error
+
 type Handler struct {
-	svc Service
+	svc         Service
+	verifyClaim ClaimVerifier
 }
 
-func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+// NewHandler wires the MAX ID routes. People claiming through a session must
+// sign a claim message with one of their wallets; agent credentials don't.
+func NewHandler(svc Service, verifyClaim ClaimVerifier) *Handler {
+	return &Handler{svc: svc, verifyClaim: verifyClaim}
 }
 
 func (h *Handler) Availability(c *gin.Context) {
@@ -34,6 +43,21 @@ func (h *Handler) Claim(c *gin.Context) {
 	typ := Type(req.Type)
 	if p.AccountType == "agent" {
 		typ = TypeAgent // an agent can only ever hold agent IDs
+	}
+	if !p.IsAgentCredential() {
+		if req.Nonce == "" || req.Signature == "" {
+			shared.Fail(c, ErrClaimSignatureRequired)
+			return
+		}
+		name, err := Normalize(req.Name)
+		if err != nil {
+			shared.Fail(c, ErrInvalidName.WithMessage(err.Error()))
+			return
+		}
+		if err := h.verifyClaim(c.Request.Context(), p.AccountID, name, req.Nonce, req.Signature); err != nil {
+			shared.Fail(c, err)
+			return
+		}
 	}
 	m, err := h.svc.Claim(c.Request.Context(), p.AccountID, ClaimInput{
 		Name: req.Name, Type: typ, DisplayName: req.DisplayName,

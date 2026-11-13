@@ -1,6 +1,6 @@
 "use client";
 
-import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type DestinationTarget, type MaxIdType, type Namespace, type SearchParams } from "@max/sdk";
+import { isMaxApiError, normalizeName, TERMINAL_STATUSES, type Decision, type DestinationTarget, type MaxIdType, type Namespace, type SearchParams, type WalletSigner } from "@max/sdk";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { max } from "@/api/client";
@@ -114,7 +114,9 @@ export function useInvalidateAccount() {
 export function useClaimId() {
   const invalidate = useInvalidateAccount();
   return useMutation({
-    mutationFn: (v: { name: string; type: MaxIdType; displayName?: string }) => max().ids.claim(v),
+    // `signer` connects a linked wallet; it signs the claim message for this name.
+    mutationFn: async ({ signer, ...v }: { name: string; type: MaxIdType; displayName?: string; signer: () => Promise<WalletSigner> }) =>
+      max().ids.claim(v, await signer()),
     onSuccess: invalidate,
   });
 }

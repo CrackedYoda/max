@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/max/max-core/internal/chains"
+	"github.com/max/max-core/internal/maxids"
 	"github.com/max/max-core/internal/shared"
 )
 
@@ -54,8 +55,21 @@ func (s *service) CreateChallenge(ctx context.Context, in ChallengeInput) (Chall
 	if err != nil {
 		return Challenge{}, ErrInvalidAddress.WithMessage(err.Error())
 	}
-	if in.Purpose == PurposeLink && in.Caller == nil {
+	if (in.Purpose == PurposeLink || in.Purpose == PurposeClaim) && in.Caller == nil {
 		return Challenge{}, shared.ErrUnauthorized
+	}
+	var claimName string
+	if in.Purpose == PurposeClaim {
+		if claimName, err = maxids.Normalize(in.Name); err != nil {
+			return Challenge{}, ErrClaimChallengeName.WithMessage(err.Error())
+		}
+		owner, err := s.repo.WalletOwner(ctx, ns, addr)
+		if err != nil {
+			return Challenge{}, err
+		}
+		if owner != *in.Caller {
+			return Challenge{}, ErrClaimWalletNotOwned
+		}
 	}
 
 	nonce, err := randomHex(16)
@@ -70,13 +84,14 @@ func (s *service) CreateChallenge(ctx context.Context, in ChallengeInput) (Chall
 		Address:   addr,
 		ExpiresAt: now.Add(s.cfg.ChallengeTTL),
 	}
-	if in.Purpose == PurposeLink {
+	if in.Purpose == PurposeLink || in.Purpose == PurposeClaim {
 		c.AccountID = in.Caller
 	}
+	c.ClaimName = claimName
 	domain, uri := s.signInSite(in.Origin)
 	c.Message = buildMessage(messageParams{
 		Domain: domain, URI: uri, Namespace: ns, Address: addr,
-		Purpose: in.Purpose, Nonce: nonce, IssuedAt: now, ExpiresAt: c.ExpiresAt,
+		Purpose: in.Purpose, ClaimName: claimName, Nonce: nonce, IssuedAt: now, ExpiresAt: c.ExpiresAt,
 	})
 
 	if err := s.repo.CreateChallenge(ctx, c); err != nil {
@@ -111,6 +126,9 @@ func (s *service) Verify(ctx context.Context, in VerifyInput) (VerifyResult, err
 	proof := WalletProof{Namespace: c.Namespace, Address: c.Address, Message: c.Message, Signature: in.Signature}
 
 	switch c.Purpose {
+	case PurposeClaim:
+		// Claim challenges are only spent by VerifyClaim.
+		return VerifyResult{}, ErrChallengeInvalid
 	case PurposeLink:
 		if c.AccountID == nil || in.Caller == nil || *c.AccountID != *in.Caller {
 			return VerifyResult{}, ErrChallengeInvalid
@@ -212,4 +230,26 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (s *service) VerifyClaim(ctx context.Context, p ClaimProof) error {
+	c, err := s.repo.ConsumeChallenge(ctx, p.Nonce)
+	if err != nil {
+		return err
+	}
+	if c.Purpose != PurposeClaim || c.AccountID == nil || *c.AccountID != p.Caller || c.ClaimName != p.Name {
+		return ErrChallengeInvalid
+	}
+	if err := chains.VerifySignature(c.Namespace, c.Address, c.Message, p.Signature); err != nil {
+		return ErrSignatureInvalid.WithError(err)
+	}
+	// The wallet may have been unlinked between the challenge and the claim.
+	owner, err := s.repo.WalletOwner(ctx, c.Namespace, c.Address)
+	if err != nil {
+		return err
+	}
+	if owner != p.Caller {
+		return ErrClaimWalletNotOwned
+	}
+	return nil
 }

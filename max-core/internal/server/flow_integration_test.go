@@ -176,9 +176,12 @@ func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 		AuthService: authSvc,
 		Auth:        auth.NewHandler(authSvc, auth.CookieConfig{TTL: time.Hour}),
 		Wallets:     wallets.NewHandler(wallets.NewService(wallets.NewRepository(pool))),
-		MaxIDs:      maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil))),
-		Resolver:    resolver.NewHandler(resolverSvc),
-		Payments:    payments.NewHandler(paySvc),
+		MaxIDs: maxids.NewHandler(maxids.NewService(maxids.NewRepository(pool), maxids.NewBalanceGate(0, nil, nil, nil, nil)),
+			func(ctx context.Context, caller uuid.UUID, name, nonce, sig string) error {
+				return authSvc.VerifyClaim(ctx, auth.ClaimProof{Caller: caller, Name: name, Nonce: nonce, Signature: sig})
+			}),
+		Resolver: resolver.NewHandler(resolverSvc),
+		Payments: payments.NewHandler(paySvc),
 	})
 	return &testEnv{verify: verifySvc, fakeX: fx, admins: admins, renames: renameSvc, handler: h, pool: pool, payments: paySvc, payRepo: payRepo, gateway: gw, provider: prov, market: marketSvc, settle: fs}
 }
@@ -198,10 +201,16 @@ type client struct {
 	h      http.Handler
 	cookie *http.Cookie
 	apiKey string
+	// wallet is the last wallet this client signed in or linked with; claims
+	// (POST /v1/ids) are signed with it unless the body already has a nonce.
+	wallet signer
 }
 
 func (c *client) do(method, path string, body any) (int, map[string]any) {
 	c.t.Helper()
+	if m, ok := body.(map[string]any); ok && method == "POST" && path == "/v1/ids" && c.wallet != nil && m["nonce"] == nil {
+		body = c.signClaim(m)
+	}
 	var buf bytes.Buffer
 	if body != nil {
 		_ = json.NewEncoder(&buf).Encode(body)
@@ -275,9 +284,31 @@ func (c *client) prove(s signer, purpose string) (int, map[string]any) {
 		c.t.Fatalf("challenge %d %v", code, ch)
 	}
 	data := ch["data"].(map[string]any)
-	return c.do("POST", "/v1/wallets/verify", map[string]any{
+	code, body := c.do("POST", "/v1/wallets/verify", map[string]any{
 		"nonce": data["nonce"], "signature": s.sign(data["message"].(string)),
 	})
+	if code == http.StatusOK || code == http.StatusCreated {
+		c.wallet = s
+	}
+	return code, body
+}
+
+// signClaim adds a signed claim challenge for body["name"] to a claim request.
+func (c *client) signClaim(body map[string]any) map[string]any {
+	c.t.Helper()
+	code, ch := c.do("POST", "/v1/wallets/challenge", map[string]any{
+		"purpose": "claim", "namespace": c.wallet.namespace(), "address": c.wallet.address(), "name": body["name"],
+	})
+	if code != http.StatusCreated {
+		// Let the claim itself report the problem (e.g. an invalid name).
+		return body
+	}
+	d := ch["data"].(map[string]any)
+	out := map[string]any{"nonce": d["nonce"], "signature": c.wallet.sign(d["message"].(string))}
+	for k, v := range body {
+		out[k] = v
+	}
+	return out
 }
 
 func data(t *testing.T, body map[string]any) map[string]any {
@@ -346,6 +377,15 @@ func TestFlow_RegisterLinkClaimResolve(t *testing.T) {
 	anon := &client{t: t, h: h}
 	if code, _ = anon.do("POST", "/v1/ids", map[string]any{"name": "anon"}); code != http.StatusUnauthorized {
 		t.Fatalf("anon claim: %d", code)
+	}
+	// A claim needs a wallet signature for that exact name.
+	if code, body = alice.do("POST", "/v1/ids", map[string]any{"name": "unsigned", "nonce": ""}); errCode(body) != "CLAIM_SIGNATURE_REQUIRED" {
+		t.Fatalf("unsigned claim: %d %v", code, body)
+	}
+	_, ch := alice.do("POST", "/v1/wallets/challenge", map[string]any{"purpose": "claim", "namespace": "solana", "address": phantom.address(), "name": "signedfor"})
+	chd := data(t, ch)
+	if code, body = alice.do("POST", "/v1/ids", map[string]any{"name": "othername", "nonce": chd["nonce"], "signature": phantom.sign(chd["message"].(string))}); errCode(body) != "CHALLENGE_INVALID" {
+		t.Fatalf("claim signed for another name: %d %v", code, body)
 	}
 
 	// 6. Bob cannot see or modify Alice's ID (404, not 403).

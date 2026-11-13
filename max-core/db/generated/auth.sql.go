@@ -16,7 +16,7 @@ const consumeChallenge = `-- name: ConsumeChallenge :one
 UPDATE wallet_challenges
 SET used_at = now()
 WHERE nonce = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING id, nonce, purpose, chain_namespace, address, account_id, message, expires_at, used_at, created_at
+RETURNING id, nonce, purpose, chain_namespace, address, account_id, message, expires_at, used_at, created_at, claim_name
 `
 
 // Single-use: the conditional UPDATE makes concurrent replays lose the race.
@@ -34,6 +34,7 @@ func (q *Queries) ConsumeChallenge(ctx context.Context, nonce string) (WalletCha
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.ClaimName,
 	)
 	return i, err
 }
@@ -55,9 +56,9 @@ func (q *Queries) CreateAccount(ctx context.Context, type_ string) (Account, err
 }
 
 const createChallenge = `-- name: CreateChallenge :one
-INSERT INTO wallet_challenges (nonce, purpose, chain_namespace, address, account_id, message, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, nonce, purpose, chain_namespace, address, account_id, message, expires_at, used_at, created_at
+INSERT INTO wallet_challenges (nonce, purpose, chain_namespace, address, account_id, message, expires_at, claim_name)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, nonce, purpose, chain_namespace, address, account_id, message, expires_at, used_at, created_at, claim_name
 `
 
 type CreateChallengeParams struct {
@@ -68,6 +69,7 @@ type CreateChallengeParams struct {
 	AccountID      *uuid.UUID
 	Message        string
 	ExpiresAt      time.Time
+	ClaimName      *string
 }
 
 func (q *Queries) CreateChallenge(ctx context.Context, arg CreateChallengeParams) (WalletChallenge, error) {
@@ -79,6 +81,7 @@ func (q *Queries) CreateChallenge(ctx context.Context, arg CreateChallengeParams
 		arg.AccountID,
 		arg.Message,
 		arg.ExpiresAt,
+		arg.ClaimName,
 	)
 	var i WalletChallenge
 	err := row.Scan(
@@ -92,6 +95,7 @@ func (q *Queries) CreateChallenge(ctx context.Context, arg CreateChallengeParams
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.ClaimName,
 	)
 	return i, err
 }

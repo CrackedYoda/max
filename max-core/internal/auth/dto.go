@@ -7,9 +7,11 @@ import (
 )
 
 type challengeRequest struct {
-	Purpose   string `json:"purpose" binding:"required,oneof=login link"`
+	Purpose   string `json:"purpose" binding:"required,oneof=login link claim"`
 	Namespace string `json:"namespace" binding:"required,oneof=evm solana"`
 	Address   string `json:"address" binding:"required,max=128"`
+	// Name is required for purpose "claim": the name the signature is for.
+	Name string `json:"name" binding:"max=64"`
 }
 
 type challengeResponse struct {

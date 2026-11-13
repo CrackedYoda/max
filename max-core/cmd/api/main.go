@@ -178,11 +178,13 @@ func run() error {
 		IsAdmin:        adminSet(cfg.AdminAccountIDs),
 		Auth:           auth.NewHandler(authSvc, auth.CookieConfig{Secure: cfg.Auth.CookieSecure, TTL: cfg.Auth.SessionTTL}),
 		Wallets:        wallets.NewHandler(walletSvc),
-		MaxIDs:         maxids.NewHandler(maxidSvc),
-		Resolver:       resolver.NewHandler(resolverSvc),
-		Holdings:       holdings.NewHandler(newHoldings(cfg)),
-		Payments:       payments.NewHandler(paymentSvc),
-		Market:         market.NewHandler(marketSvc),
+		MaxIDs: maxids.NewHandler(maxidSvc, func(ctx context.Context, caller uuid.UUID, name, nonce, sig string) error {
+			return authSvc.VerifyClaim(ctx, auth.ClaimProof{Caller: caller, Name: name, Nonce: nonce, Signature: sig})
+		}),
+		Resolver: resolver.NewHandler(resolverSvc),
+		Holdings: holdings.NewHandler(newHoldings(cfg)),
+		Payments: payments.NewHandler(paymentSvc),
+		Market:   market.NewHandler(marketSvc),
 	})
 
 	return server.Run(cfg.HTTP.Addr, router, log)

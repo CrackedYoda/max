@@ -1,6 +1,6 @@
 -- name: CreateChallenge :one
-INSERT INTO wallet_challenges (nonce, purpose, chain_namespace, address, account_id, message, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO wallet_challenges (nonce, purpose, chain_namespace, address, account_id, message, expires_at, claim_name)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: ConsumeChallenge :one

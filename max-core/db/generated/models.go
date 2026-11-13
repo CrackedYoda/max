@@ -442,4 +442,5 @@ type WalletChallenge struct {
 	ExpiresAt      time.Time
 	UsedAt         *time.Time
 	CreatedAt      time.Time
+	ClaimName      *string
 }

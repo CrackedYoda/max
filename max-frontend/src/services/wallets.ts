@@ -156,3 +156,31 @@ export async function connectFor(namespace: string, evm: EvmProviderInfo[], curr
   if (!p) throw new WalletError("No EVM wallet found. Install MetaMask to continue.");
   return connectEvm(p);
 }
+
+const short = (a: string) => (a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
+const sameAddress = (ns: string, a: string, b: string) => (ns === "evm" ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/**
+ * A wallet linked to the signed-in account, ready to sign: the one already
+ * connected in this tab when it is linked, otherwise Phantom or the first EVM
+ * wallet, whichever kind the account has linked.
+ */
+export async function connectLinkedWallet(
+  linked: { namespace: string; address: string }[],
+  evm: EvmProviderInfo[],
+  current?: ConnectedWallet | null,
+): Promise<ConnectedWallet> {
+  const isLinked = (w: ConnectedWallet) => linked.some((x) => x.namespace === w.namespace && sameAddress(w.namespace, x.address, w.address));
+  if (current && isLinked(current)) return current;
+  const hasSol = linked.some((x) => x.namespace === "solana");
+  const hasEvm = linked.some((x) => x.namespace === "evm");
+  let w: ConnectedWallet;
+  if (hasSol && phantomProvider()) w = await connectPhantom();
+  else if (hasEvm && evm.length) w = await connectFor("evm", evm);
+  else throw new WalletError("Open a wallet that’s linked to your account (Phantom or MetaMask) to sign.");
+  if (!isLinked(w)) {
+    const want = linked.find((x) => x.namespace === w.namespace) ?? linked[0];
+    throw new WalletError(`${w.label} is on ${short(w.address)}, which isn’t linked to your account.${want ? ` Switch to ${short(want.address)}.` : ""}`);
+  }
+  return w;
+}

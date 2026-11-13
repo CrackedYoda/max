@@ -30,8 +30,9 @@ const rand = () => randomBytes(3).toString("hex");
 
 test("max-mcp over stdio against max-core", { skip: !enabled && "set MAX_E2E=1 with a running API" }, async () => {
   const alice = new MaxClient({ baseUrl, persistSession: true });
-  await alice.auth.login(wallet());
-  const yoda = await alice.ids.claim({ name: `yoda${rand()}` });
+  const aliceWallet = wallet();
+  await alice.auth.login(aliceWallet);
+  const yoda = await alice.ids.claim({ name: `yoda${rand()}` }, aliceWallet);
 
   const dev = new MaxClient({ baseUrl, persistSession: true });
   await dev.auth.login(wallet());
@@ -78,8 +79,9 @@ test("max-mcp over stdio against max-core", { skip: !enabled && "set MAX_E2E=1 w
 
     // Off-allowlist recipient: held too.
     const other = new MaxClient({ baseUrl, persistSession: true });
-    await other.auth.login(wallet());
-    const evil = await other.ids.claim({ name: `evil${rand()}` });
+    const otherWallet = wallet();
+    await other.auth.login(otherWallet);
+    const evil = await other.ids.claim({ name: `evil${rand()}` }, otherWallet);
     const off: any = await mcp.callTool({ name: "max_propose_transfer", arguments: { recipient: evil.handle, chain: CHAIN, amount: "0.01" } });
     assert.equal(off.structuredContent.decision, "pending_approval");
     assert.match(off.structuredContent.reasons.join(" "), /allowlist/);

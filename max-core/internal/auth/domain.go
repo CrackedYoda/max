@@ -13,9 +13,11 @@ type Purpose string
 const (
 	PurposeLogin Purpose = "login"
 	PurposeLink  Purpose = "link"
+	// PurposeClaim proves a wallet holder asked for one specific name.
+	PurposeClaim Purpose = "claim"
 )
 
-func (p Purpose) Valid() bool { return p == PurposeLogin || p == PurposeLink }
+func (p Purpose) Valid() bool { return p == PurposeLogin || p == PurposeLink || p == PurposeClaim }
 
 type Challenge struct {
 	Nonce     string
@@ -25,6 +27,8 @@ type Challenge struct {
 	AccountID *uuid.UUID
 	Message   string
 	ExpiresAt time.Time
+	// ClaimName is the canonical name a claim challenge is for.
+	ClaimName string
 }
 
 // IDRef is a MAX ID as shown on the account: its id and max.<name> handle.
@@ -67,8 +71,10 @@ type ChallengeInput struct {
 	Purpose   Purpose
 	Namespace string
 	Address   string
-	// Caller is required for link challenges; the challenge is bound to it.
+	// Caller is required for link and claim challenges; the challenge is bound to it.
 	Caller *uuid.UUID
+	// Name is the name being claimed (claim challenges only).
+	Name string
 	// Origin is the requesting site's Origin header, if any.
 	Origin string
 }
@@ -79,6 +85,14 @@ type VerifyInput struct {
 	Caller    *uuid.UUID
 	IP        string
 	UserAgent string
+}
+
+// ClaimProof is a signed claim challenge presented with a claim request.
+type ClaimProof struct {
+	Caller    uuid.UUID
+	Name      string // canonical
+	Nonce     string
+	Signature string
 }
 
 type VerifyResult struct {

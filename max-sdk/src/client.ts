@@ -121,7 +121,8 @@ export class MaxClient {
 class AuthApi {
   constructor(private readonly http: HttpClient) {}
 
-  challenge(input: { purpose: "login" | "link"; namespace: Namespace; address: string }): Promise<Challenge> {
+  /** `name` is required for purpose "claim": the name the signature is for. */
+  challenge(input: { purpose: "login" | "link" | "claim"; namespace: Namespace; address: string; name?: string }): Promise<Challenge> {
     return this.http.post("/v1/wallets/challenge", { body: input });
   }
 
@@ -174,8 +175,17 @@ class WalletsApi {
 class IdsApi {
   constructor(private readonly http: HttpClient) {}
 
-  claim(input: { name: string; type?: MaxIdType; displayName?: string }): Promise<MaxId> {
-    return this.http.post("/v1/ids", { body: input });
+  /**
+   * Claims a name. A signed-in person signs a claim message for the name with
+   * one of their linked wallets first; agents using an API key don't.
+   */
+  async claim(input: { name: string; type?: MaxIdType; displayName?: string }, wallet?: WalletSigner): Promise<MaxId> {
+    if (!wallet) return this.http.post("/v1/ids", { body: input });
+    const ch: Challenge = await this.http.post("/v1/wallets/challenge", {
+      body: { purpose: "claim", namespace: wallet.namespace, address: wallet.address, name: input.name },
+    });
+    const signature = await wallet.signMessage(ch.message);
+    return this.http.post("/v1/ids", { body: { ...input, nonce: ch.nonce, signature } });
   }
   list(): Promise<MaxId[]> {
     return this.http.get("/v1/ids");

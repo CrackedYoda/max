@@ -40,6 +40,7 @@ func (r *repository) CreateChallenge(ctx context.Context, c Challenge) error {
 		AccountID:      c.AccountID,
 		Message:        c.Message,
 		ExpiresAt:      c.ExpiresAt,
+		ClaimName:      nilIfEmpty(c.ClaimName),
 	})
 	if err != nil {
 		return shared.ErrInternal.WithError(err)
@@ -55,7 +56,7 @@ func (r *repository) ConsumeChallenge(ctx context.Context, nonce string) (Challe
 		}
 		return Challenge{}, shared.ErrInternal.WithError(err)
 	}
-	return Challenge{
+	c := Challenge{
 		Nonce:     row.Nonce,
 		Purpose:   Purpose(row.Purpose),
 		Namespace: chains.Namespace(row.ChainNamespace),
@@ -63,7 +64,29 @@ func (r *repository) ConsumeChallenge(ctx context.Context, nonce string) (Challe
 		AccountID: row.AccountID,
 		Message:   row.Message,
 		ExpiresAt: row.ExpiresAt,
-	}, nil
+	}
+	if row.ClaimName != nil {
+		c.ClaimName = *row.ClaimName
+	}
+	return c, nil
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func (r *repository) WalletOwner(ctx context.Context, ns chains.Namespace, address string) (uuid.UUID, error) {
+	w, err := r.q.GetActiveWalletByAddress(ctx, generated.GetActiveWalletByAddressParams{ChainNamespace: string(ns), Address: address})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return uuid.Nil, nil
+		}
+		return uuid.Nil, shared.ErrInternal.WithError(err)
+	}
+	return w.AccountID, nil
 }
 
 func (r *repository) LoginWithWallet(ctx context.Context, proof WalletProof) (Account, Wallet, bool, error) {
