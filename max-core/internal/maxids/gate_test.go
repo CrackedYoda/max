@@ -195,3 +195,21 @@ func TestGate_IgnoresUnconfiguredChain(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestGate_IgnoresTestnets(t *testing.T) {
+	// 5 devnet SOL at a real SOL price must not pass the gate.
+	devnet, _ := chains.Lookup("solana-devnet")
+	g := NewBalanceGate(100,
+		fakeWallets{refs: []WalletRef{{Namespace: chains.NamespaceSolana, Address: "W1"}}},
+		map[chains.Namespace]BalanceReader{chains.NamespaceSolana: fakeBalances{byChain: map[string]map[string]*big.Int{
+			"solana-devnet": {"native": big.NewInt(5_000_000_000)},
+		}}},
+		&fakeFeed{prices: map[string]float64{"SOL": 80}}, append(solChain(), devnet))
+	err := g.Check(context.Background(), uuid.New())
+	if !errors.Is(err, ErrInsufficientRegistrationBalance) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := counted(t, err); got != 0 {
+		t.Errorf("countedUsd = %v, want 0", got)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/url"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,8 +19,12 @@ import (
 )
 
 type Config struct {
-	Domain        string
-	URI           string
+	// Domain and URI go into sign-in messages by default.
+	Domain string
+	URI    string
+	// Origins are sites (scheme://host[:port]) whose own domain goes into the
+	// message instead, so wallets see the site the user is actually on.
+	Origins       []string
 	ChallengeTTL  time.Duration
 	SessionTTL    time.Duration
 	SessionSecret string
@@ -67,8 +73,9 @@ func (s *service) CreateChallenge(ctx context.Context, in ChallengeInput) (Chall
 	if in.Purpose == PurposeLink {
 		c.AccountID = in.Caller
 	}
+	domain, uri := s.signInSite(in.Origin)
 	c.Message = buildMessage(messageParams{
-		Domain: s.cfg.Domain, URI: s.cfg.URI, Namespace: ns, Address: addr,
+		Domain: domain, URI: uri, Namespace: ns, Address: addr,
 		Purpose: in.Purpose, Nonce: nonce, IssuedAt: now, ExpiresAt: c.ExpiresAt,
 	})
 
@@ -76,6 +83,18 @@ func (s *service) CreateChallenge(ctx context.Context, in ChallengeInput) (Chall
 		return Challenge{}, err
 	}
 	return c, nil
+}
+
+// signInSite returns the domain and URI for a sign-in message: the requesting
+// site when it is one of cfg.Origins, otherwise the configured default. The
+// message is stored with the challenge, so verification needs no change.
+func (s *service) signInSite(origin string) (domain, uri string) {
+	if origin != "" && slices.Contains(s.cfg.Origins, origin) {
+		if u, err := url.Parse(origin); err == nil && u.Host != "" {
+			return u.Host, origin
+		}
+	}
+	return s.cfg.Domain, s.cfg.URI
 }
 
 func (s *service) Verify(ctx context.Context, in VerifyInput) (VerifyResult, error) {

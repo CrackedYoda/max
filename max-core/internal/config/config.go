@@ -403,7 +403,7 @@ func mainnetErrors(cfg Config) []error {
 			}
 		}
 		if !mainnet {
-			errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD > 0 needs an RPC_URL_* for at least one mainnet chain; testnets are not counted in production"))
+			errs = append(errs, errors.New("REGISTRATION_MIN_BALANCE_USD > 0 needs an RPC_URL_* for at least one mainnet chain; testnet balances are never counted"))
 		}
 	}
 	return errs

@@ -69,6 +69,8 @@ type ChallengeInput struct {
 	Address   string
 	// Caller is required for link challenges; the challenge is bound to it.
 	Caller *uuid.UUID
+	// Origin is the requesting site's Origin header, if any.
+	Origin string
 }
 
 type VerifyInput struct {

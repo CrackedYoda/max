@@ -321,3 +321,33 @@ func TestAuthenticate_LogoutInvalidates(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestCreateChallenge_SignInSite(t *testing.T) {
+	svc, _ := newTestService()
+	svc.cfg.Origins = []string{"https://app.usemax.xyz", "https://www.usemax.xyz"}
+	w := newSolWallet()
+
+	tests := []struct {
+		origin, wantDomain, wantURI string
+	}{
+		{"https://app.usemax.xyz", "app.usemax.xyz", "https://app.usemax.xyz"},
+		{"https://www.usemax.xyz", "www.usemax.xyz", "https://www.usemax.xyz"},
+		{"https://evil.example", "localhost:3000", "http://localhost:3000"},
+		{"", "localhost:3000", "http://localhost:3000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.origin, func(t *testing.T) {
+			ch, err := svc.CreateChallenge(context.Background(), ChallengeInput{Purpose: PurposeLogin, Namespace: "solana", Address: w.addr, Origin: tt.origin})
+			if err != nil {
+				t.Fatalf("challenge: %v", err)
+			}
+			if !strings.HasPrefix(ch.Message, tt.wantDomain+" wants you to sign in") || !strings.Contains(ch.Message, "URI: "+tt.wantURI+"\n") {
+				t.Errorf("origin %q: message has the wrong site:\n%s", tt.origin, ch.Message)
+			}
+			res, err := svc.Verify(context.Background(), VerifyInput{Nonce: ch.Nonce, Signature: w.sign(ch.Message)})
+			if err != nil || res.SessionToken == "" {
+				t.Fatalf("verify: %v", err)
+			}
+		})
+	}
+}

@@ -34,6 +34,7 @@ func (h *Handler) Challenge(c *gin.Context) {
 	}
 	ch, err := h.svc.CreateChallenge(c.Request.Context(), ChallengeInput{
 		Purpose: Purpose(req.Purpose), Namespace: req.Namespace, Address: req.Address, Caller: callerID(c),
+		Origin: c.GetHeader("Origin"),
 	})
 	if err != nil {
 		shared.Fail(c, err)

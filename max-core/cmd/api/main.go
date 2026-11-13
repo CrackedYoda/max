@@ -71,6 +71,7 @@ func run() error {
 	authSvc := auth.NewService(auth.NewRepository(pool, namer), auth.Config{
 		Domain:        cfg.Auth.Domain,
 		URI:           cfg.Auth.URI,
+		Origins:       cfg.HTTP.CORSOrigins,
 		ChallengeTTL:  cfg.Auth.ChallengeTTL,
 		SessionTTL:    cfg.Auth.SessionTTL,
 		SessionSecret: cfg.Auth.SessionSecret,
@@ -269,12 +270,13 @@ func newRegistrationGate(cfg config.Config, wallets maxids.WalletLister) maxids.
 		pricing.NewCoinGecko(cfg.Pricing.URL, cfg.Pricing.APIKey, &http.Client{Timeout: 10 * time.Second}),
 		cfg.Pricing.TTL, cfg.Pricing.MaxAge, time.Now)
 
+	// Testnet coins are free, so they never count toward the gate, in any environment.
 	var gateChains []chains.Chain
 	evm := map[string]settle.EVMRPC{}
 	sol := map[string]settle.SolanaRPC{}
 	for _, c := range chains.Supported {
 		url, ok := cfg.Payments.RPCURLs[c.Key]
-		if !ok || (c.Testnet && cfg.IsProduction()) {
+		if !ok || c.Testnet {
 			continue
 		}
 		switch c.Namespace {

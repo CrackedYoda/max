@@ -50,7 +50,14 @@ type balanceGate struct {
 // chains with an RPC URL, minus testnets in production). Nothing else counts.
 // A minUSD of 0 disables the gate: it touches no wallet, RPC or feed.
 func NewBalanceGate(minUSD float64, wallets WalletLister, balances map[chains.Namespace]BalanceReader, feed pricing.Feed, cfgChains []chains.Chain) BalanceGate {
-	return &balanceGate{minUSD: minUSD, wallets: wallets, balances: balances, feed: feed, chains: cfgChains}
+	// Testnet coins are free, so a testnet balance never counts.
+	var mainnets []chains.Chain
+	for _, c := range cfgChains {
+		if !c.Testnet {
+			mainnets = append(mainnets, c)
+		}
+	}
+	return &balanceGate{minUSD: minUSD, wallets: wallets, balances: balances, feed: feed, chains: mainnets}
 }
 
 func (g *balanceGate) Enabled() bool   { return g.minUSD > 0 }
