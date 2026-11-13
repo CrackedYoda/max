@@ -22,7 +22,7 @@ Sending crypto means copying a 42-character address, checking you're on the netw
 | **Every account gets a name** | A free default ID (like `max.6f8d6gum9e2sy5fa`) from first sign-in, so anyone can be paid straight away. |
 | **Custom names** | Claim `max.yourname` by signing a claim message with a linked wallet. Claims need a $50 balance on a mainnet chain (testnet coins don't count) to discourage squatting. |
 | **Reserved brand names** | Names like `max.solana` or `max.near` can only be claimed by proving the matching X account over OAuth. |
-| **Renames and marketplace** | Paid renames, and a marketplace to list, offer on and buy names with on-chain settlement checks (Solana USDC, 10% fee; switched off on the hosted demo for now). |
+| **Renames and marketplace** | Paid renames, and a marketplace to list, offer on and buy names with on-chain settlement checks (Solana USDC, 10% fee). |
 | **Agents** | Owners authorize agents with scopes and a policy: per-transfer and 24-hour limits per asset, a list of names they may pay, and a minimum sale price. Anything outside the policy waits for the owner. |
 
 ## How NEAR fits in
