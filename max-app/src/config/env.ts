@@ -24,27 +24,20 @@ let cached: Env | null = null;
 
 /**
  * Public configuration, validated once. EXPO_PUBLIC_* values are inlined at build
- * time, so each must be referenced literally. A chain is usable in the app only
- * when it has an RPC here: balances and broadcasting go straight to the chain.
+ * time, so each must be referenced literally. Balances and broadcasting reach
+ * each chain through the API's /v1/rpc proxy.
  */
+/** Chains the app may need to read or broadcast on, via the API's /v1/rpc proxy. */
+const CHAIN_KEYS = ['ethereum', 'base', 'arbitrum', 'optimism', 'polygon', 'bnb', 'avalanche', 'solana', 'sepolia', 'base-sepolia', 'solana-devnet'];
+
 export function getEnv(): Env {
   if (cached) return cached;
-  const rpc: Record<string, string> = {};
-  const entries: [string, string | undefined][] = [
-    ['ethereum', process.env.EXPO_PUBLIC_RPC_ETHEREUM],
-    ['base', process.env.EXPO_PUBLIC_RPC_BASE],
-    ['arbitrum', process.env.EXPO_PUBLIC_RPC_ARBITRUM],
-    ['optimism', process.env.EXPO_PUBLIC_RPC_OPTIMISM],
-    ['polygon', process.env.EXPO_PUBLIC_RPC_POLYGON],
-    ['solana', process.env.EXPO_PUBLIC_RPC_SOLANA],
-    ['sepolia', process.env.EXPO_PUBLIC_RPC_SEPOLIA],
-    ['base-sepolia', process.env.EXPO_PUBLIC_RPC_BASE_SEPOLIA],
-    ['solana-devnet', process.env.EXPO_PUBLIC_RPC_SOLANA_DEVNET],
-  ];
-  for (const [k, v] of entries) if (v) rpc[k] = v;
+  const apiUrl = process.env.EXPO_PUBLIC_MAX_API_URL ?? 'http://localhost:8080';
+  // Chain calls go through MAX's API, which holds the RPC provider keys; none ship in the app.
+  const rpc: Record<string, string> = Object.fromEntries(CHAIN_KEYS.map((k) => [k, `${apiUrl.replace(/\/$/, '')}/v1/rpc/${k}`]));
   cached = schema.parse({
     marketAssets: parseMarketAssets(process.env.EXPO_PUBLIC_MARKET_ASSETS),
-    apiUrl: process.env.EXPO_PUBLIC_MAX_API_URL ?? 'http://localhost:8080',
+    apiUrl,
     webUrl: process.env.EXPO_PUBLIC_WEB_URL ?? 'http://localhost:3000',
     rpc,
     marketTreasury: process.env.EXPO_PUBLIC_MARKET_TREASURY?.trim() || undefined,

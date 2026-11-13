@@ -40,6 +40,8 @@ go test -tags live -run Live ./internal/routing/nearintents/ # real (uncommitted
 |---|---|---|
 | GET | `/healthz` | DB readiness |
 | GET | `/v1/chains` | Supported chains `{key,name,namespace,evmChainId,testnet,nativeCoin}` |
+| GET | `/v1/routes/assets` | Every asset a cross-chain payment can deliver, by chain (coin first, then verified tokens) |
+| POST | `/v1/rpc/:chain` | JSON-RPC proxy to MAX's own RPC for the website and app: allow-listed reads plus broadcasting signed transactions, so provider keys stay on the server |
 | GET | `/v1/ids/availability?name=max.yoda` | `{name,handle,available,reason?,detail?,claimPolicy?}`; reason ∈ `taken`·`reserved`·`invalid`. A name shaped like a default ID is `invalid` with detail `this name uses a reserved format` |
 | GET | `/v1/profiles/:maxId` | Public profile + `isDefault` + `chains[{chain,reachable}]` |
 | GET | `/v1/resolve/:maxId?chain=solana&asset=<mint\|native>` | `{maxId,handle,type,displayName,isDefault,chain,asset,address,resolutionVersion,resolvedAt,notes[]}`; `NO_COMPATIBLE_WALLET` if no wallet on that chain (never guesses) |

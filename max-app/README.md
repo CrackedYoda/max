@@ -13,7 +13,7 @@ npx expo run:ios --port 8082  # dev build; Expo Go lacks the Face ID keychain en
 
 If CocoaPods fails with `Unicode Normalization not appropriate for ASCII-8BIT`, run it with `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`.
 
-The app talks to `max-core` (`EXPO_PUBLIC_MAX_API_URL`, `http://localhost:8080` in dev). A network appears in the app only when it is listed by `GET /v1/chains` **and** has an `EXPO_PUBLIC_RPC_*` set. Balances and broadcasting go directly to that RPC.
+The app talks to `max-core` (`EXPO_PUBLIC_MAX_API_URL`, `http://localhost:8080` in dev). Networks come from `GET /v1/chains`. Balances and broadcasting go through the API's `POST /v1/rpc/:chain` proxy, so RPC provider keys stay on the server and never ship in the app.
 
 Marketplace sales settle in USDC on Solana. `EXPO_PUBLIC_MARKET_ASSETS` (`chain:mint:decimals`, mirroring max-core `MARKET_ASSETS`) pins each asset's decimals; before signing, the app converts the price the user saw with those decimals (cross-checked against the mint through its own RPC) and verifies the sale's instructions with `assertSaleInstructionsMatch`. Optional `EXPO_PUBLIC_MARKET_TREASURY` pins the MAX Solana treasury (max-core `TREASURY_SOLANA`): when set, a sale whose fee goes elsewhere is refused before signing. After an uncertain send the app re-sends the same signed bytes, and offers a new signature only once the first one's blockhash has expired.
 

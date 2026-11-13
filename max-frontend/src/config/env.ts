@@ -19,6 +19,9 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
+/** Chains the browser may need to read or broadcast on, via the API's /v1/rpc proxy. */
+const CHAIN_KEYS = ["ethereum", "base", "arbitrum", "optimism", "polygon", "bnb", "avalanche", "solana", "sepolia", "base-sepolia", "solana-devnet"];
+
 let cached: Env | null = null;
 
 /**
@@ -27,19 +30,9 @@ let cached: Env | null = null;
  */
 export function getEnv(): Env {
   if (cached) return cached;
-  const rpc: Record<string, string> = {};
-  const entries: [string, string | undefined][] = [
-    ["ethereum", process.env.NEXT_PUBLIC_RPC_ETHEREUM],
-    ["base", process.env.NEXT_PUBLIC_RPC_BASE],
-    ["arbitrum", process.env.NEXT_PUBLIC_RPC_ARBITRUM],
-    ["optimism", process.env.NEXT_PUBLIC_RPC_OPTIMISM],
-    ["polygon", process.env.NEXT_PUBLIC_RPC_POLYGON],
-    ["solana", process.env.NEXT_PUBLIC_RPC_SOLANA],
-    ["sepolia", process.env.NEXT_PUBLIC_RPC_SEPOLIA],
-    ["base-sepolia", process.env.NEXT_PUBLIC_RPC_BASE_SEPOLIA],
-    ["solana-devnet", process.env.NEXT_PUBLIC_RPC_SOLANA_DEVNET],
-  ];
-  for (const [k, v] of entries) if (v) rpc[k] = v;
+  const apiUrl = process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080";
+  // Chain calls go through MAX's API, which holds the RPC provider keys; none ship to the browser.
+  const rpc: Record<string, string> = Object.fromEntries(CHAIN_KEYS.map((k) => [k, `${apiUrl.replace(/\/$/, "")}/v1/rpc/${k}`]));
   const marketAssets = (process.env.NEXT_PUBLIC_MARKET_ASSETS ?? "")
     .split(",")
     .map((s) => s.trim())
@@ -50,6 +43,6 @@ export function getEnv(): Env {
     })
     .filter((a) => a.chain && a.asset);
   const marketTreasury = process.env.NEXT_PUBLIC_MARKET_TREASURY?.trim() || undefined;
-  cached = schema.parse({ apiUrl: process.env.NEXT_PUBLIC_MAX_API_URL ?? "http://localhost:8080", rpc, marketAssets, marketTreasury });
+  cached = schema.parse({ apiUrl, rpc, marketAssets, marketTreasury });
   return cached;
 }

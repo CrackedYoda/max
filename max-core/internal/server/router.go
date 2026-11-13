@@ -19,6 +19,7 @@ import (
 	"github.com/max/max-core/internal/payments"
 	"github.com/max/max-core/internal/renames"
 	"github.com/max/max-core/internal/resolver"
+	"github.com/max/max-core/internal/rpcproxy"
 	"github.com/max/max-core/internal/shared"
 	"github.com/max/max-core/internal/verifications"
 	"github.com/max/max-core/internal/wallets"
@@ -41,8 +42,10 @@ type Deps struct {
 	MaxIDs         *maxids.Handler
 	Resolver       *resolver.Handler
 	Holdings       *holdings.Handler
-	Payments       *payments.Handler
-	Market         *market.Handler
+	// RPCProxy forwards the website's and app's chain calls to MAX's own RPCs.
+	RPCProxy *rpcproxy.Handler
+	Payments *payments.Handler
+	Market   *market.Handler
 }
 
 // maxBodyBytes caps every request body; the largest real payloads are a few KB.
@@ -98,6 +101,9 @@ func NewRouter(d Deps) *gin.Engine {
 	v1.GET("/resolve/:maxId", lookupLimit, d.Resolver.Resolve)
 	if d.Holdings != nil {
 		v1.GET("/holdings", lookupLimit, d.Holdings.List)
+	}
+	if d.RPCProxy != nil {
+		v1.POST("/rpc/:chain", lookupLimit, d.RPCProxy.Forward)
 	}
 	v1.GET("/profiles/:maxId", lookupLimit, d.Resolver.Profile)
 	v1.GET("/ids/availability", lookupLimit, d.MaxIDs.Availability)

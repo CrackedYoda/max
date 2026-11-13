@@ -28,6 +28,7 @@ import (
 	"github.com/max/max-core/internal/renames"
 	"github.com/max/max-core/internal/resolver"
 	"github.com/max/max-core/internal/routing/nearintents"
+	"github.com/max/max-core/internal/rpcproxy"
 	"github.com/max/max-core/internal/server"
 	"github.com/max/max-core/internal/shared"
 	"github.com/max/max-core/internal/solanarpc"
@@ -183,6 +184,7 @@ func run() error {
 		}),
 		Resolver: resolver.NewHandler(resolverSvc),
 		Holdings: holdings.NewHandler(newHoldings(cfg)),
+		RPCProxy: rpcproxy.NewHandler(cfg.Payments.RPCURLs),
 		Payments: payments.NewHandler(paymentSvc),
 		Market:   market.NewHandler(marketSvc),
 	})
